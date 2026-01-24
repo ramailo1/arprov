@@ -1,0 +1,113 @@
+# 🎨 .editorconfig - CloudStream Extensions Arabic
+# هذا الملف يحدد معايير الترميز المتسقة عبر المشروع
+
+# 🎯 الإعدادات العامة
+root = true
+
+# 📄 جميع الملفات
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+# 🐍 ملفات Python
+[*.py]
+indent_size = 4
+max_line_length = 88
+quote_type = double
+
+# 💎 ملفات Kotlin
+[*.kt]
+indent_size = 4
+max_line_length = 120
+
+# 📜 ملفات JavaScript/TypeScript
+[*.{js,ts,jsx,tsx}]
+indent_size = 2
+max_line_length = 100
+quote_type = single
+
+# 🎨 ملفات CSS/SCSS
+[*.{css,scss,sass}]
+indent_size = 2
+max_line_length = 100
+
+# 📝 ملفات Markdown
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+indent_size = 2
+
+# 📋 ملفات YAML
+[*.{yml,yaml}]
+indent_size = 2
+max_line_length = 120
+
+# 📦 ملفات JSON
+[*.json]
+indent_size = 2
+max_line_length = 120
+
+# 🔧 ملفات Gradle
+[*.gradle.kts]
+indent_size = 4
+max_line_length = 120
+
+# 📄 ملفات النصوص
+[*.txt]
+max_line_length = off
+trim_trailing_whitespace = false
+
+# 🐳 ملفات Docker
+[Dockerfile*]
+indent_size = 4
+max_line_length = 120
+
+# 🐙 ملفات GitHub
+[.github/**/*]
+indent_size = 2
+max_line_length = 120
+
+# 🧪 ملفات الاختبار
+[test/**/*]
+indent_size = 4
+max_line_length = 120
+
+# 📊 ملفات البيانات
+[*.{csv,tsv}]
+max_line_length = off
+trim_trailing_whitespace = false
+
+# 🔒 ملفات الإعدادات
+[*.{conf,config}]
+indent_size = 4
+max_line_length = 120
+
+# 🌐 ملفات الويب
+[*.html]
+indent_size = 2
+max_line_length = 120
+
+# 🖼️ ملفات XML
+[*.xml]
+indent_size = 2
+max_line_length = 120
+
+# 📱 ملفات الجوال
+[*.mobile]
+indent_size = 2
+max_line_length = 100
+
+# 🎯 ملفات الإعدادات الخاصة
+[*.properties]
+indent_size = 4
+max_line_length = 120
+
+# 📋 ملاحظات
+# - يجب تثبيت ملحق EditorConfig في محررك المفضل
+# - هذه الإعدادات تساعد في الحفاظ على اتساق الكود
+# - يمكن تجاوز هذه الإعدادات في ملفات معينة إذا لزم الأمر

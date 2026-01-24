@@ -1,0 +1,111 @@
+{
+  "name": "cloudstream-extensions-arabic",
+  "version": "2.0.0",
+  "description": "امتدادات عربية متقدمة لتطبيق CloudStream - توفير محتوى عربي عالي الجودة مع دعم شامل للمستخرجات",
+  "main": "build/plugins.json",
+  "scripts": {
+    "build": "gradle build",
+    "test": "gradle test",
+    "clean": "gradle clean",
+    "lint": "python scripts/lint.py",
+    "validate": "python scripts/validate_extensions.py",
+    "generate-stats": "python scripts/generate_stats.py",
+    "update-repo": "python scripts/update_repo.py",
+    "check-quality": "python scripts/check_quality.py",
+    "backup": "python scripts/backup.py",
+    "sync": "python scripts/sync_extensions.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhomred/cloudstream-extensions-arabic-v2.git"
+  },
+  "keywords": [
+    "cloudstream",
+    "extensions",
+    "arabic",
+    "streaming",
+    "video",
+    "movies",
+    "series",
+    "anime",
+    "providers",
+    "extractors",
+    "android",
+    "kotlin",
+    "media",
+    "entertainment"
+  ],
+  "author": "dhomred <dhomred@github.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/dhomred/cloudstream-extensions-arabic-v2/issues"
+  },
+  "homepage": "https://github.com/dhomred/cloudstream-extensions-arabic-v2#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "js-yaml": "^4.1.0",
+    "chalk": "^5.3.0"
+  },
+  "files": [
+    "build/",
+    "docs/",
+    "scripts/",
+    "*.md",
+    "*.json",
+    "*.gradle.kts",
+    "gradle/",
+    "gradlew*"
+  ],
+  "directories": {
+    "doc": "docs",
+    "test": "tests",
+    "script": "scripts",
+    "example": "examples"
+  },
+  "config": {
+    "forge": {
+      "packagerConfig": {
+        "name": "CloudStream Extensions Arabic",
+        "icon": "assets/icon.ico"
+      }
+    }
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/dhomred"
+  },
+  "maintainers": [
+    {
+      "name": "dhomred",
+      "email": "dhomred@github.com",
+      "url": "https://github.com/dhomred"
+    }
+  ],
+  "contributors": [
+    {
+      "name": "dhomred",
+      "email": "dhomred@github.com",
+      "url": "https://github.com/dhomred"
+    }
+  ]
+}
