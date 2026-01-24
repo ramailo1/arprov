@@ -1,28 +1,13 @@
 package com.animeblkom
 
-import com.lagradost.cloudstream3.SubtitleFile
-
-import com.lagradost.cloudstream3.ExtractorLink
-
-import com.lagradost.cloudstream3.Episode
-
-import com.lagradost.cloudstream3.HomePageResponse
-
-import com.lagradost.cloudstream3.SearchResponse
-
-import com.lagradost.cloudstream3.TvType
-
-import com.lagradost.cloudstream3.MainAPI
-
-
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Element
 
-class AnimeBlkom : MainAPI() {
+class AnimeBlkomProvider : MainAPI() {
     override var mainUrl = "https://animeblkom.net"
     override var name = "AnimeBlkom"
     override var lang = "ar"
@@ -36,7 +21,7 @@ class AnimeBlkom : MainAPI() {
     )
 	
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("a").attr("href")
+        val url = select("a").attr("href") ?: return null
         val name = select("div.name").text()
         val poster = select("div.poster img, div.image img").let { it.attr("data-original").ifEmpty { it.attr("data-src") } }
         val year = select("div[title=\"سنة الانتاج\"]").text().toIntOrNull()
@@ -55,12 +40,14 @@ class AnimeBlkom : MainAPI() {
             this.posterUrl = if (poster.startsWith("http")) poster else "$mainUrl$poster"
         }
     }
+    
     override val mainPage = mainPageOf(
-        "$mainUrl" to "Recently Added", // Changed to Home Page to match log structure
+        "$mainUrl" to "Recently Added", 
         "$mainUrl/anime-list?sort_by=rate&page=" to "Most rated",
         "$mainUrl/anime-list?sort_by=created_at&page=" to "Recently added List",
         "$mainUrl/anime-list?states=finished&page=" to "Completed"
     )
+    
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(request.data + (if (request.data.contains("?")) "" else page), interceptor = cfInterceptor).document
         val list = doc.select("div.recent-episode, div.item.episode, div.content-inner").mapNotNull { element ->
@@ -71,10 +58,11 @@ class AnimeBlkom : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.replace(" ","+")
-        return app.get("$mainUrl/search?query=$q").document.select("div.content.ratable").map {
+        return app.get("$mainUrl/search?query=$q").document.select("div.content.ratable").mapNotNull {
             it.toSearchResponse()
         }
     }
+    
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
 
@@ -89,26 +77,26 @@ class AnimeBlkom : MainAPI() {
         val nativeName = doc.select("span[title=\"الاسم باليابانية\"]").text().replace(".*:".toRegex(),"")
         val type = doc.select("h1 small").text().let {
             if (it.contains("movie")) TvType.AnimeMovie
-            if (it.contains("ova|ona".toRegex())) TvType.OVA
+            else if (it.contains("ova|ona".toRegex())) TvType.OVA
             else TvType.Anime
         }
 
-        val malId = doc.select("a.blue.cta:contains(المزيد من المعلومات)").attr("href").replace(".*e\\/|\\/.*".toRegex(),"").toInt()
+        val mallink = doc.select("a.blue.cta:contains(المزيد من المعلومات)").attr("href")
+        val malId = if(mallink.contains("myanimelist")) mallink.replace(".*e\\/|\\/.*".toRegex(),"").toIntOrNull() else null
+        
         val episodes = arrayListOf<Episode>()
         val episodeElements = doc.select(".episode-link")
         if(episodeElements.isEmpty()) {
-            episodes.add(Episode(
-                url,
-                "Watch",
-            ))
+            episodes.add(newEpisode(url) {
+                name = "Watch"
+            })
         } else {
-            episodeElements.map {
+            episodeElements.forEach {
                 val a = it.select("a")
-                episodes.add(Episode(
-                    mainUrl + a.attr("href"),
-                    a.text().replace(":"," "),
+                episodes.add(newEpisode(mainUrl + a.attr("href")) {
+                    name = a.text().replace(":"," ")
                     episode = a.select("span").not(".pull-left").last()?.text()?.toIntOrNull()
-                ))
+                })
             }
         }
         return newAnimeLoadResponse(title, url, type) {
@@ -117,13 +105,13 @@ class AnimeBlkom : MainAPI() {
             engName = title
             posterUrl = poster
             this.year = year
-            addEpisodes(DubStatus.Subbed, episodes) // TODO CHECK
+            addEpisodes(if(title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes)
             plot = description
             tags = genre
-
             showStatus = status
         }
     }
+    
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -131,7 +119,7 @@ class AnimeBlkom : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        doc.select("div.item a[data-src]").map {
+        doc.select("div.item a[data-src]").forEach {
             it.attr("data-src").let { url ->
                 if(url.startsWith("https://animetitans.net/")) {
                     val iframe = app.get(url).document
@@ -142,7 +130,7 @@ class AnimeBlkom : MainAPI() {
                             iframe.select("script").last()?.data()?.substringAfter("source: \"")?.substringBefore("\"").toString(),
                             this.mainUrl,
                             Qualities.Unknown.value,
-                            ExtractorLinkType.M3U8
+                            type = ExtractorLinkType.M3U8
                         )
                     )
                 } else if(it.text() == "Blkom") {
@@ -154,8 +142,8 @@ class AnimeBlkom : MainAPI() {
                                 it.text(),
                                 source.attr("src"),
                                 this.mainUrl,
-                                source.attr("res").toInt(),
-                                ExtractorLinkType.VIDEO
+                                source.attr("res").toIntOrNull() ?: Qualities.Unknown.value,
+                                type = ExtractorLinkType.VIDEO
                             )
                         )
                     }
@@ -166,16 +154,15 @@ class AnimeBlkom : MainAPI() {
                 }
             }
         }
-        doc.select(".panel .panel-body a").apmap {
-            println(it.text())
+        doc.select(".panel .panel-body a").forEach {
             callback.invoke(
                 newExtractorLink(
                     this.name,
                     it.attr("title") + " " + it.select("small").text() + " Download Source",
                     it.attr("href"),
                     this.mainUrl,
-                    it.text().replace("p.*| ".toRegex(),"").toInt(),
-                    ExtractorLinkType.VIDEO
+                    it.text().replace("p.*| ".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value,
+                    type = ExtractorLinkType.VIDEO
                 )
             )
         }

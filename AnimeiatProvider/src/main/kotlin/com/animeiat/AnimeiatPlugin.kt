@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class AnimeiatPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(Animeiat())
+        registerMainAPI(AnimeiatProvider())
     }
 }

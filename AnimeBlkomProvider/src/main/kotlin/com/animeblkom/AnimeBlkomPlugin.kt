@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class AnimeBlkomPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(AnimeBlkom())
+        registerMainAPI(AnimeBlkomProvider())
     }
 }
