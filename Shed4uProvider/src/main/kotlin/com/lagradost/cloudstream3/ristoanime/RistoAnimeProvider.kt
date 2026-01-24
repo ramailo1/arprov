@@ -134,7 +134,7 @@ class RistoAnimeProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.rating = rating
+                // this.score = rating
                 this.tags = tags
                 addEpisodes(DubStatus.Subbed, episodes)
             }
@@ -143,7 +143,7 @@ class RistoAnimeProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.rating = rating
+                // this.score = rating
                 this.tags = tags
             }
         }
@@ -161,13 +161,14 @@ class RistoAnimeProvider : MainAPI() {
             
             callback.invoke(
                 newExtractorLink(
-                    source = serverName.ifEmpty { "RistoAnime" },
-                    name = serverName.ifEmpty { "RistoAnime" } + if (quality.isNotEmpty()) " - $quality" else "",
-                    url = linkUrl,
-                    referer = mainUrl,
-                    quality = getQualityFromString(quality),
-                    type = if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                )
+                    serverName.ifEmpty { "RistoAnime" },
+                    serverName.ifEmpty { "RistoAnime" } + if (quality.isNotEmpty()) " - $quality" else "",
+                    linkUrl,
+                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = getQualityFromString(quality)
+                    this.referer = mainUrl
+                }
             )
         }
         

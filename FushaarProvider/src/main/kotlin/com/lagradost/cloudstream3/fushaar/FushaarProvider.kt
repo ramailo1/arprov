@@ -128,13 +128,14 @@ class FushaarProvider : MainAPI() {
             doc.select("#fancyboxID-download > center > a:nth-child(n+19),#fancyboxID-1 > center > a:nth-child(n+16)").map {
                 callback.invoke(
                     newExtractorLink(
-                        source = this.name,
-                        name = it.text() ?: name,
-                        url = it.attr("href"),
-                        referer = this.mainUrl,
-                        quality = it.text().getIntFromText() ?: Qualities.Unknown.value,
-                        type = ExtractorLinkType.VIDEO
-                )
+                        this.name,
+                        it.text() ?: name,
+                        it.attr("href"),
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = it.text().getIntFromText() ?: Qualities.Unknown.value
+                        this.referer = this@FushaarProvider.mainUrl
+                    }
                 )
             }
         return true
