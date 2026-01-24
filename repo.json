@@ -1,0 +1,8 @@
+{
+  "name": "Arabic CloudStream Repo",
+  "description": "Arabic CloudStream extensions - FaselHD, Akwam, Anime4up and more",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/ramailo1/arprov/builds/plugins.json"
+  ]
+}

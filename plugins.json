@@ -1,0 +1,550 @@
+[
+    {
+        "iconUrl": "https://akwams.org/favicon.ico",
+        "fileHash": "sha256-6ee503accb9fcc64b08021053436246999e974d016b463fc19297dca21db3dcd",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 14256,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "Blatzar"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "Cartoon"
+        ],
+        "version": 6,
+        "internalName": "AkwamProvider",
+        "description": "Akwam Provider - Clean, Organized, and High-Performance - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/AkwamProvider.cs3",
+        "name": "AkwamProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=alkawthartv.ir&sz=%size%",
+        "fileHash": "sha256-42cd1034ddc52d8e6bea51f314e84740957d3cce62f5e96064ff320d9bac21dc",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 28632,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 8,
+        "internalName": "AlkawtharProvider",
+        "description": "Alkawthar TV Provider - Series, Movies, Documentaries and Religious Shows",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/AlkawtharProvider.cs3",
+        "name": "AlkawtharProvider"
+    },
+    {
+        "iconUrl": "https://img.sur.ly/favicons/a/anime4up.net.ico",
+        "fileHash": "sha256-f06b9cbd85c33e224999f01b98b07a229e4246691cda59001f90ea6eb7e71a33",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 25099,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "Others"
+        ],
+        "version": 12,
+        "internalName": "Anime4upPack",
+        "description": "Anime4up and Witanime - Clean, Organized, and High-Performance - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/Anime4upPack.cs3",
+        "name": "Anime4upPack"
+    },
+    {
+        "iconUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAMAAABF0y+mAAAAe1BMVEVHcEzf39/h4eHf39/d39/i4uLj4+Pi4+Pj4+Pj4+Pi4+Ph5OS/AgPi4uLRa2vLAADKAQK2BQbNQ0PNAADNAQHh4eHMAgPOAADNAADMAQHj4+PatbXNAADKAQHh4eHOAADV09PNAADKAQLf1NTHAQLi4eHKAQHIAQHMBwdLHGa2AAAAKXRSTlMAEywdDlWp2fX/uGcMkEdrRwV3z6p7nP/qiehXwR9B9AneLnQVmlo8fNLpNxcAAAEqSURBVHgBjZIFcsQwDEUdZgY5zHD/E9ZKrJTb/QOGJx6xV6SoKO0npBumZTu25Xq6739hWmA7UkEYxcknv4AQ0jTL4w/QePxQRQm8epwV8/61ClXRDLduMoC2k7CvEdWefKpeOgBwGdq7mPFewjgBQDbjfSwQLoytMcWqQKjEnvQNHcUlntr9hjNCPhMsLghDeVwUUDHB/oYAU7WK60RwxBFoBAFaEa7Fy1URFqQ+cNrFADKgVg0BDQmnyqec0TOEACHn+cxQx+PINFeMDhs4ZSeYktMdK9JFOJr2CQDP6A0Rd9lnRmwAyH16jRj34Of1cbSYUPpRSUsJwLPsbpUAZbXCCW4NZfIJjqboBnMJTdEHRttgY2Dg5fHjcrpN2Z6H/8ta62uXsJf1BvHoHQa5lwUmAAAAAElFTkSuQmCC",
+        "fileHash": "sha256-a53ca1152325dedee53a13a8eadeada92fb2ba4ca265aa1ab3fa4066a0f26a12",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 24401,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 14,
+        "internalName": "ArabSeedProvider",
+        "description": "ArabSeed Provider - Clean, Organized, and High-Performance - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/ArabSeedProvider.cs3",
+        "name": "ArabSeedProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=cima4u.actor&sz=%size%",
+        "fileHash": "sha256-450e5609397ef15868ca58cb7378d72325cbd61b86df9c16f63657afd14430d4",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 15987,
+        "status": 0,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 10,
+        "internalName": "Cima4uForumProvider",
+        "description": "Cima4u.forum Provider - (Discontinued / Site Offline)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/Cima4uForumProvider.cs3",
+        "name": "Cima4uForumProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=cima4u.shop&sz=%size%",
+        "fileHash": "sha256-e92f9d27407819ce6b665f0c595d51bf15269f8079540ed998d195ae357938a7",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 30215,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 12,
+        "internalName": "Cima4UProvider",
+        "description": "Cima4U Provider - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/Cima4UProvider.cs3",
+        "name": "Cima4UProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=ciimaclub.us&sz=%size%",
+        "fileHash": "sha256-1db9e95224b9f1409796b485b3588d4d4ec55a3437fca8bc8a50958cf72885e3",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 23040,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 12,
+        "internalName": "CimaClubProvider",
+        "description": "CimaClub Provider - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/CimaClubProvider.cs3",
+        "name": "CimaClubProvider"
+    },
+    {
+        "iconUrl": "https://cimalek.art/wp-content/uploads/2022/11/cropped-fav-2-192x192.png",
+        "fileHash": "sha256-a886a64a52cd69ac9d606c85722cbce466cad66e85c595e7b4b36216083f6412",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 24503,
+        "status": 2,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 10,
+        "internalName": "CimaLeekProvider",
+        "description": "CimaLeek Provider - (Under Maintenance / Turnstile Protection)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/CimaLeekProvider.cs3",
+        "name": "CimaLeekProvider"
+    },
+    {
+        "iconUrl": "https://cimanow.cc/wp-content/uploads/2017/05/Favicon.gif",
+        "fileHash": "sha256-f0a5a7b3da77254db55d3fbf20a1695be9b30b4e4afe8c958bc421a96d1a4e5e",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 37040,
+        "status": 2,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 25,
+        "internalName": "CimaNowProvider",
+        "description": "CimaNow Provider - (Under Maintenance / Players Offline)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/CimaNowProvider.cs3",
+        "name": "CimaNowProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=www.egy.best&sz=%size%",
+        "fileHash": "sha256-8da625960dcf42b85c35e65a379e8c9d79cf386c87552139cc800c16a4c2b6b2",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 29570,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 14,
+        "internalName": "EgyBestProvider",
+        "description": "EgyBest Provider",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/EgyBestProvider.cs3",
+        "name": "EgyBestProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=tv.egydead.live&sz=%size%",
+        "fileHash": "sha256-1beddc181dd07ba6e1182b09cea5e12890f9c4f26d66ef4437a981d175485a15",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 46267,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 16,
+        "internalName": "EgyDeadProvider",
+        "description": "EgyDead Provider - Optimized",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/EgyDeadProvider.cs3",
+        "name": "EgyDeadProvider"
+    },
+    {
+        "iconUrl": "https://raw.githubusercontent.com/ImZaw/cloudstream-extensions-arabic/master/icon.png",
+        "fileHash": "sha256-311a8ed41fb753f27dcaf6ec9ef37eaccd8743e58308bb538907103309993b0a",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 52792,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ImZaw",
+            "ArabicDev"
+        ],
+        "version": 4,
+        "internalName": "Extractors",
+        "description": "Advanced Arabic Extractors Collection - 29 extractors with encryption support, multi-quality support, and error handling",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/Extractors.cs3",
+        "name": "Extractors"
+    },
+    {
+        "iconUrl": "https://web31118x.faselhdx.bid/wp-content/themes/faselhd_2020/images/favicon.png",
+        "fileHash": "sha256-193a2a0606ea359c69205c2b25055f935df3b2a8ace02edbcace6f4cd7ccbe10",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 71344,
+        "status": 3,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 12,
+        "internalName": "FaselHDProvider",
+        "description": "FaselHD Provider - Clean, Organized, and High-Performance - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/FaselHDProvider.cs3",
+        "name": "FaselHDProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=fushaar.com&sz=%size%",
+        "fileHash": "sha256-4aa5448064ebe8c2ae2df4693ed9493f49376a5938d1aab162b748b4670fcfc1",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 20971,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 4,
+        "internalName": "FushaarProvider",
+        "description": "Fushaar Provider - Clean, Organized, and High-Performance",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/FushaarProvider.cs3",
+        "name": "FushaarProvider"
+    },
+    {
+        "iconUrl": "https://f.gateanime.com/wp-content/uploads/2020/12/cropped-Favicon-192x192.png",
+        "fileHash": "sha256-39eb4c0026bdca65600797af9630dd2a79e827d818be398185009498cc43c61d",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 12888,
+        "status": 0,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "Cartoon"
+        ],
+        "version": 11,
+        "internalName": "GateAnimeProvider",
+        "description": "GateAnime Provider - (Discontinued / Site Offline)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/GateAnimeProvider.cs3",
+        "name": "GateAnimeProvider"
+    },
+    {
+        "iconUrl": "https://gogoanimes.cv/favicon.ico",
+        "fileHash": "sha256-7c617e12cc32b0c3f8c25c8e3165babd54ac3fec169694fc7e27badfd916e1cb",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 28573,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "ONA",
+            "Special"
+        ],
+        "version": 2,
+        "internalName": "GogoAnimeProvider",
+        "description": "GogoAnime - Arabic anime streaming with sub/dub support",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/GogoAnimeProvider.cs3",
+        "name": "GogoAnimeProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=ifilmtv.ir&sz=256",
+        "fileHash": "sha256-59fc6bebf1d6b2c0c8f03535bab1a00bbd491f1c453cd9f1ff74110e733acf46",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 19929,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "cloudstream"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Live"
+        ],
+        "version": 1,
+        "internalName": "IfilmtvProvider",
+        "description": "iFilmTV Arabic provider for series, movies and programs",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/IfilmtvProvider.cs3",
+        "name": "IfilmtvProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=movizlands.com&sz=%size%",
+        "fileHash": "sha256-b8e1726fdb4c5b2fbb2b778ea9920c6a60b7195681e7860367b22d584a62ab47",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 19199,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 12,
+        "internalName": "MovizLandsProvider",
+        "description": "MovizLands Provider - Clean, Organized, and High-Performance - (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/MovizLandsProvider.cs3",
+        "name": "MovizLandsProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=wecima.tube&sz=%size%",
+        "fileHash": "sha256-3e95913c0581170827e8e5aed3920be98d11231e8b958488e3480f8baac8857e",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 39428,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 12,
+        "internalName": "MyCimaProvider",
+        "description": "MyCima Provider - (In Progress)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/MyCimaProvider.cs3",
+        "name": "MyCimaProvider"
+    },
+    {
+        "iconUrl": "https://www.qisat.tv/wp-content/uploads/2026/01/favicon.png",
+        "fileHash": "sha256-2758b78feeed29799692300ba2354962e7deb0dacef67c31755dd08faf355b5c",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 26445,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "Cartoon"
+        ],
+        "version": 2,
+        "internalName": "QisatTvProvider",
+        "description": "QisatTv Provider (Working)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/QisatTvProvider.cs3",
+        "name": "QisatTvProvider"
+    },
+    {
+        "iconUrl": "https://tse3.mm.bing.net/th/id/OIP.hIrkWacyL-kolfolCf1OrgHaHa?cb=defcache2&defcache=1&rs=1&pid=ImgDetMain&o=7&rm=3",
+        "fileHash": "sha256-ded1d296bbbfea1b9f1be665aa1a0c23af28f3c77d0e62dfe8e9dd495c0a6e49",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 20943,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "OVA"
+        ],
+        "version": 11,
+        "internalName": "RistoAnimeProvider",
+        "description": "RistoAnime Provider - (In Progress)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/RistoAnimeProvider.cs3",
+        "name": "RistoAnimeProvider"
+    },
+    {
+        "iconUrl": "https://shahhid4u.boats/favicons/ms-icon-144x144.png",
+        "fileHash": "sha256-b16868a67cf138c02f48671e274d5346c20a86f430823832bc03f4601a947e73",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 22299,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 12,
+        "internalName": "Shahid4uProvider",
+        "description": "Shahid4u Provider",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/Shahid4uProvider.cs3",
+        "name": "Shahid4uProvider"
+    },
+    {
+        "iconUrl": "https://shoffree.cc/assets/images/icon-512x512.png",
+        "fileHash": "sha256-328d7d772196f1a5d751ed50b7941255f873ad652b2230e56c1297946910645e",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 52265,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "extentuin"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries",
+            "Anime"
+        ],
+        "version": 3,
+        "internalName": "ShoffreeProvider",
+        "description": "Shoffree Arabic Streaming Provider",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/ShoffreeProvider.cs3",
+        "name": "ShoffreeProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=topcinema.cam&sz=%size%",
+        "fileHash": "sha256-d56f5fd57a4ac5e762cf27376e4224a8934923cf0ab5e1c79425d5a8484d8afe",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 28479,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime"
+        ],
+        "version": 13,
+        "internalName": "TopCinemaProvider",
+        "description": "TopCinema Provider - (In Progress)",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/TopCinemaProvider.cs3",
+        "name": "TopCinemaProvider"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=tuk.cam&sz=%size%",
+        "fileHash": "sha256-bd2e472c54ab3d43ff87d036329c68598945ab445b19229ea33633c3771a7195",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ramailo1/arprov",
+        "fileSize": 21443,
+        "status": 1,
+        "language": "ar",
+        "authors": [
+            "ramailo1"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 13,
+        "internalName": "TukProvider",
+        "description": "Tuk Tuk Cinema Provider",
+        "url": "https://raw.githubusercontent.com/ramailo1/arprov/builds/TukProvider.cs3",
+        "name": "TukProvider"
+    }
+]
