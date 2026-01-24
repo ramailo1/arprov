@@ -111,7 +111,7 @@ class FushaarProvider : MainAPI() {
             this.plot = synopsis
             this.rating = rating
             this.recommendations = recommendations
-            addTrailer(trailer)
+            // addTrailer(trailer)
         }
     }
 

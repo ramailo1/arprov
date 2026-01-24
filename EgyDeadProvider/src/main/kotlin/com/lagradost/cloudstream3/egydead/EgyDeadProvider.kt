@@ -155,7 +155,7 @@ class EgyDeadProvider : MainAPI() {
                 this.tags = tags
                 this.rating = rating
                 this.year = year
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         } else {
             val seasonList = doc.select("div.seasons-list ul > li > a").reversed()
@@ -188,7 +188,7 @@ class EgyDeadProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.rating = rating
                 this.year = year
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         }
     }

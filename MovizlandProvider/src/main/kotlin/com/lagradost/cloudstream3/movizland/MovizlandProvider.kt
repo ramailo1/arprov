@@ -153,7 +153,7 @@ private fun getSeasonFromString(sName: String): Int {
                 this.tags = tags
                 this.plot = synopsis
 		this.recommendations = recommendations
-		addTrailer(trailer)
+		// addTrailer(trailer)
             }
     }   else    {
             val episodes = ArrayList<Episode>()
@@ -178,7 +178,7 @@ private fun getSeasonFromString(sName: String): Int {
                 	this.tags = tags
                 	this.plot = synopsis
 			this.recommendations = recommendations
-			addTrailer(trailer)
+			// addTrailer(trailer)
                }
 	    }else{	    
             posterUrl = img?.attr("src")?.ifEmpty { img?.attr("data-src") }

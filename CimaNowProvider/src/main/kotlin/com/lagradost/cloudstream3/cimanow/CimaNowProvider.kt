@@ -53,7 +53,7 @@ class CimaNowProvider : MainAPI() {
             }
             HomePageList(name, list)
         }
-        return HomePageResponse(pages)
+        return newHomePageResponse(pages)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -96,12 +96,13 @@ class CimaNowProvider : MainAPI() {
         val tags = doc.select("article ul").first()?.select("li")?.map { it.text() }
 
         val recommendations = doc.select("ul#related li").map { element ->
-            MovieSearchResponse(
-                apiName = this@CimaNowProvider.name,
-                url = element.select("a").attr("href"),
-                name = element.select("img:nth-child(2)").attr("alt"),
-                posterUrl = element.select("img:nth-child(2)").attr("src")
-            )
+            newMovieSearchResponse(
+                element.select("img:nth-child(2)").attr("alt"),
+                element.select("a").attr("href"),
+                TvType.Movie,
+            ) {
+                this.posterUrl = element.select("img:nth-child(2)").attr("src")
+            }
         }
 
         return if (isMovie) {
@@ -116,7 +117,7 @@ class CimaNowProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.plot = synopsis
                 this.tags = tags
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         } else {
             val episodes = doc.select("ul#eps li").map { episode ->
@@ -133,7 +134,7 @@ class CimaNowProvider : MainAPI() {
                 this.year = year
                 this.plot = synopsis
                 this.recommendations = recommendations
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         }
     }

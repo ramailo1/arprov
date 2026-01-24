@@ -12,14 +12,7 @@ import com.lagradost.nicehttp.Session
 
 import android.annotation.TargetApi
 import android.os.Build
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.nicehttp.Requests
-import com.lagradost.nicehttp.Session
+
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Element
 import java.util.Base64
@@ -168,7 +161,7 @@ class EgyBestProvider : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.actors = actors
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         } else {
             val episodes = ArrayList<Episode>()
@@ -208,7 +201,7 @@ class EgyBestProvider : MainAPI() {
                 this.year = year
                 this.plot = synopsis
                 this.actors = actors
-                addTrailer(youtubeTrailer)
+                // addTrailer(youtubeTrailer)
             }
         }
     }

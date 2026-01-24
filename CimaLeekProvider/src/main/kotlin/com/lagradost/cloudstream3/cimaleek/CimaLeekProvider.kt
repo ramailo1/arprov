@@ -130,7 +130,7 @@ class CimaLeekProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.plot = synopsis
                 this.tags = tags
-                this.rating = rating
+                // this.rating = rating
                 this.year = year
             }
         } else {
@@ -148,7 +148,7 @@ class CimaLeekProvider : MainAPI() {
                 this.tags = tags
                 this.plot = synopsis
                 this.recommendations = recommendations
-                this.rating = rating
+                // this.rating = rating
                 this.year = year
             }
         }
