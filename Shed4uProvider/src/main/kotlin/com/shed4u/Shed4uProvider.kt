@@ -9,7 +9,11 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
 class Shed4uProvider : MainAPI() {
@@ -39,7 +43,7 @@ class Shed4uProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val title = this.selectFirst("h4")?.text()?.trim() ?: this.attr("title").ifEmpty { null } ?: return null
-        val href = fixUrlNull(this.attr("href")) ?: return null
+        val href = fixUrl(this.attr("href") ?: "")
         // Poster is often in style background-image
         val posterStyle = this.selectFirst(".img, i")?.attr("style") ?: this.attr("style")
         val posterUrl = Regex("url\\((.*?)\\)").find(posterStyle)?.groupValues?.get(1)?.replace("'", "")?.replace("\"", "")

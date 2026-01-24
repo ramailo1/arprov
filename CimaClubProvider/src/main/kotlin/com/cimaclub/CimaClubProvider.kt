@@ -15,9 +15,10 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -73,15 +74,15 @@ class CimaClubProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val title = this.selectFirst("h2")?.text()?.trim() ?: return null
-        val href = fixUrlNull(this.attr("href")) ?: return null
-        val posterUrl = fixUrlNull(this.selectFirst("img")?.attr("src"))
+        val href = fixUrl(this.attr("href") ?: "")
+        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: "")
         val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
         val quality = this.selectFirst(".quality, .resolution")?.text()?.trim()
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.year = year
-            addQuality(quality)
+            this.quality = getQualityFromString(quality ?: "")
         }
     }
 
@@ -117,17 +118,12 @@ class CimaClubProvider : MainAPI() {
             val episodes = mutableListOf<Episode>()
             doc.select(".episode-item, .episodes li").forEach { episodeElement ->
                 val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
-                val episodeUrl = fixUrlNull(episodeElement.selectFirst("a")?.attr("href"))
-                val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
-                val seasonNumber = episodeElement.selectFirst(".season-number")?.text()?.trim()?.toIntOrNull() ?: 1
-                
                 if (episodeName != null && episodeUrl != null) {
-                    episodes.add(Episode(
-                        name = episodeName,
-                        data = episodeUrl,
-                        episode = episodeNumber,
-                        season = seasonNumber
-                    ))
+                    episodes.add(newEpisode(episodeUrl) {
+                        this.name = episodeName
+                        this.episode = episodeNumber
+                        this.season = seasonNumber
+                    })
                 }
             }
             
@@ -158,7 +154,7 @@ class CimaClubProvider : MainAPI() {
         
         // Extract video links
         doc.select(".video-links a, .download-links a, .watch-links a").forEach { linkElement ->
-            val linkUrl = fixUrlNull(linkElement.attr("href")) ?: return@forEach
+            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
             val quality = linkElement.select(".quality, .resolution").text().trim()
             val serverName = linkElement.select(".server-name, .host").text().trim()
             

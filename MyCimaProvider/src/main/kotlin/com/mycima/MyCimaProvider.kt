@@ -16,14 +16,15 @@ import com.lagradost.cloudstream3.MainAPI
 
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
-class MyCima : MainAPI() {
+class MyCimaProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://we-cima.com/"
     override var name = "MyCima"
@@ -49,15 +50,14 @@ class MyCima : MainAPI() {
             .replace("مشاهدة|فيلم|مسلسل|مترجم".toRegex(), "")
             .replace("( نسخة مدبلجة )", " ( نسخة مدبلجة ) ")
         // If you need to differentiate use the url.
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             url.attr("href"),
-            this@MyCima.name,
             if(url.attr("title").contains("فيلم")) TvType.Movie else TvType.TvSeries,
-            posterUrl,
-            year?.getIntFromText(),
-            null,
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year?.getIntFromText()
+        }
     }
     override val mainPage = mainPageOf(
             "$mainUrl/movies/top/page/" to "Top Movies",
@@ -82,7 +82,7 @@ class MyCima : MainAPI() {
             "$mainUrl/search/$q",
             "$mainUrl/search/$q/list/series/",
             "$mainUrl/search/$q/list/anime/"
-        ).apmap { url ->
+        ).forEach { url ->
             val d = app.get(url).document
             d.select("div.Grid--WecimaPosts div.GridItem").mapNotNull {
                 if (it.text().contains("اعلان")) return@mapNotNull null
@@ -155,14 +155,13 @@ class MyCima : MainAPI() {
             val season =
                 doc.select("div.List--Seasons--Episodes a.selected").text().getIntFromText()
             doc.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")
-                .apmap {
+                .forEach {
                     episodes.add(
-                        Episode(
-                            it.attr("href"),
-                            it.text(),
-                            season,
-                            it.text().getIntFromText(),
-                        )
+                        newEpisode(it.attr("href")) {
+                            this.name = it.text()
+                            this.season = season
+                            this.episode = it.text().getIntFromText()
+                        }
                     )
                 }
             if (moreButton.isNotEmpty()) {
@@ -201,22 +200,21 @@ class MyCima : MainAPI() {
                     n + 1220,
                     totals
                 )
-                mEPS.apmap { it ->
+                mEPS.forEach { it ->
                     if (it != null) {
-                        if (it > totals!!) return@apmap
+                        if (it > totals!!) return@forEach
                         val ajaxURL =
                             "$mainUrl/AjaxCenter/MoreEpisodes/${moreButton.attr("data-term")}/$it"
                         val jsonResponse = app.get(ajaxURL)
                         val json = parseJson<MoreEPS>(jsonResponse.text)
                         val document = Jsoup.parse(json.output?.replace("""\""", ""))
-                        document.select("a").map {
+                        document.select("a").forEach {
                             episodes.add(
-                                Episode(
-                                    it.attr("href"),
-                                    it.text(),
-                                    season,
-                                    it.text().getIntFromText(),
-                                )
+                                newEpisode(it.attr("href")) {
+                                    this.name = it.text()
+                                    this.season = season
+                                    this.episode = it.text().getIntFromText()
+                                }
                             )
                         }
                     }
@@ -230,14 +228,13 @@ class MyCima : MainAPI() {
                     val fseason = seasonsite.select("div.List--Seasons--Episodes a.selected").text()
                         .getIntFromText() ?: 1
                     seasonsite.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")
-                        .map {
+                        .forEach {
                             episodes.add(
-                                Episode(
-                                    it.attr("href"),
-                                    it.text(),
-                                    fseason,
-                                    it.text().getIntFromText(),
-                                )
+                                newEpisode(it.attr("href")) {
+                                    this.name = it.text()
+                                    this.season = fseason
+                                    this.episode = it.text().getIntFromText()
+                                }
                             )
                         }
                     if (fmoreButton.isNotEmpty()) {
@@ -278,22 +275,21 @@ class MyCima : MainAPI() {
                             n + 1220,
                             totals
                         )
-                        mEPS.apmap { it ->
+                        mEPS.forEach { it ->
                             if (it != null) {
-                                if (it > totals!!) return@apmap
+                                if (it > totals!!) return@forEach
                                 val ajaxURL =
                                     "$mainUrl/AjaxCenter/MoreEpisodes/${fmoreButton.attr("data-term")}/$it"
                                 val jsonResponse = app.get(ajaxURL)
                                 val json = parseJson<MoreEPS>(jsonResponse.text)
                                 val document = Jsoup.parse(json.output?.replace("""\""", ""))
-                                document.select("a").map {
+                                document.select("a").forEach {
                                     episodes.add(
-                                        Episode(
-                                            it.attr("href"),
-                                            it.text(),
-                                            fseason,
-                                            it.text().getIntFromText(),
-                                        )
+                                        newEpisode(it.attr("href")) {
+                                            this.name = it.text()
+                                            this.season = fseason
+                                            this.episode = it.text().getIntFromText()
+                                        }
                                     )
                                 }
                             }
@@ -324,12 +320,12 @@ class MyCima : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        doc.select(".WatchServersList > ul > li").apmap {
+        doc.select(".WatchServersList > ul > li").forEach {
             val url = it.select("btn").attr("data-url")
             loadExtractor(url, data, subtitleCallback, callback)
         }
-        doc.select("ul.List--Download--Wecima--Single:nth-child(2) li").apmap {
-                it.select("a").map { linkElement ->
+        doc.select("ul.List--Download--Wecima--Single:nth-child(2) li").forEach {
+                it.select("a").forEach { linkElement ->
                     callback.invoke(
                         newExtractorLink(
                             this.name,
@@ -341,7 +337,7 @@ class MyCima : MainAPI() {
                         )
                     )
                 }
-            }.flatten()
+            }
         return true
     }
 }

@@ -1,4 +1,4 @@
-package com.movizlands.MovizLands
+package com.movizlands
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin

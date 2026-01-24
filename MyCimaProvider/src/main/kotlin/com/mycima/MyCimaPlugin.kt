@@ -1,4 +1,4 @@
-package com.mycima.MyCima
+package com.mycima
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin
@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class MyCimaPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(MyCima())
+        registerMainAPI(MyCimaProvider())
     }
 }

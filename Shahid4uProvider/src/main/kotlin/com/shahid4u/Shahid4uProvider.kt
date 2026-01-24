@@ -20,10 +20,13 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Element
 
-class Shahid4u : MainAPI() {
+class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://shahid4u.casa"
     override var name = "Shahid4u"
@@ -43,17 +46,15 @@ class Shahid4u : MainAPI() {
         val quality = select("span.quality").text().replace("1080p |-".toRegex(), "")
         val type =
             if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             urlElement.attr("title")
                 .replace("برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي".toRegex(), ""),
             urlElement.attr("href") ?: return null,
-            this@Shahid4u.name,
             type,
-            posterUrl,
-            null,
-            null,
-            quality = getQualityFromString(quality)
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.quality = getQualityFromString(quality)
+        }
     }
     override val mainPage = mainPageOf(
             "$mainUrl/movies-3/page/" to "Movies",
@@ -77,7 +78,7 @@ class Shahid4u : MainAPI() {
         listOf(
             "$mainUrl/?s=$query&category=&type=movie",
             "$mainUrl/?s=$query&type=series"
-        ).apmap { url ->
+        ).forEach { url ->
             var doc = app.get(url).document
 			if(doc.select("title").text() == "Just a moment...") {
 				doc = app.get(url, interceptor = cfKiller, timeout = 120).document
@@ -138,30 +139,28 @@ class Shahid4u : MainAPI() {
             val allEpisodesUrl = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
             if(allEpisodesUrl.isNotEmpty()) {
                 app.get(allEpisodesUrl).document.select("div.row > div").let {
-                    it.mapIndexedNotNull { index, element ->
+                    it.forEachIndexed { index, element ->
                         episodes.add(
-                            Episode(
-                                element.select("a.fullClick").attr("href"),
-                                element.select("a.fullClick").attr("title"),
-                                1,
-                                it.size - index
-                            )
+                            newEpisode(element.select("a.fullClick").attr("href")) {
+                                this.name = element.select("a.fullClick").attr("title")
+                                this.season = 1
+                                this.episode = it.size - index
+                            }
                         )
                     }
                 }
             } else {
-                episodeElement[1].select("div.content-box").apmap {
+                episodeElement[1].select("div.content-box").forEach {
                     val seasonNumber = it.select("div.number em").text().toIntOrNull()
                     val seasonUrl = it.select("a.fullClick").attr("href")
-                    app.get(seasonUrl).document.select(".episode-block").map { episode ->
+                    app.get(seasonUrl).document.select(".episode-block").forEach { episode ->
                         episodes.add(
-                            Episode(
-                                episode.select("a").attr("href"),
-                                episode.select("div.title").text(),
-                                seasonNumber,
-                                episode.select("div.number em").text().toIntOrNull(),
-                                episode.select("div.poster img").attr("data-image")
-                            )
+                            newEpisode(episode.select("a").attr("href")) {
+                                this.name = episode.select("div.title").text()
+                                this.season = seasonNumber
+                                this.episode = episode.select("div.number em").text().toIntOrNull()
+                                this.posterUrl = episode.select("div.poster img").attr("data-image")
+                            }
                         )
                     }
                 }
@@ -193,8 +192,8 @@ class Shahid4u : MainAPI() {
 			doc = app.get(watchUrl, interceptor = cfKiller, timeout = 120).document
 		}
 		doc.select(
-            ".servers-list li:contains(ok), li:contains(Streamtape), li:contains(DoodStream), li:contains(Uqload), li:contains(Voe), li:contains(VIDBOM), li:contains(Upstream), li:contains(السيرفر الخاص), li:contains(GoStream), li:contains(الخاص 1080p), li:contains(vidbom), li:contains(Vidbom)"
-        ).apmap {
+            ".servers-list li:contains(ok), li:contains(Streamtape), li:contains(DoodStream), li:contains(Uqload), li:contains(Voe), li:contains(VIDBOM), li:contains(Upstream), li:contains(السيرفر الخاص), li:contains( GoStream), li:contains(الخاص 1080p), li:contains(vidbom), li:contains(Vidbom)"
+        ).forEach {
             val id = it.attr("data-id")
             val i = it.attr("data-i")
             val sourceUrl = app.post(

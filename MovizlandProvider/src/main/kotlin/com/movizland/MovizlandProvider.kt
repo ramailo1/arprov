@@ -17,13 +17,14 @@ import com.lagradost.cloudstream3.MainAPI
 
 import android.annotation.SuppressLint
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 
-class Movizland : MainAPI() {
+class MovizlandProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://movizlands.com"
     override var name = "Movizland [DUPLICATE]"
@@ -61,16 +62,15 @@ class Movizland : MainAPI() {
         val year = url.select(".WatchTime").text()?.getIntFromText()
         var quality = url.select(".Quality").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
         val tvtype = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title.cleanTitle(),
             url.select("a").attr("href"),
-            this@Movizland.name,
             tvtype,
-            posterUrl,
-            year,
-            null,
-            quality = getQualityFromString(quality),
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year
+            this.quality = getQualityFromString(quality)
+        }
     }
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "أضيف حديثا",
@@ -169,17 +169,12 @@ private fun getSeasonFromString(sName: String): Int {
 
 	    if(episodesItem){
 		 title = doc.select(".SeriesSingle .ButtonsFilter.WidthAuto span").text()
-		 doc.select(".EpisodesList .EpisodeItem").map{ element ->
+		 doc.select(".EpisodesList .EpisodeItem").forEach { element ->
 			 if(!element.text().contains("Full")){
 				 episodes.add(
-					 Episode(
-					    element.select("a").attr("href"),
-                                            null,
-                                            null,
-                                            element.select("em").text().getIntFromText(),
-					    null,
-					    null,
-					 )
+					 newEpisode(element.select("a").attr("href")) {
+                                            this.episode = element.select("em").text().getIntFromText()
+					 }
 				 )
 			 }
 		 }
@@ -198,38 +193,34 @@ private fun getSeasonFromString(sName: String): Int {
             }
 	    title = doc.select(".PageTitle .H1Title").text().cleanTitle()
             if(doc.select(".BlockItem a").attr("href").contains("/series/")){//seasons
-                doc.select(".BlockItem").map { seas ->
-                    seas.select("a").attr("href") }.apmap{ pageIt ->
+                doc.select(".BlockItem").forEach { seas ->
+                    val pageIt = seas.select("a").attr("href")
                     val Sedoc = app.get(pageIt).document
                     val pagEl = Sedoc.select(".pagination > div > ul > li").isNotEmpty()
                     if(pagEl) {
-                            Sedoc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").apmap {
+                            Sedoc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach {
                                 val epidoc = app.get(it.attr("href")).document
-                                    epidoc.select(".BlockItem").map{ element ->
+                                    epidoc.select(".BlockItem").forEach { element ->
                                     episodes.add(
-                                        Episode(
-                                            element.select("a").attr("href"),
-                                            element.select(".BlockTitle").text(),
-                                            getSeasonFromString(element.select(".BlockTitle").text()),
-                                            element.select(".EPSNumber").text().getIntFromText(),
-					    element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") },
-					    null,
-                                            )
-                                        )
+                                        newEpisode(element.select("a").attr("href")) {
+                                            this.name = element.select(".BlockTitle").text()
+                                            this.season = getSeasonFromString(element.select(".BlockTitle").text())
+                                            this.episode = element.select(".EPSNumber").text().getIntFromText()
+					                        this.posterUrl = element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+                                        }
+                                    )
                                 }
                             }
                         }else{
-                        Sedoc.select(".BlockItem").map{ el ->
+                        Sedoc.select(".BlockItem").forEach { el ->
                         episodes.add(
-                            Episode(
-                                    el.select("a").attr("href"),
-                                    el.select(".BlockTitle").text(),
-                                    getSeasonFromString(el.select(".BlockTitle").text()),
-                                    el.select(".EPSNumber").text().getIntFromText(),
-				    el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") },
-				    null,
-                                    )
-                               )
+                            newEpisode(el.select("a").attr("href")) {
+                                    this.name = el.select(".BlockTitle").text()
+                                    this.season = getSeasonFromString(el.select(".BlockTitle").text())
+                                    this.episode = el.select(".EPSNumber").text().getIntFromText()
+				                    this.posterUrl = el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+                                }
+                            )
                         }
                     }
                 }
@@ -238,34 +229,30 @@ private fun getSeasonFromString(sName: String): Int {
                     val pagEl = doc.select(".pagination > div > ul > li.active > a").isNotEmpty()
                     val pagSt = if(pagEl) true else false
                     if(pagSt){
-                        doc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").map{ eppages ->
-                            eppages.attr("href") }.apmap{
+                        doc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach { eppages ->
+                            val it = eppages.attr("href")
                             val epidoc = app.get(it).document
-                                epidoc.select(".BlockItem").map{ element ->
+                                epidoc.select(".BlockItem").forEach { element ->
                                 episodes.add(
-                                    Episode(
-                                        element.select("a").attr("href"),
-                                        element.select(".BlockTitle").text(),
-                                        getSeasonFromString(element.select(".BlockTitle").text()),
-                                        element.select(".EPSNumber").text().getIntFromText(),    
-					element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") },
-				        null,
-                                        )
-                                    )
+                                    newEpisode(element.select("a").attr("href")) {
+                                        this.name = element.select(".BlockTitle").text()
+                                        this.season = getSeasonFromString(element.select(".BlockTitle").text())
+                                        this.episode = element.select(".EPSNumber").text().getIntFromText()    
+					                    this.posterUrl = element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+                                    }
+                                )
                             }
                         }
                     }else{   
-                    doc.select(".BlockItem").map{ el ->
+                    doc.select(".BlockItem").forEach { el ->
                     episodes.add(
-                        Episode(
-                                el.select("a").attr("href"),
-                                el.select(".BlockTitle").text(),
-                                getSeasonFromString(el.select(".BlockTitle").text()),
-                                el.select(".EPSNumber").text().getIntFromText(),
-				el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") },
-				null,
-                                )
-                           )
+                        newEpisode(el.select("a").attr("href")) {
+                                this.name = el.select(".BlockTitle").text()
+                                this.season = getSeasonFromString(el.select(".BlockTitle").text())
+                                this.episode = el.select(".EPSNumber").text().getIntFromText()
+				                this.posterUrl = el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+                            }
+                        )
                     }
                 }
             }

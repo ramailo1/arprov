@@ -9,7 +9,11 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
 class RistoAnimeProvider : MainAPI() {
@@ -61,8 +65,8 @@ class RistoAnimeProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val title = this.selectFirst(".title, .name, h2, h3, .anime-title, .entry-title")?.text()?.trim() ?: return null
-        val href = fixUrlNull(this.selectFirst("a")?.attr("href")) ?: return null
-        val posterUrl = fixUrlNull(this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-src"))
+        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: "")
+        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-src") ?: "")
         val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
         val episodes = this.selectFirst(".episodes, .episode-count")?.text()?.replace("\\D".toRegex(), "")?.toIntOrNull()
         
@@ -95,7 +99,7 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
         val title = doc.selectFirst(".anime-title, .video-title, h1, .entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(doc.selectFirst(".poster img, .anime-poster img, .thumbnail img")?.attr("src"))
+        val poster = fixUrl(doc.selectFirst(".poster img, .anime-poster img, .thumbnail img")?.attr("src") ?: "")
         val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
         val description = doc.selectFirst(".description, .plot, .summary, .story, .content")?.text()?.trim()
         val rating = doc.selectFirst(".rating, .score")?.text()?.trim()?.toRatingInt()
@@ -115,16 +119,15 @@ class RistoAnimeProvider : MainAPI() {
             val episodes = mutableListOf<Episode>()
             doc.select(".episode-item, .episodes li, .eps-item, article.episode").forEach { episodeElement ->
                 val episodeName = episodeElement.selectFirst(".episode-title, .episode-name, .title")?.text()?.trim()
-                val episodeUrl = fixUrlNull(episodeElement.selectFirst("a")?.attr("href"))
+                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
                 val episodeNumber = episodeElement.selectFirst(".episode-number, .ep-num")?.text()?.replace("\\D".toRegex(), "")?.toIntOrNull()
                     ?: episodeName?.replace("\\D".toRegex(), "")?.toIntOrNull()
                 
                 if (episodeName != null && episodeUrl != null) {
-                    episodes.add(Episode(
-                        data = episodeUrl,
-                        name = episodeName,
-                        episode = episodeNumber
-                    ))
+                    episodes.add(newEpisode(episodeUrl) {
+                        this.name = episodeName
+                        this.episode = episodeNumber
+                    })
                 }
             }
             
@@ -153,7 +156,7 @@ class RistoAnimeProvider : MainAPI() {
         
         // Try multiple selectors for video links
         doc.select(".video-links a, .download-links a, .watch-links a, .server-list a, .quality-list a").forEach { linkElement ->
-            val linkUrl = fixUrlNull(linkElement.attr("href")) ?: return@forEach
+            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
             val quality = linkElement.select(".quality, .resolution, .res").text().trim()
             val serverName = linkElement.select(".server-name, .host, .server").text().trim()
             
