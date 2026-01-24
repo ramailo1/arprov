@@ -154,7 +154,7 @@ class AnimeiatProvider : MainAPI() {
         println(url)
         val doc = app.get(url).document
         val script = doc.select("body > script").first()?.html()
-        val id = script?.replace(".*4\",slug:\"|\",duration:.*".toRegex(),"")
+        val id = script?.replace(".*4\",slug:\"|\"duration:.*".toRegex(),"")
         val player = app.get("$pageUrl/player/$id").document
         player.select("source").map {
             callback.invoke(
@@ -162,10 +162,11 @@ class AnimeiatProvider : MainAPI() {
                     this.name,
                     this.name,
                     it.attr("src"),
-                    pageUrl,
-                    it.attr("size").toIntOrNull() ?: Qualities.Unknown.value,
-                    type = ExtractorLinkType.VIDEO
-                )
+                    ExtractorLinkType.VIDEO
+                ) {
+                    quality = it.attr("size").toIntOrNull() ?: Qualities.Unknown.value
+                    referer = pageUrl
+                }
             )
         }
         return true
