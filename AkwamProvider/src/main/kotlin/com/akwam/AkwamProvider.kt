@@ -21,7 +21,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
-class Akwam : MainAPI() {
+class AkwamProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://ak.sv"
     override var name = "Akwam"
@@ -37,17 +37,16 @@ class Akwam : MainAPI() {
         val posterUrl = poster.attr("data-src")
         val year = select(".badge-secondary").text().toIntOrNull()
 
-        // If you need to differentiate use the url.
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             url,
-            this@Akwam.name,
             TvType.TvSeries,
-            posterUrl,
-            year,
-            null,
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year
+        }
     }
+    
     override val mainPage = mainPageOf(
             "$mainUrl/movies?page=" to "Movies",
             "$mainUrl/series?page=" to "Series",
@@ -100,7 +99,6 @@ class Akwam : MainAPI() {
                 it.text().contains("السنة")
             }?.text()?.getIntFromText()
 
-        // A bit iffy to parse twice like this, but it'll do.
         val duration =
             doc.select("div.font-size-16.text-white.mt-2").firstOrNull {
                 it.text().contains("مدة الفيلم")
@@ -108,7 +106,7 @@ class Akwam : MainAPI() {
 
         val synopsis = doc.select("div.widget-body p:first-child").text()
 
-        val rating = doc.select("span.mx-2").text().split("/").lastOrNull()?.toRatingInt()
+        // val rating = doc.select("span.mx-2").text().split("/").lastOrNull()?.toRatingInt()
 
         val tags = doc.select("div.font-size-16.d-flex.align-items-center.mt-3 > a").map {
             it.text()
@@ -120,8 +118,6 @@ class Akwam : MainAPI() {
             Actor(name, image)
         }
         
-
-
         val recommendations =
             doc.select("div > div.widget-body > div.row > div > div.entry-box").mapNotNull {
                 val recTitle = it?.selectFirst("div.entry-body > .entry-title > .text-white")
@@ -130,7 +126,9 @@ class Akwam : MainAPI() {
                 val name = recTitle.text() ?: return@mapNotNull null
                 val poster = it.selectFirst(".entry-image > a > picture > img")?.attr("data-src")
                     ?: return@mapNotNull null
-                MovieSearchResponse(name, href, this.name, TvType.Movie, fixUrl(poster))
+                newMovieSearchResponse(name, href, TvType.Movie) {
+                    this.posterUrl = fixUrl(poster)
+                }
             }
 
         return if (isMovie) {
@@ -143,7 +141,7 @@ class Akwam : MainAPI() {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.plot = synopsis
-                this.rating = rating
+                // this.rating = rating
                 this.tags = tags
                 this.duration = duration
                 this.recommendations = recommendations
@@ -163,7 +161,7 @@ class Akwam : MainAPI() {
                 this.duration = duration
                 this.posterUrl = posterUrl
                 this.tags = tags.filterNotNull()
-                this.rating = rating
+                // this.rating = rating
                 this.year = year
                 this.plot = synopsis
                 this.recommendations = recommendations
@@ -172,15 +170,9 @@ class Akwam : MainAPI() {
         }
     }
 
-
-//    // Maybe possible to not use the url shortener but cba investigating that.
-//    private suspend fun skipUrlShortener(url: String): AppResponse {
-//        return app.get(app.get(url).document.select("a.download-link").attr("href"))
-//    }
-
     private fun getQualityFromId(id: Int?): Qualities {
         return when (id) {
-            2 -> Qualities.P360 // Extrapolated
+            2 -> Qualities.P360
             3 -> Qualities.P480
             4 -> Qualities.P720
             5 -> Qualities.P1080
@@ -212,7 +204,6 @@ class Akwam : MainAPI() {
                         url,
                         quality,
                     )
-                    // just in case if they add the shorts urls again
                 }
             }
         }.flatten()

@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class AkwamPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(Akwam())
+        registerMainAPI(AkwamProvider())
     }
 }
