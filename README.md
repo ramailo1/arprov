@@ -210,4 +210,5 @@ python scripts/analyze.py
   <a href="https://codeberg.org/dhomred/cloudstream-extensions-arabic">
     <img src="https://img.shields.io/github/stars/dhomred/cloudstream-extensions-arabic?style=social" alt="Star">
   </a>
-</p>
+</p>#   B u i l d   S t a t u s  
+ 
