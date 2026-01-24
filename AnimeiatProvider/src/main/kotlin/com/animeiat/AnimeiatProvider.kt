@@ -20,11 +20,12 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.nicehttp.Requests
 
-class Animeiat : MainAPI() {
+class AnimeiatProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://api.animeiat.co/v1"
     val pageUrl = "https://www.animeiat.tv"
@@ -70,9 +71,9 @@ class Animeiat : MainAPI() {
                 this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
             }
         }
-        return if(request.name.contains("(H)")) HomePageResponse(
-            arrayListOf(HomePageList(request.name.replace(" (H)",""), list, request.name.contains("(H)")))
-        ) else newHomePageResponse(request.name, list)
+        return if(request.name.contains("(H)")) {
+             newHomePageResponse(listOf(HomePageList(request.name.replace(" (H)",""), list, true)))
+        } else newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -138,14 +139,11 @@ class Animeiat : MainAPI() {
         (1..parseJson<Episodes>(loadSession.get("$url/episodes").text).meta.lastPage!!).map { pageNumber ->
             parseJson<Episodes>(loadSession.get("$url/episodes?page=$pageNumber").text).data.map {
                 episodes.add(
-                    Episode(
-                        "$pageUrl/watch/"+it.slug,
-                        it.title,
-                        null,
-                        it.number,
-                        "https://api.animeiat.co/storage/" + it.posterPath,
-
-                    )
+                    newEpisode("$pageUrl/watch/"+it.slug) {
+                        this.name = it.title
+                        this.episode = it.number
+                        this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
+                    }
                 )
             }
         }
