@@ -181,10 +181,11 @@ class FaselHDProvider : MainAPI() {
                         this.name,
                         this.name + " Download Source",
                         player.select("div.dl-link a").attr("href"),
-                        this.mainUrl,
-                        Qualities.Unknown.value,
-                        type = ExtractorLinkType.VIDEO
-                    )
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = this@FaselHDProvider.mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             } else if(method == "iframe") {
                 val webView = WebViewResolver(

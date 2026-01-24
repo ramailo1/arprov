@@ -111,7 +111,7 @@ class GateAnimeProvider : MainAPI() {
             addEpisodes(if(title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes) // TODO CHECK
             plot = description
             tags = genre
-            this.rating = rating
+            // this.rating = rating
             
         }
     }

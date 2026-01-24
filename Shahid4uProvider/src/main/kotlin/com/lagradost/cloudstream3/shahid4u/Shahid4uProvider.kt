@@ -116,7 +116,7 @@ class Shahid4uProvider : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.recommendations = recommendations
-                this.rating = rating
+                // this.rating = rating
             }
         } else {
             val episodes = ArrayList<Episode>()
@@ -160,7 +160,7 @@ class Shahid4uProvider : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.recommendations = recommendations
-                this.rating = rating
+                // this.rating = rating
             }
         }
     }

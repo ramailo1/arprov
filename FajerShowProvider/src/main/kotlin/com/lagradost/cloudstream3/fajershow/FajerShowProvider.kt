@@ -124,7 +124,7 @@ class FajerShowProvider : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.actors = actors
-                this.rating = rating
+                // this.rating = rating
             }
         } else {
             val episodes = doc.select(".se-c ul > li").map {

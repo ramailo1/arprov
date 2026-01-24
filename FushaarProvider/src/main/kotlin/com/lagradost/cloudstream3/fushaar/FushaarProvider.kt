@@ -109,7 +109,7 @@ class FushaarProvider : MainAPI() {
             this.year = year
             this.tags = tags
             this.plot = synopsis
-            this.rating = rating
+            // this.rating = rating
             this.recommendations = recommendations
             // addTrailer(trailer)
         }
