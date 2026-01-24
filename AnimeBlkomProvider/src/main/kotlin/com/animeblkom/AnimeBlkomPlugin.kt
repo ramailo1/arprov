@@ -1,4 +1,4 @@
-package com.animeblkom.AnimeBlkom
+package com.animeblkom
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin

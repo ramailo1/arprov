@@ -1,4 +1,4 @@
-package com.animeiat.Animeiat
+package com.animeiat
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin

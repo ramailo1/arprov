@@ -1,4 +1,4 @@
-package com.anime4up.Anime4up
+package com.anime4up
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin

@@ -1,4 +1,4 @@
-package com.akwam.Akwam
+package com.akwam
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin
