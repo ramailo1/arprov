@@ -175,7 +175,7 @@ class ArabSeedProvider : MainAPI() {
                 println(iframeUrl)
                 if(it.text().contains("عرب سيد")) {
                     val sourceElement = app.get(iframeUrl).document.select("source")
-callback.invoke(
+                    callback.invoke(
                         newExtractorLink(
                             source = this.name,
                             name = "ArabSeed",

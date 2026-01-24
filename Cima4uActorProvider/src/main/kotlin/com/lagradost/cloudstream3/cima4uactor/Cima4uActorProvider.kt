@@ -110,7 +110,7 @@ class Cima4uActorProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.score = rating
+                // this.score = rating // Score type requires special handling
                 this.tags = tags
                 this.duration = duration
             }
@@ -119,7 +119,7 @@ class Cima4uActorProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.score = rating
+                // this.score = rating // Score type requires special handling
                 this.tags = tags
                 this.duration = duration
             }
