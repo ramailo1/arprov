@@ -175,14 +175,14 @@ class ArabSeedProvider : MainAPI() {
                 println(iframeUrl)
                 if(it.text().contains("عرب سيد")) {
                     val sourceElement = app.get(iframeUrl).document.select("source")
-                    callback.invoke(
+callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "ArabSeed",
-                            sourceElement.attr("src"),
-                            data,
-                            if(quality != 0) quality else it.text().replace(".*- ".toRegex(), "").replace("\\D".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value,
-                            type = if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            source = this.name,
+                            name = "ArabSeed",
+                            url = sourceElement.attr("src"),
+                            referer = data,
+                            quality = if(quality != 0) quality else it.text().replace(".*- ".toRegex(), "").replace("\\D".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value,
+                            isM3u8 = !sourceElement.attr("type").contains("mp4")
                         )
                     )
                 } else loadExtractor(iframeUrl, data, subtitleCallback, callback)
