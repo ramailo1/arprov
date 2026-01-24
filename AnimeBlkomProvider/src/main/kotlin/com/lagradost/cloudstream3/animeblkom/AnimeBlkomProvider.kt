@@ -131,10 +131,11 @@ class AnimeBlkomProvider : MainAPI() {
                             this.name,
                             "Animetitans " + it.text(),
                             iframe.select("script").last()?.data()?.substringAfter("source: \"")?.substringBefore("\"").toString(),
-                            this.mainUrl,
-                            Qualities.Unknown.value,
-                            type = ExtractorLinkType.M3U8
-                        )
+                            ExtractorLinkType.M3U8
+                        ) {
+                            quality = Qualities.Unknown.value
+                            referer = this@AnimeBlkomProvider.mainUrl
+                        }
                     )
                 } else if(it.text() == "Blkom") {
                     val iframe = app.get(url).document
@@ -144,10 +145,11 @@ class AnimeBlkomProvider : MainAPI() {
                                 this.name,
                                 it.text(),
                                 source.attr("src"),
-                                this.mainUrl,
-                                source.attr("res").toIntOrNull() ?: Qualities.Unknown.value,
-                                type = ExtractorLinkType.VIDEO
-                            )
+                                ExtractorLinkType.VIDEO
+                            ) {
+                                quality = source.attr("res").toIntOrNull() ?: Qualities.Unknown.value
+                                referer = this@AnimeBlkomProvider.mainUrl
+                            }
                         )
                     }
                 } else {
@@ -163,10 +165,11 @@ class AnimeBlkomProvider : MainAPI() {
                     this.name,
                     it.attr("title") + " " + it.select("small").text() + " Download Source",
                     it.attr("href"),
-                    this.mainUrl,
-                    it.text().replace("p.*| ".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value,
-                    type = ExtractorLinkType.VIDEO
-                )
+                    ExtractorLinkType.VIDEO
+                ) {
+                    quality = it.text().replace("p.*| ".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value
+                    referer = this@AnimeBlkomProvider.mainUrl
+                }
             )
         }
         return true

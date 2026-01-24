@@ -12,11 +12,6 @@ import okio.ByteString.Companion.decodeBase64
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URL
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import java.net.URL
 
 private fun String.getIntFromText(): Int? {
     return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
@@ -159,10 +154,11 @@ open class Anime4upProvider : MainAPI() {
                             this.name,
                             this.name + " Moshahda",
                             "https://moshahda.net/$moshahdaID.html?${qualityCode}",
-                            "https://moshahda.net",
-                            quality.toIntOrNull() ?: 1080,
                             ExtractorLinkType.VIDEO
-                        )
+                        ) {
+                            this.quality = quality.toIntOrNull() ?: 1080
+                            referer = "https://moshahda.net"
+                        }
                     ) }
             }
         } else if(data.contains("witanime")) { // witanime

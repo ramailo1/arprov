@@ -205,10 +205,11 @@ class AkwamProvider : MainAPI() {
                     this.name,
                     this.name,
                     url,
-                    this.mainUrl,
-                    it.second.value,
                     ExtractorLinkType.VIDEO
-                )
+                ) {
+                    quality = it.second.value
+                    referer = this@AkwamProvider.mainUrl
+                }
             )
         }
         return true
