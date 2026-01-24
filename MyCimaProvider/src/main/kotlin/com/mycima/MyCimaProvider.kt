@@ -221,8 +221,8 @@ class MyCimaProvider : MainAPI() {
                 }
             }
             if (seasons.isNotEmpty()) {
-                seasons.apmap { surl ->
-                    if (surl.contains("%d9%85%d8%af%d8%a8%d9%84%d8%ac")) return@apmap
+                seasons.forEach { surl ->
+                    if (surl.contains("%d9%85%d8%af%d8%a8%d9%84%d8%ac")) return@forEach
                     val seasonsite = app.get(surl).document
                     val fmoreButton = seasonsite.select("div.MoreEpisodes--Button")
                     val fseason = seasonsite.select("div.List--Seasons--Episodes a.selected").text()
@@ -294,7 +294,7 @@ class MyCimaProvider : MainAPI() {
                                 }
                             }
                         }
-                    } else return@apmap
+                    } else return@forEach
                 }
             }
             newTvSeriesLoadResponse(

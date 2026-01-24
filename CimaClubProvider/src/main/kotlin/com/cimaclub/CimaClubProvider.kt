@@ -118,7 +118,11 @@ class CimaClubProvider : MainAPI() {
             val episodes = mutableListOf<Episode>()
             doc.select(".episode-item, .episodes li").forEach { episodeElement ->
                 val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
-                if (episodeName != null && episodeUrl != null) {
+                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
+                val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
+                val seasonNumber = episodeElement.selectFirst(".season-number")?.text()?.trim()?.toIntOrNull() ?: 1
+                
+                if (episodeName != null && episodeUrl.isNotEmpty()) {
                     episodes.add(newEpisode(episodeUrl) {
                         this.name = episodeName
                         this.episode = episodeNumber

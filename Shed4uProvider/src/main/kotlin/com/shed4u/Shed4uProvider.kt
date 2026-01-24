@@ -75,10 +75,14 @@ class Shed4uProvider : MainAPI() {
         val episodes = mutableListOf<Episode>()
         // Episodes listing logic for RistoAnime
         doc.select(".Episodes a, .EpisodeList a").forEach { ep ->
-             val epTitle = ep.text()
-             val epUrl = ep.attr("href")
-             val epNum = epTitle.filter { it.isDigit() }.toIntOrNull()
-             episodes.add(Episode(epUrl, epTitle, season = 1, episode = epNum))
+              val epTitle = ep.text()
+              val epUrl = ep.attr("href")
+              val epNum = epTitle.filter { it.isDigit() }.toIntOrNull()
+              episodes.add(newEpisode(epUrl) {
+                  this.name = epTitle
+                  this.season = 1
+                  this.episode = epNum
+              })
         }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {

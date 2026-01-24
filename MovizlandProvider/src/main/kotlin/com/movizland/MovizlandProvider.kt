@@ -141,7 +141,7 @@ private fun getSeasonFromString(sName: String): Int {
         val isMovie = title.contains("عرض|فيلم".toRegex())
         val synopsis = doc.select("section.story").text()
         val trailer = doc.select("div.InnerTrailer iframe").attr("data-src")
-        val tags = sdetails.select("li:has(.fa-film) a").map{ it.text() }
+        var tags = sdetails.select("li:has(.fa-film) a").map { it.text() }
 	val recommendations = doc.select(".BlocksUI#LoadFilter div.Small--Box").mapNotNull { element ->
                 element.toSearchResponse()
         }
@@ -271,8 +271,8 @@ override suspend fun loadLinks(
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-	doc.select("code[id*='Embed'] iframe,.DownloadsList a").apmap {
-                            var sourceUrl = it.attr("data-srcout").ifEmpty { it.attr("href") }
+	doc.select("code[id*='Embed'] iframe,.DownloadsList a").forEach {
+                            val sourceUrl = it.attr("data-srcout").ifEmpty { it.attr("href") }
                             loadExtractor(sourceUrl, data, subtitleCallback, callback)
             }
 	return true

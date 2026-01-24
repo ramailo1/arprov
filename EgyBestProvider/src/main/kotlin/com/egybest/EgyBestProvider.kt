@@ -235,7 +235,7 @@ class EgyBestProvider : MainAPI() {
         val vidstreamURL = baseURL + doc.select("iframe.auto-size").attr("src")
 
         val videoSoup = session.get(vidstreamURL, cookies = mapOf(
-            "PSSID" to this@EgyBest.pssid,
+            "PSSID" to this@EgyBestProvider.pssid,
         )).document
         videoSoup.select("source").firstOrNull { it.hasAttr("src") }?.attr("src")?.let {
             M3u8Helper.generateM3u8(
