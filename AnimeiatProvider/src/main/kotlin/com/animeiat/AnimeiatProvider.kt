@@ -21,6 +21,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.nicehttp.Requests
@@ -178,8 +180,8 @@ class AnimeiatProvider : MainAPI() {
                     this.name,
                     it.attr("src"),
                     pageUrl,
-                    it.attr("size").toInt(),
-                    ExtractorLinkType.VIDEO
+                    it.attr("size").toIntOrNull() ?: Qualities.Unknown.value,
+                    type = ExtractorLinkType.VIDEO
                 )
             )
         }
