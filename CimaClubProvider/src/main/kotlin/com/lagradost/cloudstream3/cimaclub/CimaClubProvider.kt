@@ -68,7 +68,7 @@ class CimaClubProvider : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.year = year
-            this.quality = getQualityFromString(quality ?: "")
+            this.quality = getSearchQualityFromString(quality ?: "")
         }
     }
 
@@ -121,7 +121,7 @@ class CimaClubProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.rating = rating
+                // this.score = rating // Score type requires special handling
                 this.tags = tags
                 this.duration = duration
             }
@@ -130,7 +130,7 @@ class CimaClubProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.rating = rating
+                // this.score = rating // Score type requires special handling
                 this.tags = tags
                 this.duration = duration
             }
@@ -150,13 +150,14 @@ class CimaClubProvider : MainAPI() {
             
             callback.invoke(
                 newExtractorLink(
-                    source = serverName.ifEmpty { "CimaClub" },
-                    name = serverName.ifEmpty { "CimaClub" },
-                    url = linkUrl,
-                    referer = mainUrl,
-                    quality = getQualityFromString(quality),
-                    type = if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                )
+                    serverName.ifEmpty { "CimaClub" },
+                    serverName.ifEmpty { "CimaClub" },
+                    linkUrl,
+                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = getQualityFromString(quality)
+                    this.referer = mainUrl
+                }
             )
         }
         
@@ -170,6 +171,16 @@ class CimaClubProvider : MainAPI() {
             quality.contains("480", ignoreCase = true) -> Qualities.P480.value
             quality.contains("360", ignoreCase = true) -> Qualities.P360.value
             else -> Qualities.Unknown.value
+        }
+    }
+
+    private fun getSearchQualityFromString(quality: String): SearchQuality? {
+        return when {
+            quality.contains("1080", ignoreCase = true) -> SearchQuality.HD
+            quality.contains("720", ignoreCase = true) -> SearchQuality.HD
+            quality.contains("480", ignoreCase = true) -> SearchQuality.SD
+            quality.contains("360", ignoreCase = true) -> SearchQuality.SD
+            else -> null
         }
     }
 }

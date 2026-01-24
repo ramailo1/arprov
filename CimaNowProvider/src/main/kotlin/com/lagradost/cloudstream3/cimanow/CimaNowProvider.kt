@@ -149,13 +149,14 @@ class CimaNowProvider : MainAPI() {
             it.select("a").forEach { media ->
                 callback.invoke(
                     newExtractorLink(
-                        source = this.name,
-                        name = name,
-                        url = media.attr("href"),
-                        referer = this.mainUrl,
-                        quality = media.text().getIntFromText() ?: Qualities.Unknown.value,
-                        type = ExtractorLinkType.VIDEO
-                    )
+                        this.name,
+                        name,
+                        media.attr("href"),
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = media.text().getIntFromText() ?: Qualities.Unknown.value
+                        this.referer = this@CimaNowProvider.mainUrl
+                    }
                 )
             }
         }
