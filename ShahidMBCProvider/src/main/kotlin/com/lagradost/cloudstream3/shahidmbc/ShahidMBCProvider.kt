@@ -54,9 +54,11 @@ class ShahidMBCProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         val linkElement = this.selectFirst("a") ?: return null
         val href = fixUrl(linkElement.attr("href") ?: "")
+        val img = this.selectFirst("img")
         val posterUrl = fixUrl(img?.attr("src") ?: "")
         val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
         val quality = this.selectFirst(".quality, .resolution")?.text()?.trim()
+        val title = linkElement.attr("title").ifEmpty { this.selectFirst(".title, h3, h2")?.text() } ?: ""
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl

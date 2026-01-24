@@ -12,6 +12,8 @@ import okio.ByteString.Companion.decodeBase64
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URL
+import com.fasterxml.jackson.module.kotlin.readValue
+
 
 private fun String.getIntFromText(): Int? {
     return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
@@ -21,6 +23,9 @@ class WitAnime : Anime4upProvider() {
     override var mainUrl = "https://witanime.com"
 }
 open class Anime4upProvider : MainAPI() {
+    private inline fun <reified T> parseJson(text: String): T {
+        return mapper.readValue(text)
+    }
     override var lang = "ar"
     override var mainUrl = "https://w1.anime4up.rest" 
     override var name = "Anime4up"

@@ -10,7 +10,12 @@ import com.fasterxml.jackson.annotation.JsonProperty
 
 import com.lagradost.nicehttp.Requests
 
+import com.fasterxml.jackson.module.kotlin.readValue
+
 class AnimeiatProvider : MainAPI() {
+    private inline fun <reified T> parseJson(text: String): T {
+        return mapper.readValue(text)
+    }
     override var lang = "ar"
     override var mainUrl = "https://api.animeiat.co/v1"
     val pageUrl = "https://www.animeiat.tv"

@@ -2,7 +2,7 @@
   "name": "CloudStream Extensions Arabic - نظيف ومنظم",
   "description": "إضافات عربية متقدمة لـ CloudStream - بشكل نظيف ومنظم مع دعم 48+ موقع",
   "author": "dhomred",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "language": "ar",
   "repository": {
     "url": "https://codeberg.org/dhomred/cloudstream-extensions-arabic",
@@ -67,7 +67,7 @@
     "discussions": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues"
   },
   "license": "MIT",
-  "lastUpdated": "2025-01-01",
+  "lastUpdated": "2026-01-24",
   "quality": {
     "successRate": 95,
     "testCoverage": 90,

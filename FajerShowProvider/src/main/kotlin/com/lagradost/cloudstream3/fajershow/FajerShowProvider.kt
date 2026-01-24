@@ -11,8 +11,13 @@ import org.jsoup.nodes.Element
 import java.net.URI
 import java.util.*
 import kotlin.collections.ArrayList
+import com.fasterxml.jackson.module.kotlin.readValue
 
 class FajerShowProvider : MainAPI() {
+    private inline fun <reified T> parseJson(text: String): T {
+        return mapper.readValue(text)
+    }
+
     override var lang = "ar"
     override var mainUrl = "https://fajer.show"
     override var name = "FajerShow"

@@ -93,7 +93,6 @@ class AkwamProvider : MainAPI() {
 
         val synopsis = doc.select("div.widget-body p:first-child").text()
 
-        // val rating = doc.select("span.mx-2").text().split("/").lastOrNull()?.toRatingInt()
 
         val tags = doc.select("div.font-size-16.d-flex.align-items-center.mt-3 > a").map {
             it.text()
@@ -102,7 +101,7 @@ class AkwamProvider : MainAPI() {
         val actors = doc.select("div.widget-body > div > div.entry-box > a").mapNotNull {
             val name = it?.selectFirst("div > .entry-title")?.text() ?: return@mapNotNull null
             val image = it.selectFirst("div > img")?.attr("src") ?: return@mapNotNull null
-            Actor(name, image)
+            ActorData(Actor(name, image))
         }
         
         val recommendations =
@@ -132,7 +131,7 @@ class AkwamProvider : MainAPI() {
                 this.tags = tags
                 this.duration = duration
                 this.recommendations = recommendations
-                addActors(actors)
+                this.actors = actors
             }
         } else {
             val episodes = doc.select("div.bg-primary2.p-4.col-lg-4.col-md-6.col-12").map {
@@ -152,7 +151,7 @@ class AkwamProvider : MainAPI() {
                 this.year = year
                 this.plot = synopsis
                 this.recommendations = recommendations
-                addActors(actors)
+                this.actors = actors
             }
         }
     }

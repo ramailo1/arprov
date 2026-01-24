@@ -8,8 +8,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import com.fasterxml.jackson.module.kotlin.readValue
 
 class MyCimaProvider : MainAPI() {
+    private inline fun <reified T> parseJson(text: String): T {
+        return mapper.readValue(text)
+    }
+
     override var lang = "ar"
     override var mainUrl = "https://we-cima.com/"
     override var name = "MyCima"
@@ -109,7 +114,7 @@ class MyCimaProvider : MainAPI() {
             val image = it.attr("style")
                 ?.getImageURL()
                 ?: return@mapNotNull null
-            Actor(name, image)
+            ActorData(actor = Actor(name, image))
         }
         val recommendations =
             doc.select("div.Grid--WecimaPosts div.GridItem")?.mapNotNull { element ->
@@ -129,7 +134,7 @@ class MyCimaProvider : MainAPI() {
                 this.tags = tags
                 this.duration = duration
                 this.recommendations = recommendations
-                addActors(actors)
+                this.actors = actors
             }
         } else {
             val episodes = ArrayList<Episode>()
@@ -293,7 +298,7 @@ class MyCimaProvider : MainAPI() {
                 this.year = year
                 this.plot = synopsis
                 this.recommendations = recommendations
-                addActors(actors)
+                this.actors = actors
             }
         }
     }

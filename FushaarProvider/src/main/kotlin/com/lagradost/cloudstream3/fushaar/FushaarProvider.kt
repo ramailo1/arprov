@@ -94,7 +94,6 @@ class FushaarProvider : MainAPI() {
         val synopsis = doc.select("div.postz").text()
         val trailer = doc.select("#new-stream > div > div.ytb > a").attr("href")
         val tags = doc.select("div.zoomInUp  a").map{it.text()}//doc.select("li.iifo").map { it.select("span.z-s-i").text()+" "+it.select("h8").text() }
-        val rating = doc.select("body > div.new-info.hide-mobile > div > div.z-imdb > div").text()?.toRatingInt()
         val recommendations = doc.select("article.poster").mapNotNull { element ->
                 element.toSearchResponse()
         }  

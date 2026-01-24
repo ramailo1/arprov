@@ -7,14 +7,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import org.jsoup.nodes.Element
-
 class RistoAnimeProvider : MainAPI() {
     override var mainUrl = "https://ristoanime.org"
     override var name = "RistoAnime"
@@ -79,7 +71,7 @@ class RistoAnimeProvider : MainAPI() {
         return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
             this.year = year
-            addDubStatus(dubExist = false, subEpisodes = episodes)
+            addDubStatus(dubExist = false, subExist = true, subEpisodes = episodes)
         }
     }
 
@@ -101,7 +93,6 @@ class RistoAnimeProvider : MainAPI() {
         val poster = fixUrl(doc.selectFirst(".poster img, .anime-poster img, .thumbnail img")?.attr("src") ?: "")
         val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
         val description = doc.selectFirst(".description, .plot, .summary, .story, .content")?.text()?.trim()
-        val rating = doc.selectFirst(".rating, .score")?.text()?.trim()?.toRatingInt()
         val tags = doc.select(".genres a, .categories a, .tags a, .genre-tags a").map { it.text().trim() }
         
         // Determine if it's a series or movie

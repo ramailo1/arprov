@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class MovizLandsPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(MovizLands())
+        registerMainAPI(MovizLandsProvider())
     }
 }

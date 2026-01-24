@@ -1,4 +1,4 @@
-package com.egydead
+package com.lagradost.cloudstream3.egydead
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin

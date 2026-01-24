@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.lagradost.cloudstream3.egydead
 
 import com.lagradost.cloudstream3.*
@@ -10,6 +12,7 @@ import org.jsoup.nodes.Element
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import okhttp3.Headers
 
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
@@ -39,7 +42,8 @@ class EgyDeadProvider : MainAPI() {
         "Sec-Fetch-Site" to "none"
     )
 
-    override fun getMainPage(): Int {
+    @Suppress("DEPRECATION")
+    fun getMainPage(): Int {
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -51,9 +55,11 @@ class EgyDeadProvider : MainAPI() {
         requestHeaders["User-Agent"] = randomUserAgent
 
         return try {
+            val headersBuilder = Headers.Builder()
+            requestHeaders.forEach { (k, v) -> headersBuilder.add(k, v) }
             val request = Request.Builder()
                 .url(mainUrl)
-                .headers(requestHeaders.toHeaders())
+                .headers(headersBuilder.build())
                 .build()
             
             val response = client.newCall(request).execute()

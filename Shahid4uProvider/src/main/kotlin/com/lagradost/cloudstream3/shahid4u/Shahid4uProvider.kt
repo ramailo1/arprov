@@ -103,7 +103,6 @@ class Shahid4uProvider : MainAPI() {
             }
         val synopsis = doc.select("div.post-story:contains(قصة) p").text()
 
-        val rating = doc.select("div.imdbR div span").text().toRatingInt()
         return if (isMovie) {
             newMovieLoadResponse(
                 title,
