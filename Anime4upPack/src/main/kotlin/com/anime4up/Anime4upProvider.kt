@@ -28,11 +28,11 @@ import java.net.URL
 private fun String.getIntFromText(): Int? {
     return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
 }
-class WitAnime : Anime4up() {
+class WitAnime : Anime4upProvider() {
     override var name = "WitAnime"
     override var mainUrl = "https://witanime.com"
 }
-open class Anime4up : MainAPI() {
+open class Anime4upProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://w1.anime4up.rest" 
     override var name = "Anime4up"
@@ -103,27 +103,26 @@ open class Anime4up : MainAPI() {
 
         val malId = doc.select("a.anime-mal").attr("href").replace(".*e\\/|\\/.*".toRegex(),"").toIntOrNull()
 
-        val episodes = doc.select("div#DivEpisodesList > div").apmap {
+        val episodes = doc.select("div#DivEpisodesList > div").map {
             val episodeElement = it.select("h3 a")
             val episodeUrl = episodeElement.attr("href")
             val episodeTitle = episodeElement.text()
             val posterUrl = it.select(".hover img").attr("src")
-            Episode(
-                episodeUrl,
-                episodeTitle,
-                episode = episodeTitle.getIntFromText(),
-                posterUrl = posterUrl
-            )
+            newEpisode(episodeUrl) {
+                this.name = episodeTitle
+                this.episode = episodeTitle.getIntFromText()
+                this.posterUrl = posterUrl
+            }
         }
         return newAnimeLoadResponse(title, url, type) {
-            this.apiName = this@Anime4up.name
+            this.apiName = this@Anime4upProvider.name
             addMalId(malId)
             engName = title
             posterUrl = poster
             this.year = year
             addEpisodes(if(title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes)
             plot = description
-            this.rating = rating
+            // this.rating = rating
             
         }
     }
@@ -143,13 +142,13 @@ open class Anime4up : MainAPI() {
         if(data.contains("anime4up")) {
             val watchJSON = parseJson<sources>(doc.select("input[name=\"wl\"]").attr("value").decodeBase64()?.utf8() ?: "")
             watchJSON.let { source ->
-                source.fhd?.apmap {
+                source.fhd?.map {
                     loadExtractor(it.value, data, subtitleCallback, callback)
                 }
-                source.hd?.apmap {
+                source.hd?.map {
                     loadExtractor(it.value, data, subtitleCallback, callback)
                 }
-                source.sd?.apmap {
+                source.sd?.map {
                     loadExtractor(it.value, data, subtitleCallback, callback)
                 }
             }
@@ -161,7 +160,7 @@ open class Anime4up : MainAPI() {
                     "480" to "download_h",
                     "360" to "download_n",
                     "240" to "download_l"
-                ).apmap { (quality, qualityCode) ->
+                ).map { (quality, qualityCode) ->
                     callback.invoke(
                         newExtractorLink(
                             this.name,
@@ -174,7 +173,7 @@ open class Anime4up : MainAPI() {
                     ) }
             }
         } else if(data.contains("witanime")) { // witanime
-            doc.select("ul#episode-servers li a").apmap {
+            doc.select("ul#episode-servers li a").map {
                 loadExtractor(it.attr("data-ep-url"), data, subtitleCallback, callback)
             }
         }

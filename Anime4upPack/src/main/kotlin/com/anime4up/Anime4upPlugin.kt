@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class Anime4upPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(Anime4up())
+        registerMainAPI(Anime4upProvider())
     }
 }
