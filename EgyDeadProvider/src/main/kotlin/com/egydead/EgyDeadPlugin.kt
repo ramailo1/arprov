@@ -1,4 +1,4 @@
-package com.egydead.EgyDead
+package com.egydead
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.BasePlugin
@@ -7,6 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class EgyDeadPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(EgyDead())
+        registerMainAPI(EgyDeadProvider())
     }
 }

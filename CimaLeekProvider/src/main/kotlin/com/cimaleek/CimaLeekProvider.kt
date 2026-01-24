@@ -15,12 +15,14 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
-class CimaLeek : MainAPI() {
+class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimalek.vip"
     override var name = "CimaLeek"
@@ -63,13 +65,13 @@ class CimaLeek : MainAPI() {
         val href = select("a").attr("href")
         val tvType = if (href.contains("/series/|/مسلسل/|/season/".toRegex())) TvType.TvSeries else TvType.Movie
         
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             href,
-            this@CimaLeek.name,
             tvType,
-            posterUrl,
-        )
+        ) {
+            this.posterUrl = posterUrl
+        }
     }
 
     override val mainPage = mainPageOf(
@@ -147,13 +149,12 @@ class CimaLeek : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            doc.select(".episodes-list li, .episode-item").map { episode ->
-                episodes.add(Episode(
-                    episode.select("a").attr("href"),
-                    episode.select("a").text().cleanTitle(),
-                    0,
-                    episode.select("a").text().getIntFromText()
-                ))
+            doc.select(".episodes-list li, .episode-item").forEach { episode ->
+                episodes.add(newEpisode(episode.select("a").attr("href")) {
+                    this.name = episode.select("a").text().cleanTitle()
+                    this.season = 0
+                    this.episode = episode.select("a").text().getIntFromText()
+                })
             }
             
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
@@ -183,7 +184,7 @@ class CimaLeek : MainAPI() {
         val doc = app.get(data, headers = requestHeaders).document
         
         // Try multiple server selection methods
-        doc.select(".servers-list li, .watch-links a, .download-links a, .video-servers a").apmap { element ->
+        doc.select(".servers-list li, .watch-links a, .download-links a, .video-servers a").forEach { element ->
             val url = element.attr("href") ?: element.attr("data-link") ?: element.attr("data-url")
             if (url.isNotEmpty()) {
                 loadExtractor(url, data, subtitleCallback, callback)

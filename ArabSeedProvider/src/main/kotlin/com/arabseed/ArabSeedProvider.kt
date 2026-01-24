@@ -19,9 +19,12 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
-class ArabSeed : MainAPI() {
+class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://a.asd.homes/main4"
     override var name = "ArabSeed"
@@ -38,13 +41,13 @@ class ArabSeed : MainAPI() {
         val title = select("h3").text()
         val posterUrl = select("div.movie__img img").attr("data-src").ifEmpty { select("div.movie__img img").attr("src") }
         val tvType = if (select("div.movie__meta").text().contains("مسلسلات")) TvType.TvSeries else TvType.Movie
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             attr("href"),
-            this@ArabSeed.name,
             tvType,
-            posterUrl,
-            )
+        ) {
+            this.posterUrl = posterUrl
+        }
     }
 
     override val mainPage = mainPageOf(
@@ -68,7 +71,7 @@ class ArabSeed : MainAPI() {
         arrayListOf(
             mainUrl to "series",
             mainUrl to "movies"
-        ).apmap { (url, type) ->
+        ).forEach { (url, type) ->
             val doc = app.post(
                 "$url/wp-content/themes/Elshaikh2021/Ajaxat/SearchingTwo.php",
                 data = mapOf("search" to query, "type" to type),
@@ -116,34 +119,32 @@ class ArabSeed : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.actors = actors
-                this.rating = rating
+                // this.rating = rating
                 this.year = year
             }
         } else {
             val seasonList = doc.select("div.SeasonsListHolder ul > li")
             val episodes = arrayListOf<Episode>()
             if(seasonList.isNotEmpty()) {
-                seasonList.apmap { season ->
+                seasonList.forEach { season ->
                     app.post(
                         "$mainUrl/wp-content/themes/Elshaikh2021/Ajaxat/Single/Episodes.php",
                         data = mapOf("season" to season.attr("data-season"), "post_id" to season.attr("data-id"))
-                    ).document.select("a").apmap {
-                        episodes.add(Episode(
-                            it.attr("href"),
-                            it.text(),
-                            season.attr("data-season")[0].toString().toIntOrNull(),
-                            it.text().getIntFromText()
-                        ))
+                    ).document.select("a").forEach {
+                        episodes.add(newEpisode(it.attr("href")) {
+                            this.name = it.text()
+                            this.season = season.attr("data-season")[0].toString().toIntOrNull()
+                            this.episode = it.text().getIntFromText()
+                        })
                     }
                 }
             } else {
-                doc.select("div.ContainerEpisodesList > a").apmap {
-                    episodes.add(Episode(
-                        it.attr("href"),
-                        it.text(),
-                        0,
-                        it.text().getIntFromText()
-                    ))
+                doc.select("div.ContainerEpisodesList > a").forEach {
+                    episodes.add(newEpisode(it.attr("href")) {
+                        this.name = it.text()
+                        this.season = 0
+                        this.episode = it.text().getIntFromText()
+                    })
                 }
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
@@ -152,7 +153,7 @@ class ArabSeed : MainAPI() {
                 this.plot = synopsis
                 this.actors = actors
                 this.recommendations = recommendations
-                this.rating = rating
+                // this.rating = rating
                 this.year = year
             }
         }
@@ -184,8 +185,8 @@ class ArabSeed : MainAPI() {
         } else {
             watchLinks = arrayListOf(0 to list)
         }
-        watchLinks.apmap { (quality, links) ->
-            links.apmap {
+        watchLinks.forEach { (quality, links) ->
+            links.forEach {
                 val iframeUrl = it.attr("data-link")
                 println(iframeUrl)
                 if(it.text().contains("عرب سيد")) {
@@ -196,8 +197,8 @@ class ArabSeed : MainAPI() {
                             "ArabSeed",
                             sourceElement.attr("src"),
                             data,
-                            if(quality != 0) quality else it.text().replace(".*- ".toRegex(), "").replace("\\D".toRegex(),"").toInt(),
-                            if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            if(quality != 0) quality else it.text().replace(".*- ".toRegex(), "").replace("\\D".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value,
+                            type = if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         )
                     )
                 } else loadExtractor(iframeUrl, data, subtitleCallback, callback)

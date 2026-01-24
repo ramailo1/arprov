@@ -16,17 +16,17 @@ import com.lagradost.cloudstream3.MainAPI
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.util.*
 import kotlin.collections.ArrayList
 
-class FajerShow : MainAPI() {
+class FajerShowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://fajer.show"
     override var name = "FajerShow"
@@ -46,25 +46,25 @@ class FajerShow : MainAPI() {
             val posterUrl = select("img").attr("src")
             val tvType = if (titleElement.attr("href").contains("/movies/")) TvType.Movie else TvType.TvSeries
             // If you need to differentiate use the url.
-            return MovieSearchResponse(
+            return newMovieSearchResponse(
                 titleElement.text().replace(".*\\|".toRegex(), ""),
                 titleElement.attr("href"),
-                this@FajerShow.name,
                 tvType,
-                posterUrl,
-                quality = getQualityFromString(quality)
-            )
+            ) {
+                this.posterUrl = posterUrl
+                this.quality = getQualityFromString(quality)
+            }
         } else {
             val posterElement = select("img")
             val url = select("div.thumbnail > a").attr("href")
-            return MovieSearchResponse(
+            return newMovieSearchResponse(
                 posterElement.attr("alt"),
                 url,
-                this@FajerShow.name,
                 if (url.contains("/movies/")) TvType.Movie else TvType.TvSeries,
-                posterElement.attr("src"),
-                quality = getQualityFromString(quality)
-            )
+            ) {
+                this.posterUrl = posterElement.attr("src")
+                this.quality = getQualityFromString(quality)
+            }
         }
     }
 
@@ -142,13 +142,12 @@ class FajerShow : MainAPI() {
             }
         } else {
             val episodes = doc.select(".se-c ul > li").map {
-                Episode(
-                    it.select("div.episodiotitle > a").attr("href"),
-                    it.select("div.episodiotitle > a").text(),
-                    it.select("div.numerando").text().split(" - ")[0].toInt(),
-                    it.select("div.numerando").text().split(" - ")[1].toInt(),
-                    it.select("div.imagen a img").attr("src")
-                )
+                newEpisode(it.select("div.episodiotitle > a").attr("href")) {
+                    this.name = it.select("div.episodiotitle > a").text()
+                    this.season = it.select("div.numerando").text().split(" - ")[0].toIntOrNull()
+                    this.episode = it.select("div.numerando").text().split(" - ")[1].toIntOrNull()
+                    this.posterUrl = it.select("div.imagen a img").attr("src")
+                }
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
@@ -175,7 +174,7 @@ class FajerShow : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        doc.select("li.vid_source_option").not("[data-nume=\"trailer\"]").apmap { source ->
+        doc.select("li.vid_source_option").not("[data-nume=\"trailer\"]").forEach { source ->
             app.post(
                 "$mainUrl/wp-admin/admin-ajax.php",
                 data = mapOf(

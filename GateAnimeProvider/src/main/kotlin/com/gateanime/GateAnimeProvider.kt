@@ -16,12 +16,14 @@ import com.lagradost.cloudstream3.MainAPI
 
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
-class GateAnime : MainAPI() {
+class GateAnimeProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://b.gateanime.cam"
     override var name = "GateAnime"
@@ -97,22 +99,20 @@ class GateAnime : MainAPI() {
         val backgroundImage = doc.select("img.TPostBg").first()?.attr("src")
         val seasonsElements = doc.select("div.Wdgt.AABox")
         if(seasonsElements.isEmpty()) {
-            episodes.add(Episode(
-                url,
-                "Watch",
+            episodes.add(newEpisode(url) {
+                name = "Watch"
                 posterUrl = backgroundImage
-            ))
+            })
         } else {
             seasonsElements.map { season ->
                 val seasonNumber = season.select("div.Title").attr("data-tab").toIntOrNull()
                 season.select("tr").forEach {
                     val titleTd = it.select("td.MvTbTtl a")
-                    episodes.add(Episode(
-                        titleTd.attr("href"),
-                        titleTd.text(),
-                        seasonNumber,
-                        it.select("span.Num").text().toIntOrNull()
-                    ))
+                    episodes.add(newEpisode(titleTd.attr("href")) {
+                        this.name = titleTd.text()
+                        this.season = seasonNumber
+                        this.episode = it.select("span.Num").text().toIntOrNull()
+                    })
                 }
             }
         }
@@ -140,7 +140,7 @@ class GateAnime : MainAPI() {
         val doc = app.get(data).document
         doc.select(
             "li:contains(Fembed), li:contains(خيارات 1), li:contains(Uptostream), li:contains(Dood), li:contains(Uqload), li:contains(Drive)"
-        ).apmap {
+        ).forEach {
                 val id = it.attr("data-tplayernv")
                 val iframeLink = doc.select("div#$id").html().replace(".*src=\"|\".*|#038;|amp;".toRegex(), "").replace("<noscript>.*".toRegex(),"")
                 var sourceUrl = app.get(iframeLink).document.select("iframe").attr("src")

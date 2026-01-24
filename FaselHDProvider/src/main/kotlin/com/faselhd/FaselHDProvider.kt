@@ -19,14 +19,16 @@ import com.lagradost.cloudstream3.MainAPI
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.nicehttp.requestCreator
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
 
-class FaselHD : MainAPI() {
+class FaselHDProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://web12412x.faselhdx.bid/main"
     private  val alternativeUrl = "https://www.faselhd.club"
@@ -47,17 +49,15 @@ class FaselHD : MainAPI() {
         val title = select("div.col-xl-2 a div img").attr("alt")
         val quality = select(".quality").first()?.text()?.replace("1080p |-".toRegex(), "")
         val type = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title.replace("الموسم الأول|برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي".toRegex(),""),
             url,
-            this@FaselHD.name,
             type,
-            posterUrl,
-            null,
-            null,
-            quality = getQualityFromString(quality),
-            posterHeaders = cfKiller.getCookieHeaders(alternativeUrl).toMap()
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.quality = getQualityFromString(quality)
+            this.posterHeaders = cfKiller.getCookieHeaders(alternativeUrl).toMap()
+        }
     }
     override val mainPage = mainPageOf(
             "$mainUrl/all-movies/page/" to "جميع الافلام",
@@ -139,31 +139,29 @@ class FaselHD : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            doc.select("div.epAll a").map {
+            doc.select("div.epAll a").forEach {
                 episodes.add(
-                    Episode(
-                        it.attr("href"),
-                        it.text(),
-                        doc.select("div.seasonDiv.active div.title").text().getIntFromText() ?: 1,
-                        it.text().getIntFromText(),
-                    )
+                    newEpisode(it.attr("href")) {
+                        this.name = it.text()
+                        this.season = doc.select("div.seasonDiv.active div.title").text().getIntFromText() ?: 1
+                        this.episode = it.text().getIntFromText()
+                    }
                 )
             }
             doc.select("div[id=\"seasonList\"] div[class=\"col-xl-2 col-lg-3 col-md-6\"] div.seasonDiv")
-                .not(".active").apmap { it ->
+                .not(".active").forEach { it ->
 					val id = it.attr("onclick").replace(".*\\/\\?p=|'".toRegex(), "")
                     var s = app.get("$mainUrl/?p="+id).document
                     if(s.select("title").text() == "Just a moment...") {
                         s = app.get("$alternativeUrl/?p="+id, interceptor = cfKiller).document
                     }
-                    s.select("div.epAll a").map {
+                    s.select("div.epAll a").forEach {
                         episodes.add(
-                            Episode(
-                                it.attr("href"),
-                                it.text(),
-                                s.select("div.seasonDiv.active div.title").text().getIntFromText(),
-                                it.text().getIntFromText(),
-                            )
+                            newEpisode(it.attr("href")) {
+                                this.name = it.text()
+                                this.season = s.select("div.seasonDiv.active div.title").text().getIntFromText()
+                                this.episode = it.text().getIntFromText()
+                            }
                         )
                     }
                 }
@@ -192,7 +190,7 @@ class FaselHD : MainAPI() {
         listOf(
             doc.select(".downloadLinks a").attr("href") to "download",
             doc.select("iframe[name=\"player_iframe\"]").attr("src") to "iframe"
-        ).apmap { (url, method) ->
+        ).forEach { (url, method) ->
             if(method == "download") {
                 val player = app.post(url, interceptor = cfKiller, referer = mainUrl, timeout = 120).document
                 callback.invoke(
@@ -202,7 +200,7 @@ class FaselHD : MainAPI() {
                         player.select("div.dl-link a").attr("href"),
                         this.mainUrl,
                         Qualities.Unknown.value,
-                        ExtractorLinkType.VIDEO
+                        type = ExtractorLinkType.VIDEO
                     )
                 )
             } else if(method == "iframe") {

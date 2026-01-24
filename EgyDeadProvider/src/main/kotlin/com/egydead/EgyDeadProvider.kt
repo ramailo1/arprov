@@ -15,15 +15,17 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-class EgyDead : MainAPI() {
+class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://tv6.egydead.live"
     override var name = "EgyDead"
@@ -85,13 +87,13 @@ class EgyDead : MainAPI() {
         val title = select("h1.BottomTitle").text().cleanTitle()
         val posterUrl = select("img").attr("src")
         val tvType = if (select("span.cat_name").text().contains("افلام")) TvType.Movie else TvType.TvSeries
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             select("a").attr("href"),
-            this@EgyDead.name,
             tvType,
-            posterUrl,
-            )
+        ) {
+            this.posterUrl = posterUrl
+        }
     }
 
     override val mainPage = mainPageOf(
@@ -173,26 +175,24 @@ class EgyDead : MainAPI() {
             val seasonList = doc.select("div.seasons-list ul > li > a").reversed()
             val episodes = arrayListOf<Episode>()
             if(seasonList.isNotEmpty()) {
-                seasonList.apmapIndexed { index, season ->
+                seasonList.forEachIndexed { index, season ->
                     app.get(
                         season.attr("href"),
-                    ).document.select("div.EpsList > li > a").map {
-                        episodes.add(Episode(
-                            it.attr("href"),
-                            it.attr("title"),
-                            index+1,
-                            it.text().getIntFromText()
-                        ))
+                    ).document.select("div.EpsList > li > a").forEach {
+                        episodes.add(newEpisode(it.attr("href")) {
+                            this.name = it.attr("title")
+                            this.season = index+1
+                            this.episode = it.text().getIntFromText()
+                        })
                     }
                 }
             } else {
-                doc.select("div.EpsList > li > a").map {
-                    episodes.add(Episode(
-                        it.attr("href"),
-                        it.attr("title"),
-                        0,
-                        it.text().getIntFromText()
-                    ))
+                doc.select("div.EpsList > li > a").forEach {
+                    episodes.add(newEpisode(it.attr("href")) {
+                        this.name = it.attr("title")
+                        this.season = 0
+                        this.episode = it.text().getIntFromText()
+                    })
                 }
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
@@ -220,12 +220,12 @@ class EgyDead : MainAPI() {
         Thread.sleep((2000..4000).random().toLong())
         
         val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
-        doc.select(".donwload-servers-list > li").apmap { element ->
+        doc.select(".donwload-servers-list > li").forEach { element ->
             val url = element.select("a").attr("href")
             println(url)
             loadExtractor(url, data, subtitleCallback, callback)
         }
-        doc.select("ul.serversList > li").apmap { li ->
+        doc.select("ul.serversList > li").forEach { li ->
             val iframeUrl = li.attr("data-link")
             loadExtractor(iframeUrl, data, subtitleCallback, callback)
         }

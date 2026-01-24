@@ -16,12 +16,13 @@ import com.lagradost.cloudstream3.MainAPI
 
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 
-class CimaNow : MainAPI() {
+class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
     override var name = "CimaNow"
@@ -34,8 +35,7 @@ class CimaNow : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = this.attr("href")
-        val url = this.attr("href")
+        val url = this.attr("href") ?: ""
         val posterUrl = select("img").attr("data-src").ifEmpty { select("img").attr("src") }
         var title = select("img").attr("alt")
         if (title.isEmpty()) title = this.text()
@@ -46,22 +46,21 @@ class CimaNow : MainAPI() {
         val dubStatus = if(dubEl) select("li[aria-label=\"ribbon\"]:nth-child(2)").text().contains("مدبلج")
         else select("li[aria-label=\"ribbon\"]:nth-child(1)").text().contains("مدبلج")
         if(dubStatus) title = "$title (مدبلج)"
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             "$title ${select("li[aria-label=\"ribbon\"]:contains(الموسم)").text()}",
             url,
-            this@CimaNow.name,
             tvType,
-            posterUrl,
-            year,
-            null,
-            quality = getQualityFromString(quality)
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year
+            this.quality = getQualityFromString(quality)
+        }
     }
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
 
         val doc = app.get("$mainUrl/home", headers = mapOf("user-agent" to "MONKE")).document
-        val pages = doc.select("section").not("section:contains(أختر وجهتك المفضلة)").not("section:contains(تم اضافته حديثاً)").apmap {
+        val pages = doc.select("section").not("section:contains(أختر وجهتك المفضلة)").not("section:contains(تم اضافته حديثاً)").map {
             val name = it.select("span").html().replace("<em>.*| <i c.*".toRegex(), "")
             val list = it.select(".item a").mapNotNull {
                 if(it.attr("href").contains("$mainUrl/category/|$mainUrl/الاكثر-مشاهدة/".toRegex())) return@mapNotNull null
@@ -86,7 +85,7 @@ class CimaNow : MainAPI() {
             val max = paginationElement.select("li").not("li.active").last()?.text()?.toIntOrNull()
             if (max != null) {
                 if(max > 5) return result.distinct().sortedBy { it.name }
-                (2..max!!).toList().apmap {
+                (2..max!!).toList().forEach {
                     app.get("$mainUrl/page/$it/?s=$query\"").document.select(".item a").map { element ->
                         val postUrl = element.attr("href")
                         if(element.select("li[aria-label=\"episode\"]").isNotEmpty()) return@map
@@ -136,13 +135,12 @@ class CimaNow : MainAPI() {
             }
         } else {
             val episodes = doc.select("ul#eps li").map { episode ->
-                Episode(
-                    episode.select("a").attr("href")+"/watching",
-                    episode.select("a img:nth-child(2)").attr("alt"),
-                    doc.select("span[aria-label=\"season-title\"]").html().replace("<p>.*|\n".toRegex(), "").getIntFromText(),
-                    episode.select("a em").text().toIntOrNull(),
-                    episode.select("a img:nth-child(2)").attr("src")
-                )
+                newEpisode(episode.select("a").attr("href")+"/watching") {
+                    this.name = episode.select("a img:nth-child(2)").attr("alt")
+                    this.season = doc.select("span[aria-label=\"season-title\"]").html().replace("<p>.*|\n".toRegex(), "").getIntFromText()
+                    this.episode = episode.select("a em").text().toIntOrNull()
+                    this.posterUrl = episode.select("a img:nth-child(2)").attr("src")
+                }
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
                 this.posterUrl = posterUrl

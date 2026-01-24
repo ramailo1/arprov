@@ -18,9 +18,11 @@ import com.lagradost.cloudstream3.MainAPI
 import android.annotation.TargetApi
 import android.os.Build
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.nicehttp.Requests
 import com.lagradost.nicehttp.Session
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -49,7 +51,7 @@ fun String.runJS(variableName: String): String {
     return result
 }
 
-class EgyBest : MainAPI() {
+class EgyBestProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://egibest.net"
     override var name = "EgyBest"
@@ -64,7 +66,6 @@ class EgyBest : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = this.attr("href") ?: return null
-        val url = this.attr("href") ?: return null
         val posterUrl = select("img").attr("src") ?: select("img").attr("data-src")
         var title = select("h3").text()
         if (title.isEmpty()) title = this.attr("title")
@@ -74,16 +75,15 @@ class EgyBest : MainAPI() {
         title = if (year !== null) title else title.split(" (")[0].trim()
         val quality = select("span.ribbon span").text().replace("-", "")
         // If you need to differentiate use the url.
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             mainUrl + url,
-            this@EgyBest.name,
             tvType,
-            posterUrl,
-            year,
-            null,
-            quality = getQualityFromString(quality)
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year
+            this.quality = getQualityFromString(quality)
+        }
     }
 
     override val mainPage = mainPageOf(
@@ -119,8 +119,7 @@ class EgyBest : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val result = arrayListOf<SearchResponse>()
-        listOf("$mainUrl/explore/?q=$query").apmap { url ->
-        listOf("$mainUrl/explore/?q=$query").apmap { url ->
+        listOf("$mainUrl/explore/?q=$query").forEach { url ->
             val d = app.get(url).document
             d.select(".postBlock").mapNotNull {
                 it.toSearchResponse()?.let { it1 -> result.add(it1) }
@@ -180,32 +179,30 @@ class EgyBest : MainAPI() {
             val episodes = ArrayList<Episode>()
             doc.select("#mainLoad > div:nth-child(2) > div.h_scroll > div a").map {
                 it.attr("href")
-            }.apmap {
+            }.forEach {
                 val d = app.get(it).document
                 val season = Regex("season-(.....)").find(it)?.groupValues?.getOrNull(1)?.getIntFromText()
                 if(d.select("tr.published").isNotEmpty()) {
                     d.select("tr.published").map { element ->
                         val ep = Regex("ep-(.....)").find(element.select(".ep_title a").attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
                         episodes.add(
-                            Episode(
-                                mainUrl + element.select(".ep_title a").attr("href"),
-                                name = element.select("td.ep_title").html().replace(".*</span>|</a>".toRegex(), ""),
-                                season,
-                                ep,
-                                rating = element.select("td.tam:not(.date, .ep_len)").text().getIntFromText()
-                            )
+                            newEpisode(mainUrl + element.select(".ep_title a").attr("href")) {
+                                this.name = element.select("td.ep_title").html().replace(".*</span>|</a>".toRegex(), "")
+                                this.season = season
+                                this.episode = ep
+                                // this.rating = ...
+                            }
                         )
                     }
                 } else {
                     d.select("#mainLoad > div:nth-child(3) > div.movies_small a").map { eit ->
                         val ep = Regex("ep-(.....)").find(eit.attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
                         episodes.add(
-                            Episode(
-                                mainUrl + eit.attr("href"),
-                                eit.select("span.title").text(),
-                                season,
-                                ep,
-                            )
+                            newEpisode(mainUrl + eit.attr("href")) {
+                                this.name = eit.select("span.title").text()
+                                this.season = season
+                                this.episode = ep
+                            }
                         )
                     }
                 }

@@ -13,14 +13,15 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.MainAPI
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 
-class Fushaar : MainAPI() {
+class FushaarProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://www.fushaar.com"
     override var name = "Fushaar"
@@ -42,16 +43,15 @@ class Fushaar : MainAPI() {
         val titleTwo = select("div.info h4").text()
         val title = if(titleOne == titleTwo && titleOne.isNotEmpty()) titleOne else "$titleOne\n$titleTwo"
 
-        return MovieSearchResponse(
+        return newMovieSearchResponse(
             title,
             url.select("a").attr("href"),
-            this@Fushaar.name,
             TvType.Movie,
-            posterUrl,
-            year,
-            null,
-            quality = getQualityFromString(quality),
-        )
+        ) {
+            this.posterUrl = posterUrl
+            this.year = year
+            this.quality = getQualityFromString(quality)
+        }
     }
 
     override val mainPage = mainPageOf(
