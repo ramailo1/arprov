@@ -137,13 +137,14 @@ class Cima4uActorProvider : MainAPI() {
             
             callback.invoke(
                 newExtractorLink(
-                    source = serverName.ifEmpty { "Cima4uActor" },
-                    name = serverName.ifEmpty { "Cima4uActor" },
-                    url = linkUrl,
-                    referer = mainUrl,
-                    quality = getQualityFromString(quality),
-                    isM3u8 = linkUrl.contains(".m3u8")
-                )
+                    serverName.ifEmpty { "Cima4uActor" },
+                    serverName.ifEmpty { "Cima4uActor" },
+                    linkUrl,
+                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = getQualityFromString(quality)
+                    this.referer = mainUrl
+                }
             )
         }
         
