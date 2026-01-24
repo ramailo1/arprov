@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+
 import com.lagradost.nicehttp.Requests
 
 class AnimeiatProvider : MainAPI() {

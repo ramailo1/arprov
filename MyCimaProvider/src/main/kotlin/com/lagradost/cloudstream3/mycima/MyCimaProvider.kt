@@ -316,10 +316,11 @@ class MyCimaProvider : MainAPI() {
                             this.name,
                             this.name,
                             linkElement.attr("href"),
-                            this.mainUrl,
-                            linkElement.select("resolution").text().getIntFromText() ?: 0,
                             ExtractorLinkType.VIDEO
-                        )
+                        ) {
+                            referer = this@MyCimaProvider.mainUrl
+                            quality = linkElement.select("resolution").text().getIntFromText() ?: 0
+                        }
                     )
                 }
             }

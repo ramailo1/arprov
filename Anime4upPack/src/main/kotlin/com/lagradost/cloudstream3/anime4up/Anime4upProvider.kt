@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+
 import com.fasterxml.jackson.annotation.JsonProperty
 import okio.ByteString.Companion.decodeBase64
 import org.jsoup.nodes.Document

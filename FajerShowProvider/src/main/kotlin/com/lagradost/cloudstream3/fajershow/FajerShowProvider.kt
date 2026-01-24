@@ -178,10 +178,11 @@ class FajerShowProvider : MainAPI() {
                             this.name,
                             "AlfajerTV Palestine",
                             url.query.replace("&.*|source=".toRegex(), ""),
-                            data,
-                            Qualities.Unknown.value,
                             if (url.query.replace("&.*|source=".toRegex(), "").contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        )
+                        ) {
+                             referer = data
+                             quality = Qualities.Unknown.value
+                        }
                     )
                     println("Palestine\n" + url.query.replace("&.*|source=".toRegex(), "") + "\n")
                 }
@@ -194,10 +195,11 @@ class FajerShowProvider : MainAPI() {
                                 this.name,
                                 "FajerLive",
                                 it.file ?: "",
-                                data,
-                                it.label?.getIntFromText() ?: Qualities.Unknown.value,
                                 if (it.type != "mp4") ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            )
+                            ) {
+                                referer = data
+                                quality = it.label?.getIntFromText() ?: Qualities.Unknown.value
+                            }
                         )
                     }
                     println("FajerLive\n$response\n")
