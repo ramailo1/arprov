@@ -9,8 +9,8 @@ on:
   push:
     branches:
       # choose your default branch
-      - master
-      # - main
+      - main
+      # - master
     paths-ignore:
       - '*.md'
       - '*.html'
