@@ -5,11 +5,13 @@
   "version": "2.1.0",
   "language": "ar",
   "repository": {
-    "url": "https://codeberg.org/dhomred/cloudstream-extensions-arabic",
+    "url": "https://github.com/ramailo1/arprov",
     "type": "git"
   },
-  "pluginLists": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/raw/branch/master/build/plugins.json",
-  "explanation": "Updating repository URL to point to Codeberg instead of GitHub",
+  "pluginLists": [
+    "https://raw.githubusercontent.com/ramailo1/arprov/builds/plugins.json"
+  ],
+  "explanation": "Official Arabic repository for CloudStream",
   "supportedSites": [
     "Akwam",
     "Anime4up",
@@ -57,14 +59,14 @@
     "تحديثات دورية"
   ],
   "installation": {
-    "primary": "https://raw.githubusercontent.com/dhomred/cloudstream-extensions-arabic/master/repo.json",
-    "fallback": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/src/branch/master/repo.json",
-    "manual": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/releases",
-    "direct_download": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/archive/master.zip"
+    "primary": "https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json",
+    "fallback": "https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json",
+    "manual": "https://github.com/ramailo1/arprov/releases",
+    "direct_download": "https://github.com/ramailo1/arprov/archive/main.zip"
   },
   "support": {
-    "issues": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues",
-    "discussions": "https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues"
+    "issues": "https://github.com/ramailo1/arprov/issues",
+    "discussions": "https://github.com/ramailo1/arprov/discussions"
   },
   "license": "MIT",
   "lastUpdated": "2026-01-24",
