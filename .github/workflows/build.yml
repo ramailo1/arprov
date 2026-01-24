@@ -11,11 +11,6 @@ on:
       # choose your default branch
       - main
       # - master
-    paths-ignore:
-      - '*.md'
-      - '*.html'
-      - '*.js'
-      - '*.css'
 
 jobs:
   build:
