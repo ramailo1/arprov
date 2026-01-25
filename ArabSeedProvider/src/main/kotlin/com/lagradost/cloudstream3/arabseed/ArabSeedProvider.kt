@@ -6,8 +6,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import android.util.Base64
-import com.lagradost.cloudstream3.utils.M3u8Helper
+import java.util.Base64
 
 class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
@@ -214,7 +213,7 @@ class ArabSeedProvider : MainAPI() {
             val idMatch = Regex("id=([^&]+)").find(link)
             if (idMatch != null) {
                 try {
-                     val decoded = String(Base64.decode(idMatch.groupValues[1], Base64.DEFAULT))
+                     val decoded = String(Base64.getDecoder().decode(idMatch.groupValues[1]))
                      if (decoded.contains("savefiles.com")) {
                          // Direct SaveFiles handling
                          val doc = app.get(decoded).document
