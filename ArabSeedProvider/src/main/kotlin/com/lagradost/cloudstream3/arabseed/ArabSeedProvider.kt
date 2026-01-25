@@ -103,11 +103,16 @@ class ArabSeedProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, timeout = 120).document
         val title = doc.selectFirst(".post__name")?.text()?.cleanTitle() ?: doc.select("h1").text()
-        val isMovie = url.contains("/movies/") || title.contains("فيلم")
+        
+        // Robust detection
+        val episodesElements = doc.select(".episodes__list a, .seasons__list a")
+        val isMovie = episodesElements.isEmpty() && (url.contains("/movies/") || title.contains("فيلم"))
 
         val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src") 
-            ?: doc.selectFirst(".images__loader img")?.attr("src")
+            ?: doc.selectFirst(".poster img")?.attr("data-src")
+            ?: doc.selectFirst(".single__poster img")?.attr("data-src")
             ?: doc.selectFirst("img[data-src]")?.attr("data-src")
+            ?: doc.selectFirst(".images__loader img")?.attr("src")
 
         val synopsis = doc.select(".single__contents").text()
             .replace("قصة العرض :", "")
@@ -144,7 +149,7 @@ class ArabSeedProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val episodes = doc.select("a[href*='الحلقة']").mapNotNull { it ->
+            val episodes = episodesElements.mapNotNull { it ->
                 val episodeName = it.text()
                 val episodeNumber = it.selectFirst("b")?.text()?.toIntOrNull() 
                     ?: episodeName.getIntFromText()
@@ -152,8 +157,6 @@ class ArabSeedProvider : MainAPI() {
                 newEpisode(it.attr("href")) {
                     this.name = episodeName
                     this.episode = episodeNumber
-                    // Season logic is hard for this site as it usually lists all episodes
-                    // defaulting to 1 or 0
                     this.season = 1 
                 }
             }.distinctBy { it.data }.sortedBy { it.episode }
@@ -182,6 +185,7 @@ class ArabSeedProvider : MainAPI() {
     }
 
 
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -190,45 +194,35 @@ class ArabSeedProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         val watchUrl = doc.select(".watch__btn").attr("href")
-        if (watchUrl.isEmpty()) return false
-        
-        val watchDoc = app.get(watchUrl, headers = mapOf("Referer" to data)).document
-
-        val indexOperators = arrayListOf<Int>()
-        val list: List<Element> = watchDoc.select("ul > li[data-link], ul > h3").mapIndexed { index, element ->
-            if(element.`is`("h3")) {
-                indexOperators.add(index)
-                element
-            } else element
-        }
-        var watchLinks: List<Pair<Int, List<Element>>>;
-        if(indexOperators.isNotEmpty()) {
-            watchLinks = indexOperators.mapIndexed { index, it ->
-                var endIndex = list.size
-                if (index != indexOperators.size - 1) endIndex = (indexOperators[index + 1]) - 1
-                list[it].text().getIntFromText() as Int to list.subList(it + 1, endIndex) as List<Element>
-            }
+        // If watchUrl is empty or same as current, try to parse current page for servers
+        // Some pages might be the watch page itself
+        val watchDoc = if (watchUrl.isNotEmpty() && watchUrl != data) {
+            app.get(watchUrl, headers = mapOf("Referer" to data)).document
         } else {
-            watchLinks = arrayListOf(0 to list)
+            doc
         }
-        for ((quality, links) in watchLinks) {
-            for (it in links) {
-                val iframeUrl = it.attr("data-link")
-                println(iframeUrl)
-                if(it.text().contains("عرب سيد")) {
-                    val sourceElement = app.get(iframeUrl).document.select("source")
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "ArabSeed",
-                            sourceElement.attr("src"),
-                            if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.quality = if(quality != 0) quality else it.text().replace(".*- ".toRegex(), "").replace("\\D".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value
-                            this.referer = data
-                        }
-                    )
-                } else loadExtractor(iframeUrl, data, subtitleCallback, callback)
+
+        val servers = watchDoc.select(".servers__list li")
+        
+        servers.map { 
+            val link = it.attr("data-link")
+            val name = it.text()
+            // Quality might be in data-qu or just separate links
+            if (name.contains("عرب سيد")) {
+                 val sourceElement = app.get(link).document.select("source")
+                 callback.invoke(
+                     newExtractorLink(
+                         this.name,
+                         "ArabSeed",
+                         sourceElement.attr("src"),
+                         if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                     ) {
+                         this.quality = Qualities.Unknown.value
+                         this.referer = data
+                     }
+                 )
+            } else {
+                loadExtractor(link, data, subtitleCallback, callback)
             }
         }
         return true
