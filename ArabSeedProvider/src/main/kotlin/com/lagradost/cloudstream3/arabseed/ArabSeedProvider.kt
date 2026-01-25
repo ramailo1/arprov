@@ -211,16 +211,31 @@ class ArabSeedProvider : MainAPI() {
             val link = it.attr("data-link")
             val name = it.text()
             
-            val idMatch = Regex("id=([^&]+)").find(link)
-            if (idMatch != null) {
-                try {
-                     val decoded = String(Base64.getDecoder().decode(idMatch.groupValues[1]))
-                     if (decoded.contains("savefiles.com")) {
-                         // Direct SaveFiles handling
-                         val doc = app.get(decoded).document
+            // Extract the actual URL - format can be /play.php?url=BASE64 or /play/?id=BASE64 or direct
+            val finalUrl = when {
+                link.contains("url=") -> {
+                    val encoded = link.substringAfter("url=")
+                    try {
+                        String(Base64.getDecoder().decode(encoded))
+                    } catch (e: Exception) { link }
+                }
+                link.contains("id=") -> {
+                    val encoded = link.substringAfter("id=")
+                    try {
+                        String(Base64.getDecoder().decode(encoded))
+                    } catch (e: Exception) { link }
+                }
+                else -> link
+            }
+
+            // If parsed URL is valid, load it
+            if (finalUrl.isNotEmpty()) {
+                 if (finalUrl.contains("savefiles.com")) {
+                     // Direct SaveFiles handling logic
+                     val sourcesFound = mutableListOf<Boolean>()
+                     try {
+                         val doc = app.get(finalUrl).document
                          val source = doc.select("source").attr("src")
-                         val sourcesFound = mutableListOf<Boolean>()
-                         
                          if (source.isNotEmpty()) {
                              callback.invoke(
                                  newExtractorLink(
@@ -229,74 +244,62 @@ class ArabSeedProvider : MainAPI() {
                                      source,
                                      ExtractorLinkType.VIDEO
                                  ) {
-                                     this.referer = decoded
+                                     this.referer = finalUrl
                                  }
                              )
                              sourcesFound.add(true)
                          }
                          
-                         // Fallback/Addition: Try Moshahda-style download links
-                         // https://savefiles.com/e/CODE -> https://savefiles.com/CODE.html??download_x
-                         val codeMatch = Regex("/e/(\\w+)").find(decoded)
+                         // Fallback for SaveFiles
+                         val codeMatch = Regex("/e/(\\w+)").find(finalUrl)
                          if (codeMatch != null) {
                              val code = codeMatch.groupValues[1]
-                             val baseUrl = decoded.substringBefore("/e/")
-                             
+                             val baseUrl = finalUrl.substringBefore("/e/")
                              mapOf(
-                                 "download_o" to "1080p",
-                                 "download_x" to "720p",
-                                 "download_h" to "480p",
-                                 "download_n" to "360p"
+                                 "download_o" to "1080p", "download_x" to "720p",
+                                 "download_h" to "480p", "download_n" to "360p"
                              ).forEach { (param, quality) ->
-                                  val fallbackLink = "$baseUrl/$code.html?$param"
-                                  // We verify blindly or try to fetch head? 
-                                  // Cloudstream is async, so we can just add them.
                                   callback.invoke(
                                       newExtractorLink(
                                           this.name,
                                           "$name (SaveFiles $quality)",
-                                          fallbackLink,
+                                          "$baseUrl/$code.html?$param",
                                           ExtractorLinkType.VIDEO
-                                      ) {
-                                          this.referer = decoded
-                                      }
+                                      ) { this.referer = finalUrl }
                                   )
                                   sourcesFound.add(true)
                              }
                          }
-                         
-                         if (sourcesFound.isEmpty()) {
-                             loadExtractor(decoded, data, subtitleCallback, callback)
-                         }
+                     } catch(e: Exception) {}
+                     
+                     if (sourcesFound.isEmpty()) {
+                         loadExtractor(finalUrl, data, subtitleCallback, callback)
+                     }
+                 } else if (finalUrl.startsWith("/")) {
+                     // Internal link presumably
+                     val doc = app.get(mainUrl + finalUrl, headers = mapOf("Referer" to watchUrl)).document
+                     val sourceElement = doc.select("source")
+                     if (sourceElement.hasAttr("src")) {
+                         callback.invoke(
+                             newExtractorLink(
+                                 this.name,
+                                 "$name (Internal)",
+                                 sourceElement.attr("src"),
+                                 if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                             ) {
+                                 this.quality = Qualities.Unknown.value
+                                 this.referer = data
+                             }
+                         )
                      } else {
-                         loadExtractor(decoded, data, subtitleCallback, callback)
-                     }
-                } catch (e: Exception) {
-                     loadExtractor(link, data, subtitleCallback, callback)
-                }
-            } else if (link.contains("asd.homes") || link.startsWith("/")) {
-                 val doc = app.get(link, headers = mapOf("Referer" to watchUrl)).document
-                 val sourceElement = doc.select("source")
-                 if (sourceElement.hasAttr("src")) {
-                     callback.invoke(
-                         newExtractorLink(
-                             this.name,
-                             "$name (Internal)",
-                             sourceElement.attr("src"),
-                             if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                         ) {
-                             this.quality = Qualities.Unknown.value
-                             this.referer = data
+                         val iframeSrc = doc.select("iframe").attr("src")
+                         if (iframeSrc.isNotEmpty()) {
+                             loadExtractor(iframeSrc, data, subtitleCallback, callback)
                          }
-                     )
-                 } else {
-                     val iframeSrc = doc.select("iframe").attr("src")
-                     if (iframeSrc.isNotEmpty()) {
-                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                      }
+                 } else {
+                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                  }
-            } else {
-                loadExtractor(link, data, subtitleCallback, callback)
             }
         }
 
