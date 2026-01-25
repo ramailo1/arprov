@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import org.jsoup.nodes.Element
 import java.util.Base64
 
 class ArabSeedProvider : MainAPI() {
@@ -272,20 +273,7 @@ class ArabSeedProvider : MainAPI() {
                 val downloadLinks = downloadDoc.select(".downloads__links__list li a")
                 downloadLinks.map { 
                     val link = it.attr("href")
-                    val name = it.text()
-                    loadExtractor(link, data, subtitleCallback) { link ->
-                        callback.invoke(
-                            newExtractorLink(
-                                link.name,
-                                "$name (Download)",
-                                link.url,
-                                link.type,
-                                link.quality
-                            ) {
-                                this.referer = link.referer
-                            }
-                        )
-                    }
+                    loadExtractor(link, data, subtitleCallback, callback)
                 }
             } catch (e: Exception) {
                // Ignore download errors
