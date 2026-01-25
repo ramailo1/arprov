@@ -219,6 +219,8 @@ class ArabSeedProvider : MainAPI() {
                          // Direct SaveFiles handling
                          val doc = app.get(decoded).document
                          val source = doc.select("source").attr("src")
+                         val sourcesFound = mutableListOf<Boolean>()
+                         
                          if (source.isNotEmpty()) {
                              callback.invoke(
                                  newExtractorLink(
@@ -230,7 +232,40 @@ class ArabSeedProvider : MainAPI() {
                                      this.referer = decoded
                                  }
                              )
-                         } else {
+                             sourcesFound.add(true)
+                         }
+                         
+                         // Fallback/Addition: Try Moshahda-style download links
+                         // https://savefiles.com/e/CODE -> https://savefiles.com/CODE.html??download_x
+                         val codeMatch = Regex("/e/(\\w+)").find(decoded)
+                         if (codeMatch != null) {
+                             val code = codeMatch.groupValues[1]
+                             val baseUrl = decoded.substringBefore("/e/")
+                             
+                             mapOf(
+                                 "download_o" to "1080p",
+                                 "download_x" to "720p",
+                                 "download_h" to "480p",
+                                 "download_n" to "360p"
+                             ).forEach { (param, quality) ->
+                                  val fallbackLink = "$baseUrl/$code.html?$param"
+                                  // We verify blindly or try to fetch head? 
+                                  // Cloudstream is async, so we can just add them.
+                                  callback.invoke(
+                                      newExtractorLink(
+                                          this.name,
+                                          "$name (SaveFiles $quality)",
+                                          fallbackLink,
+                                          ExtractorLinkType.VIDEO
+                                      ) {
+                                          this.referer = decoded
+                                      }
+                                  )
+                                  sourcesFound.add(true)
+                             }
+                         }
+                         
+                         if (sourcesFound.isEmpty()) {
                              loadExtractor(decoded, data, subtitleCallback, callback)
                          }
                      } else {
