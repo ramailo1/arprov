@@ -39,7 +39,9 @@ open class JWPlayer : ExtractorApi() {
                 }.firstOrNull()
 
                 data?.let { sourcesData ->
-                    tryParseJson<List<ResponseSource>>(sourcesData)?.forEach { source ->
+                val list = tryParseJson<List<ResponseSource>>(sourcesData)
+                if (list != null) {
+                    for (source in list) {
                         if (source.file.isNotEmpty()) {
                             val quality = getQualityFromName(
                                 Regex("(\\d{3,4}p)").find(source.file)?.groupValues?.get(1)
@@ -51,6 +53,7 @@ open class JWPlayer : ExtractorApi() {
                             )
                         }
                     }
+                }
                 }
             }
         } catch (e: Exception) {

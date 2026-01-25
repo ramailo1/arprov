@@ -45,13 +45,15 @@ open class LinkBox : ExtractorApi() {
         val sources = mutableListOf<ExtractorLink>()
         val apiUrl = "https://" + URI(url).host + "/api/file/detail?itemId=" + url.substringAfter("/file/")
         val json = app.get(apiUrl).parsed<LinkBox>()
-        json.data?.itemInfo?.resolutionList?.forEach {
-            sources.add(newExtractorLink(
-                    "LinkBox " + bytesToHumanReadableSize(it.size ?: 0.0),
-                    this.name,
-                    it.url ?: return@forEach,
-                    ExtractorLinkType.VIDEO
-            ))
+        if (json.data?.itemInfo?.resolutionList != null) {
+            for (it in json.data?.itemInfo?.resolutionList!!) {
+                sources.add(newExtractorLink(
+                        "LinkBox " + bytesToHumanReadableSize(it.size ?: 0.0),
+                        this.name,
+                        it.url ?: continue,
+                        ExtractorLinkType.VIDEO
+                ))
+            }
         }
         println(sources)
         return sources

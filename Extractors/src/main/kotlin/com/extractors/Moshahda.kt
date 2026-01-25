@@ -33,7 +33,7 @@ open class Moshahda : ExtractorApi() {
             if (code != null) {
                 val baseLink = "$mainUrl/$code.html?"
                 
-                downloadLinks.forEach { (key, quality) ->
+                for ((key, quality) in downloadLinks) {
                     val downloadUrl = baseLink + key
                     sources.add(
                         newExtractorLink(name, name, downloadUrl, ExtractorLinkType.VIDEO)

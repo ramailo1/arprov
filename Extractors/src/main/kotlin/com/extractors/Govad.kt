@@ -33,15 +33,18 @@ open class Govad : ExtractorApi() {
             }.firstOrNull()
 
             data?.let { jsonData ->
-                tryParseJson<List<ResponseSource>>("[$jsonData]")?.forEach {
-                    sources.add(
-                        newExtractorLink(
-                            name,
-                            name,
-                            it.file,
-                            if(it.file.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                val list = tryParseJson<List<ResponseSource>>("[$jsonData]")
+                if (list != null) {
+                    for (it in list) {
+                        sources.add(
+                            newExtractorLink(
+                                name,
+                                name,
+                                it.file,
+                                if(it.file.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            )
                         )
-                    )
+                    }
                 }
             }
         }

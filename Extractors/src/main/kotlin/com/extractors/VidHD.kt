@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.nicehttp.Requests
+import com.lagradost.cloudstream3.utils.getQualityFromName
 
 open class VidHD : ExtractorApi() {
     private val app = Requests()
@@ -30,14 +31,19 @@ open class VidHD : ExtractorApi() {
                   e to b[0].getIntFromText(),
                   d to b[2].getIntFromText(),
               )
-              links.forEach { (watchlink, quality) ->
-                  if(watchlink.isNotBlank()){
-                      sources.add(
-                            newExtractorLink(name, name, watchlink, if (watchlink.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO)
-                            )
+                for ((watchlink, quality) in links) {
+                    sources.add(
+                        newExtractorLink(
+                            name,
+                            name,
+                            watchlink,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = quality ?: Qualities.Unknown.value
                         }
-                     }     
-                  }
+                    )
+                }
+            }
           } catch (e: Exception) {
           }
          return sources

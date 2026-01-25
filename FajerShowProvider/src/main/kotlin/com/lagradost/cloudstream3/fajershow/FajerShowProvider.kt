@@ -194,7 +194,7 @@ class FajerShowProvider : MainAPI() {
                 else if (it.contains("fajer.live")) {
                     val id = it.split("/v/").last().split('/')[0];
                     val response = parseJson<FajerLive>(app.post("https://$hostname/api/source/$id", data = mapOf("r" to "", "d" to hostname)).text)
-                    response.data.forEach {
+                    for (it in response.data) {
                         callback.invoke(
                             newExtractorLink(
                                 this.name,

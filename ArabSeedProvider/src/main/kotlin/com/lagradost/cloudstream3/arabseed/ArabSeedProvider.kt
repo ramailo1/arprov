@@ -169,8 +169,8 @@ class ArabSeedProvider : MainAPI() {
         } else {
             watchLinks = arrayListOf(0 to list)
         }
-        watchLinks.forEach { (quality, links) ->
-            links.forEach {
+        for ((quality, links) in watchLinks) {
+            for (it in links) {
                 val iframeUrl = it.attr("data-link")
                 println(iframeUrl)
                 if(it.text().contains("عرب سيد")) {
