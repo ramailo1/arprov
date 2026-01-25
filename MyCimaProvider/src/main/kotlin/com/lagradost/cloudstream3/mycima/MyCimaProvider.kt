@@ -16,7 +16,8 @@ class MyCimaProvider : MainAPI() {
     }
 
     override var lang = "ar"
-    override var mainUrl = "https://we-cima.com/"
+    override var mainUrl = "https://mycima.rip"
+    private val alternativeUrl = "https://wecima.click"
     override var name = "MyCima"
     override val usesWebView = false
     override val hasMainPage = true
@@ -32,7 +33,7 @@ class MyCimaProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = select("div.Thumb--GridItem a")
-        val posterUrl = select("span.BG--GridItem")?.attr("data-lazy-style")
+        val posterUrl = select("span.BG--GridItem").let { it.attr("data-lazy-style").ifEmpty { it.attr("style") } }
             ?.getImageURL()
         val year = select("div.GridItem span.year")?.text()
         val title = select("div.Thumb--GridItem strong").text()
@@ -50,11 +51,11 @@ class MyCimaProvider : MainAPI() {
         }
     }
     override val mainPage = mainPageOf(
+            "$mainUrl/movies/page/" to "Movies",
+            "$mainUrl/episodes/page/" to "Latest Episodes",
+            "$mainUrl/seriestv/page/" to "Series",
             "$mainUrl/movies/top/page/" to "Top Movies",
-            "$mainUrl/movies/page/" to "New Movies",
-            "$mainUrl/movies/recent/page/" to "Recently Added Movies",
             "$mainUrl/seriestv/top/page/" to "Top Series",
-            "$mainUrl/seriestv/new/page/" to "New Series",
         )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {

@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 
 class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://cimalek.vip"
+    override var mainUrl = "https://cimalek.art"
     override var name = "CimaLeek"
     override val usesWebView = false
     override val hasMainPage = true
@@ -46,8 +46,8 @@ class CimaLeekProvider : MainAPI() {
     }
     
     private fun Element.toSearchResponse(): SearchResponse {
-        val title = select("h2.title, h3.title, .video-title").text().cleanTitle()
-        val posterUrl = select("img").attr("src")
+        val title = select(".data .title, h2.title, h3.title, .video-title").text().cleanTitle()
+        val posterUrl = select("img.film-poster-img, img").let { it.attr("data-src").ifEmpty { it.attr("src") } }
         val href = select("a").attr("href")
         val tvType = if (href.contains("/series/|/مسلسل/|/season/".toRegex())) TvType.TvSeries else TvType.Movie
         
@@ -78,7 +78,7 @@ class CimaLeekProvider : MainAPI() {
         Thread.sleep((1000..3000).random().toLong())
         
         val document = app.get(request.data + page, headers = requestHeaders).document
-        val home = document.select(".video-item, .movie-item, .post-item").mapNotNull {
+        val home = document.select(".item, .video-item, .movie-item, .post-item").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, home)
@@ -93,7 +93,7 @@ class CimaLeekProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
-        return doc.select(".video-item, .movie-item, .search-item").mapNotNull {
+        return doc.select(".item, .video-item, .movie-item, .search-item").mapNotNull {
             it.toSearchResponse()
         }
     }

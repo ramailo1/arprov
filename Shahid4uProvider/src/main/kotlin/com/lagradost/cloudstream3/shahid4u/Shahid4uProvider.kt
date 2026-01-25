@@ -13,7 +13,7 @@ import org.jsoup.nodes.Element
 
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://shahid4u.casa"
+    override var mainUrl = "https://shah4u.click"
     override var name = "Shahid4u"
     override val usesWebView = false
     override val hasMainPage = true
@@ -24,10 +24,18 @@ class Shahid4uProvider : MainAPI() {
 	private fun String.getDomainFromUrl(): String? {
         return Regex("""^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n\?\=]+)""").find(this)?.groupValues?.firstOrNull()
     }
+    
+    private fun String.getImageURL(): String? {
+        return this.replace(".*url\\(|\\);".toRegex(), "")
+    }
+
     private fun Element.toSearchResponse(): SearchResponse? {
         val urlElement = select("a.fullClick")
-        val posterUrl =
-            select("a.image img").let { it.attr("data-src").ifEmpty { it.attr("data-image") } }
+        val posterUrl = select("a.image img, img.lazy_load").let { 
+            it.attr("data-src").ifEmpty { it.attr("data-image") } 
+        }.ifEmpty { 
+            select("a.image, .postImgBg").attr("style").getImageURL() 
+        }
         val quality = select("span.quality").text().replace("1080p |-".toRegex(), "")
         val type =
             if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries

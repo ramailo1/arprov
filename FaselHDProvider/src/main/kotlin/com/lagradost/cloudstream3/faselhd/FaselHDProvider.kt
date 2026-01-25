@@ -13,8 +13,8 @@ import org.jsoup.nodes.Element
 
 class FaselHDProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://web12412x.faselhdx.bid/main"
-    private  val alternativeUrl = "https://www.faselhd.club"
+    override var mainUrl = "https://web1256x.faselhdx.bid/main"
+    private  val alternativeUrl = "https://faselhd.club"
     override var name = "FaselHD"
     override val usesWebView = false
     override val hasMainPage = true
@@ -26,10 +26,9 @@ class FaselHDProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("div.col-xl-2 a").attr("href") ?: return null
-        val posterUrl = select("div.col-xl-2 a div img").attr("data-src") ?:
-        select("div.col-xl-2 a div img").attr("src")
-        val title = select("div.col-xl-2 a div img").attr("alt")
+        val url = select("a").attr("href") ?: return null
+        val posterUrl = select("img").attr("data-src").ifEmpty { select("img").attr("src") }
+        val title = select("img").attr("alt")
         val quality = select(".quality").first()?.text()?.replace("1080p |-".toRegex(), "")
         val type = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
         return newMovieSearchResponse(

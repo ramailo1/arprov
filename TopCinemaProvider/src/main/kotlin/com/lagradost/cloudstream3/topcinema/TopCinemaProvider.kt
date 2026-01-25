@@ -78,7 +78,7 @@ class TopCinemaProvider : MainAPI() {
         Thread.sleep((1000..3000).random().toLong())
         
         val document = app.get(request.data + page, headers = requestHeaders).document
-        val home = document.select(".movie-item, .video-item, .post").mapNotNull {
+        val home = document.select("div.Block--Item, div.Small--Box").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, home)
@@ -93,7 +93,7 @@ class TopCinemaProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
-        return doc.select(".movie-item, .video-item, .search-result").mapNotNull {
+        return doc.select("div.Block--Item, div.Small--Box").mapNotNull {
             it.toSearchResponse()
         }
     }

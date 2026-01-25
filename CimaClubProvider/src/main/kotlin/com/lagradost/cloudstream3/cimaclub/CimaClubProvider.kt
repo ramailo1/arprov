@@ -11,7 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 class CimaClubProvider : MainAPI() {
-    override var mainUrl = "https://cinma.co"
+    override var mainUrl = "https://ciimaclub.us"
     override var name = "CimaClub"
     override val hasMainPage = true
     override var lang = "ar"
