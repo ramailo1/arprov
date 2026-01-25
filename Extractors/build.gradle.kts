@@ -8,7 +8,7 @@ cloudstream {
 	
     status = 1
 
-    tvTypes = listOf( "TvSeries" , "Movie" , "Anime" , "AsianDrama" )
+    // tvTypes removed to prevent showing as provider
     
     iconUrl = "https://raw.githubusercontent.com/ImZaw/cloudstream-extensions-arabic/master/icon.png"
 }

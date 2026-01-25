@@ -8,8 +8,8 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 class Shed4uProvider : MainAPI() {
-    override var mainUrl = "https://ristoanime.org"
-    override var name = "RistoAnime"
+    override var mainUrl = "https://bos.sh4u.news"
+    override var name = "Shed4u"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true

@@ -46,7 +46,7 @@ class CimaClubProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
         
         // Add random delay to avoid detection
         Thread.sleep(getRandomDelay())
@@ -77,7 +77,7 @@ class CimaClubProvider : MainAPI() {
         
         // Add random delay and user agent
         Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
         
         return doc.select(".search-results .movie-item, .results .video-item").mapNotNull { element ->
             element.toSearchResponse()
@@ -87,7 +87,7 @@ class CimaClubProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         // Add random delay and user agent
         Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
         
         val title = doc.selectFirst(".movie-title, .video-title, h1")?.text()?.trim() ?: return null
         val poster = fixUrl(doc.selectFirst(".poster img, .movie-poster img")?.attr("src") ?: "")

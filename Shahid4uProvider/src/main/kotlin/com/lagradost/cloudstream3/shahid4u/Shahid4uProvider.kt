@@ -13,7 +13,7 @@ import org.jsoup.nodes.Element
 
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://shah4u.click"
+    override var mainUrl = "https://shahid4.you"
     override var name = "Shahid4u"
     override val usesWebView = false
     override val hasMainPage = true
@@ -30,9 +30,9 @@ class Shahid4uProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val urlElement = select("a.fullClick")
-        val posterUrl = select("a.image img, img.lazy_load").let { 
-            it.attr("data-src").ifEmpty { it.attr("data-image") } 
+        val urlElement = select("a.fullClick, a.ellipsis, .caption h3 a").first() ?: return null
+        val posterUrl = select("a.image img, img.lazy_load, img.img-responsive").let { 
+            it.attr("data-echo").ifEmpty { it.attr("data-src") }.ifEmpty { it.attr("data-image") } 
         }.ifEmpty { 
             select("a.image, .postImgBg").attr("style").getImageURL() 
         }
@@ -40,7 +40,7 @@ class Shahid4uProvider : MainAPI() {
         val type =
             if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries
         return newMovieSearchResponse(
-            urlElement.attr("title")
+            urlElement.attr("title").ifEmpty { urlElement.text() }
                 .replace("برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي".toRegex(), ""),
             urlElement.attr("href") ?: return null,
             type,
@@ -59,7 +59,7 @@ class Shahid4uProvider : MainAPI() {
 		if(doc.select("title").text() == "Just a moment...") {
             doc = app.get(request.data + page, interceptor = cfKiller, timeout = 120).document
         }
-        val list = doc.select("div.content-box")
+        val list = doc.select("li.col-xs-6, div.content-box")
             .mapNotNull { element ->
                 element.toSearchResponse()
             }
@@ -76,7 +76,7 @@ class Shahid4uProvider : MainAPI() {
 			if(doc.select("title").text() == "Just a moment...") {
 				doc = app.get(url, interceptor = cfKiller, timeout = 120).document
 			}
-			doc.select("div.content-box").mapNotNull {
+			doc.select("li.col-xs-6, div.content-box").mapNotNull {
                 finalResult.add(it.toSearchResponse() ?: return@mapNotNull null)
             }
         }
