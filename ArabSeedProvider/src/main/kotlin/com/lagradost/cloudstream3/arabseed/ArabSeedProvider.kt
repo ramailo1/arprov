@@ -84,19 +84,25 @@ class ArabSeedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, timeout = 120).document
-        val title = doc.select("h1.Title").text().ifEmpty { doc.select("div.Title").text() }
-        val isMovie = title.contains("فيلم")
+        val title = doc.selectFirst(".post__name")?.text()?.cleanTitle() ?: doc.select("h1").text()
+        val isMovie = url.contains("/movies/") || title.contains("فيلم")
 
-        val posterUrl = doc.select("div.Poster > img").let{ it.attr("data-src").ifEmpty { it.attr("src") } }
-        val rating = doc.select("div.RatingImdb em").text().getIntFromText()
-        val synopsis = doc.select("p.descrip").last()?.text()
-        val year = doc.select("li:contains(السنه) a").text().getIntFromText()
-        val tags = doc.select("li:contains(النوع) > a, li:contains(التصنيف) > a")?.map { it.text() }
+        val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src") 
+            ?: doc.selectFirst(".images__loader img")?.attr("src")
+            ?: doc.selectFirst("img[data-src]")?.attr("data-src")
 
-        val actors = doc.select("div.WorkTeamIteM").mapNotNull {
-            val name = it.selectFirst("h4 > em")?.text() ?: return@mapNotNull null
-            val image = it.selectFirst("div.Icon img")?.attr("src") ?: return@mapNotNull null
-            val roleString = it.select("h4 > span").text()
+        val synopsis = doc.select(".single__contents").text()
+            .replace("قصة العرض :", "")
+            .replace("قصة العرض", "")
+            .trim()
+
+        val year = doc.select("a[href*='/release-year/']").text().getIntFromText()
+        val tags = doc.select("a[href*='/genre/']").map { it.text() }
+
+        val actors = doc.select("a.d__flex.align__items__center.gap__10[href*='/actor/']").mapNotNull {
+            val name = it.selectFirst("h3")?.text() ?: return@mapNotNull null
+            val image = it.selectFirst("img")?.attr("data-src") ?: it.selectFirst("img")?.attr("src")
+            val roleString = it.selectFirst("span")?.text()
             val mainActor = Actor(name, image)
             ActorData(actor = mainActor, roleString = roleString)
         }
@@ -117,45 +123,46 @@ class ArabSeedProvider : MainAPI() {
                 this.plot = synopsis
                 this.tags = tags
                 this.actors = actors
-                // this.rating = rating
                 this.year = year
             }
         } else {
-            val seasonList = doc.select("div.SeasonsListHolder ul > li")
-            val episodes = arrayListOf<Episode>()
-            if(seasonList.isNotEmpty()) {
-                seasonList.forEach { season ->
-                    app.post(
-                        "$mainUrl/wp-content/themes/Elshaikh2021/Ajaxat/Single/Episodes.php",
-                        data = mapOf("season" to season.attr("data-season"), "post_id" to season.attr("data-id"))
-                    ).document.select("a").forEach {
-                        episodes.add(newEpisode(it.attr("href")) {
-                            this.name = it.text()
-                            this.season = season.attr("data-season")[0].toString().toIntOrNull()
-                            this.episode = it.text().getIntFromText()
-                        })
-                    }
+            val episodes = doc.select("a[href*='الحلقة']").mapNotNull { it ->
+                val episodeName = it.text()
+                val episodeNumber = it.selectFirst("b")?.text()?.toIntOrNull() 
+                    ?: episodeName.getIntFromText()
+                
+                newEpisode(it.attr("href")) {
+                    this.name = episodeName
+                    this.episode = episodeNumber
+                    // Season logic is hard for this site as it usually lists all episodes
+                    // defaulting to 1 or 0
+                    this.season = 1 
                 }
-            } else {
-                doc.select("div.ContainerEpisodesList > a").forEach {
-                    episodes.add(newEpisode(it.attr("href")) {
-                        this.name = it.text()
-                        this.season = 0
-                        this.episode = it.text().getIntFromText()
-                    })
-                }
-            }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
+            }.distinctBy { it.data }.sortedBy { it.episode }
+
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis
                 this.actors = actors
                 this.recommendations = recommendations
-                // this.rating = rating
                 this.year = year
             }
         }
     }
+
+    private fun String.cleanTitle(): String {
+        return this.replace(")", "")
+            .replace("(", "")
+            .replace("مشاهدة", "")
+            .replace("تحميل", "")
+            .replace("فيلم", "")
+            .replace("مسلسل", "")
+            .replace("مترجم", "")
+            .replace("اون لاين", "")
+            .trim()
+    }
+
 
     override suspend fun loadLinks(
         data: String,
@@ -164,8 +171,11 @@ class ArabSeedProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        val watchUrl = doc.select("a.watchBTn").attr("href")
-        val watchDoc = app.get(watchUrl, headers = mapOf("Referer" to mainUrl)).document
+        val watchUrl = doc.select(".watch__btn").attr("href")
+        if (watchUrl.isEmpty()) return false
+        
+        val watchDoc = app.get(watchUrl, headers = mapOf("Referer" to data)).document
+
         val indexOperators = arrayListOf<Int>()
         val list: List<Element> = watchDoc.select("ul > li[data-link], ul > h3").mapIndexed { index, element ->
             if(element.`is`("h3")) {
