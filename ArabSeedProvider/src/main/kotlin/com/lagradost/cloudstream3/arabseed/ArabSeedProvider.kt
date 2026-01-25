@@ -109,6 +109,8 @@ class ArabSeedProvider : MainAPI() {
         val isMovie = episodesElements.isEmpty() && (url.contains("/movies/") || title.contains("فيلم"))
 
         val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src") 
+            ?: doc.selectFirst(".poster__single img")?.attr("src")
+            ?: doc.selectFirst(".poster__single img")?.attr("data-src")
             ?: doc.selectFirst(".poster img")?.attr("data-src")
             ?: doc.selectFirst(".single__poster img")?.attr("data-src")
             ?: doc.selectFirst("img[data-src]")?.attr("data-src")
@@ -241,6 +243,35 @@ class ArabSeedProvider : MainAPI() {
                 loadExtractor(link, data, subtitleCallback, callback)
             }
         }
+
+        // Download Links Logic
+        val downloadUrl = doc.select(".download__btn").attr("href")
+        if (downloadUrl.isNotEmpty()) {
+            try {
+                val downloadDoc = app.get(downloadUrl, headers = mapOf("Referer" to data)).document
+                val downloadLinks = downloadDoc.select(".downloads__links__list li a")
+                downloadLinks.map { 
+                    val link = it.attr("href")
+                    val name = it.text()
+                    loadExtractor(link, data, subtitleCallback) { link ->
+                        callback.invoke(
+                            newExtractorLink(
+                                link.name,
+                                "$name (Download)",
+                                link.url,
+                                link.type,
+                                link.quality
+                            ) {
+                                this.referer = link.referer
+                            }
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+               // Ignore download errors
+            }
+        }
+        
         return true
     }
 }
