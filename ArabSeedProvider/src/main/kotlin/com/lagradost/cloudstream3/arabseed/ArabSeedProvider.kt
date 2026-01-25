@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 
 class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://a.asd.homes/main4"
+    override var mainUrl = "https://a.asd.homes"
     override var name = "ArabSeed"
     override val usesWebView = false
     override val hasMainPage = true
@@ -48,16 +48,34 @@ class ArabSeedProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/" to "Movies",
-        "$mainUrl/series/" to "Series",
-        "$mainUrl/recently/" to "Recently Added"
+        "$mainUrl/category/foreign-movies-10/" to "Foreign Movies",
+        "$mainUrl/category/arabic-movies-10/" to "Arabic Movies",
+        "$mainUrl/category/netfilx/افلام-netfilx/" to "Netflix Movies",
+        "$mainUrl/category/asian-movies/" to "Asian Movies",
+        "$mainUrl/category/turkish-movies/" to "Turkish Movies",
+        "$mainUrl/category/افلام-مدبلجة-1/" to "Dubbed Movies",
+        "$mainUrl/category/indian-movies/" to "Indian Movies",
+        "$mainUrl/category/افلام-كلاسيكيه/" to "Classic Movies",
+        "$mainUrl/category/foreign-series-3/" to "Foreign Series",
+        "$mainUrl/category/arabic-series-8/" to "Arabic Series",
+        "$mainUrl/category/netfilx/مسلسلات-netfilx-1/" to "Netflix Series",
+        "$mainUrl/category/turkish-series-2/" to "Turkish Series",
+        "$mainUrl/category/مسلسلات-مدبلجة/" to "Dubbed Series",
+        "$mainUrl/category/مسلسلات-كورية/" to "Korean Series",
+        "$mainUrl/category/مسلسلات-مصرية/" to "Egyptian Series",
+        "$mainUrl/category/مسلسلات-هندية/" to "Indian Series",
+        "$mainUrl/category/cartoon-series/" to "Cartoon",
+        "$mainUrl/category/مسلسلات-رمضان/" to "Ramadan Series",
+        "$mainUrl/category/wwe-shows-1/" to "WWE",
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val document = app.get(request.data + page, timeout = 120).document
+        val url = if (page == 1) request.data else "${request.data}page/$page/"
+        val document = app.get(url, timeout = 120).document
+
         val home = document.select("a.movie__block").mapNotNull {
             it.toSearchResponse()
         }
