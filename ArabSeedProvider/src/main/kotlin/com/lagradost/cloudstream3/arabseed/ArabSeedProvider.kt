@@ -66,7 +66,9 @@ class ArabSeedProvider : MainAPI() {
         "$mainUrl/category/مسلسلات-مصريه/" to "Egyptian Series",
         "$mainUrl/category/مسلسلات-هندية/" to "Indian Series",
         "$mainUrl/category/cartoon-series/" to "Cartoon",
-        "$mainUrl/category/مسلسلات-رمضان/" to "Ramadan Series",
+        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2025/" to "Ramadan Series 2025",
+        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2024/" to "Ramadan Series 2024",
+        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2023/" to "Ramadan Series 2023",
         "$mainUrl/category/wwe-shows-1/" to "WWE",
     )
 
@@ -237,6 +239,8 @@ class ArabSeedProvider : MainAPI() {
                      try {
                          val doc = app.get(finalUrl).document
                          val source = doc.select("source").attr("src")
+                         val sourcesFound = mutableListOf<Boolean>() // Re-init not needed but cleaner scope
+                         
                          if (source.isNotEmpty()) {
                              callback.invoke(
                                  newExtractorLink(
@@ -276,9 +280,10 @@ class ArabSeedProvider : MainAPI() {
                      if (sourcesFound.isEmpty()) {
                          loadExtractor(finalUrl, data, subtitleCallback, callback)
                      }
-                 } else if (finalUrl.startsWith("/")) {
+                 } else if (finalUrl.startsWith("/") || finalUrl.contains("asd.homes")) {
                      // Internal link presumably
-                     val doc = app.get(mainUrl + finalUrl, headers = mapOf("Referer" to watchUrl)).document
+                     val urlToLoad = if (finalUrl.startsWith("/")) mainUrl + finalUrl else finalUrl
+                     val doc = app.get(urlToLoad, headers = mapOf("Referer" to watchUrl)).document
                      val sourceElement = doc.select("source")
                      if (sourceElement.hasAttr("src")) {
                          callback.invoke(
