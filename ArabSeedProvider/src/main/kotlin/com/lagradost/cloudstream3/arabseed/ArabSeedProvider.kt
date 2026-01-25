@@ -61,8 +61,8 @@ class ArabSeedProvider : MainAPI() {
         "$mainUrl/category/netfilx/مسلسلات-netfilx-1/" to "Netflix Series",
         "$mainUrl/category/turkish-series-2/" to "Turkish Series",
         "$mainUrl/category/مسلسلات-مدبلجة/" to "Dubbed Series",
-        "$mainUrl/category/مسلسلات-كورية/" to "Korean Series",
-        "$mainUrl/category/مسلسلات-مصرية/" to "Egyptian Series",
+        "$mainUrl/category/مسلسلات-كوريه/" to "Korean Series",
+        "$mainUrl/category/مسلسلات-مصريه/" to "Egyptian Series",
         "$mainUrl/category/مسلسلات-هندية/" to "Indian Series",
         "$mainUrl/category/cartoon-series/" to "Cartoon",
         "$mainUrl/category/مسلسلات-رمضان/" to "Ramadan Series",
@@ -207,20 +207,29 @@ class ArabSeedProvider : MainAPI() {
         servers.map { 
             val link = it.attr("data-link")
             val name = it.text()
-            // Quality might be in data-qu or just separate links
-            if (name.contains("عرب سيد")) {
-                 val sourceElement = app.get(link).document.select("source")
-                 callback.invoke(
-                     newExtractorLink(
-                         this.name,
-                         "ArabSeed",
-                         sourceElement.attr("src"),
-                         if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                     ) {
-                         this.quality = Qualities.Unknown.value
-                         this.referer = data
+            // Check if link is internal (contains domain or is relative)
+            if (link.contains("asd.homes") || link.startsWith("/")) {
+                 val doc = app.get(link).document
+                 val sourceElement = doc.select("source")
+                 if (sourceElement.hasAttr("src")) {
+                     callback.invoke(
+                         newExtractorLink(
+                             this.name,
+                             "$name (Internal)",
+                             sourceElement.attr("src"),
+                             if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                         ) {
+                             this.quality = Qualities.Unknown.value
+                             this.referer = data
+                         }
+                     )
+                 } else {
+                     // Might be an iframe inside the internal play page
+                     val iframeSrc = doc.select("iframe").attr("src")
+                     if (iframeSrc.isNotEmpty()) {
+                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                      }
-                 )
+                 }
             } else {
                 loadExtractor(link, data, subtitleCallback, callback)
             }
