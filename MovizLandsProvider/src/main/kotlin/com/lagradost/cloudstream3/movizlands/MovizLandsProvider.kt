@@ -13,7 +13,7 @@ import android.annotation.SuppressLint
 
 class MovizLandsProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://movizlands.com"
+    override var mainUrl = "https://en.movizlands.com"
     override var name = "MovizLands"
     override val usesWebView = false
     override val hasMainPage = true
