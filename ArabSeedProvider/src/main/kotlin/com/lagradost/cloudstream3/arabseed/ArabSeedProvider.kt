@@ -207,9 +207,17 @@ class ArabSeedProvider : MainAPI() {
         servers.map { 
             val link = it.attr("data-link")
             val name = it.text()
-            // Check if link is internal (contains domain or is relative)
-            if (link.contains("asd.homes") || link.startsWith("/")) {
-                 val doc = app.get(link).document
+            
+            val idMatch = Regex("id=([^&]+)").find(link)
+            if (idMatch != null) {
+                try {
+                     val decoded = String(android.util.Base64.decode(idMatch.groupValues[1], android.util.Base64.DEFAULT))
+                     loadExtractor(decoded, data, subtitleCallback, callback)
+                } catch (e: Exception) {
+                     loadExtractor(link, data, subtitleCallback, callback)
+                }
+            } else if (link.contains("asd.homes") || link.startsWith("/")) {
+                 val doc = app.get(link, headers = mapOf("Referer" to watchUrl)).document
                  val sourceElement = doc.select("source")
                  if (sourceElement.hasAttr("src")) {
                      callback.invoke(
@@ -224,7 +232,6 @@ class ArabSeedProvider : MainAPI() {
                          }
                      )
                  } else {
-                     // Might be an iframe inside the internal play page
                      val iframeSrc = doc.select("iframe").attr("src")
                      if (iframeSrc.isNotEmpty()) {
                          loadExtractor(iframeSrc, data, subtitleCallback, callback)
