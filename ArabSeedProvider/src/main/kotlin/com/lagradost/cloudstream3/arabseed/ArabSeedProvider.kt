@@ -12,7 +12,7 @@ class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://a.asd.homes/main4"
     override var name = "ArabSeed"
-    override val usesWebView = true
+    override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
@@ -22,18 +22,25 @@ class ArabSeedProvider : MainAPI() {
     
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = select("h3").text()
-        val posterUrl = select("div.movie__img img").let { 
+        val title = attr("title").ifEmpty { select("h3").text() }
+        if (title.isEmpty()) return null
+        
+        val posterUrl = select("img.images__loader").let { 
             it.attr("data-src").ifEmpty { 
-                it.attr("data-lazy-src").ifEmpty { 
-                    it.attr("src") 
-                }
+                it.attr("src") 
             }
         }
-        val tvType = if (select("div.movie__meta").text().contains("مسلسلات")) TvType.TvSeries else TvType.Movie
+        
+        // Determine type from URL or title
+        val href = attr("href")
+        val tvType = when {
+            href.contains("/series/") || title.contains("مسلسل") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+        
         return newMovieSearchResponse(
             title,
-            attr("href"),
+            href,
             tvType,
         ) {
             this.posterUrl = posterUrl
