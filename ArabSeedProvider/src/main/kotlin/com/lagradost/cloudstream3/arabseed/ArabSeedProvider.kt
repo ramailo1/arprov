@@ -107,7 +107,8 @@ class ArabSeedProvider : MainAPI() {
         
         // Robust detection
         val episodesElements = doc.select(".episodes__list a, .seasons__list a")
-        val isMovie = episodesElements.isEmpty() && (url.contains("/movies/") || title.contains("فيلم"))
+        // If it has episodes, it's a series. If not, treat as movie (safe fallback for singles).
+        val isMovie = episodesElements.isEmpty()
 
         val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src") 
             ?: doc.selectFirst(".poster__single img")?.attr("src")
