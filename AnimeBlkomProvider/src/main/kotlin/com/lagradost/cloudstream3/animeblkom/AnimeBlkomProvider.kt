@@ -21,35 +21,45 @@ class AnimeBlkomProvider : MainAPI() {
         TvType.OVA,
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("$mainUrl/", interceptor = cfInterceptor).document
-        val list = doc.select("div.recent-episode").mapNotNull {
-            val title = it.selectFirst(".name")?.text() ?: return@mapNotNull null
-            val href = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            val posterUrl = it.selectFirst(".image img")?.let { img ->
-                img.attr("data-src").ifEmpty { img.attr("src") }
-            }
-            val epNum = it.selectFirst(".episode-number")?.text()
-                ?.replace("الحلقة :", "")?.trim()?.toIntOrNull()
+    override val mainPage = mainPageOf(
+        mainUrl to "Recently Added", 
+        "$mainUrl/anime-list?sort_by=rate&page=" to "Most rated",
+        "$mainUrl/anime-list?sort_by=created_at&page=" to "Recently added List",
+        "$mainUrl/anime-list?states=finished&page=" to "Completed"
+    )
 
-            newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = posterUrl
-                addSub(epNum)
-            }
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = if (request.data == mainUrl) {
+            if (page <= 1) "$mainUrl/" else "$mainUrl/recently-added?page=$page"
+        } else {
+            "${request.data}$page"
         }
-        return newHomePageResponse(listOf(HomePageList("Latest Added", list)), false)
+        
+        val doc = app.get(url, interceptor = cfInterceptor).document
+        val list = doc.select("div.recent-episode, div.anime-card-container, div.item.episode").mapNotNull {
+            it.toSearchResponse()
+        }
+        return newHomePageResponse(request.name, list)
+    }
+
+    private fun Element.toSearchResponse(): SearchResponse? {
+        val title = selectFirst(".name")?.text() ?: return null
+        val href = selectFirst("a")?.attr("href") ?: return null
+        val posterUrl = selectFirst("img")?.let { img ->
+            img.attr("data-original").ifEmpty { img.attr("data-src").ifEmpty { img.attr("src") } }
+        }
+        val epNum = selectFirst(".episode-number")?.text()
+            ?.replace("الحلقة :", "")?.trim()?.toIntOrNull()
+
+        return newAnimeSearchResponse(title, href, TvType.Anime) {
+            this.posterUrl = posterUrl
+            addSub(epNum)
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/search?query=$query", interceptor = cfInterceptor).document.select(".anime-card-container, .content .item, .recent-episode").mapNotNull {
-            val title = it.selectFirst(".name")?.text() ?: return@mapNotNull null
-            val href = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            val posterUrl = it.selectFirst("img")?.let { img ->
-                img.attr("data-original").ifEmpty { img.attr("data-src").ifEmpty { img.attr("src") } }
-            }
-            newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = posterUrl
-            }
+            it.toSearchResponse()
         }
     }
 
@@ -65,13 +75,7 @@ class AnimeBlkomProvider : MainAPI() {
         
         val episodes = doc.select("ul.episodes-links li a").mapNotNull {
             val href = it.attr("href")
-            // Structure: <span>الحلقة</span> <span class="separator">:</span> <span>1</span>
             val epNum = it.select("span").dropLast(1).lastOrNull()?.text()?.toIntOrNull() ?: it.select("span").last()?.text()?.toIntOrNull()
-            // Adjusted logic: usually the last span is the number. 
-            // Previous logic: `name = it.select("span").dropLast(1).lastOrNull()?.text()`. 
-            // In the HTML: <span>الحلقة</span> <span class="separator">:</span> <span>1</span>
-            // last() is <span>1</span>. dropLast(1).last() is separator. dropLast(2).last() is title.
-            // Actually, `it.select("span").last()?.text()` gives "1".
             
             newEpisode(href) {
                 this.episode = epNum
