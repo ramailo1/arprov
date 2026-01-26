@@ -56,7 +56,6 @@ These plugins are fully operational and regularly maintained.
 | **Akwam** | Movies & Series | Arabic |
 | **Fushaar** | International | Arabic |
 | **ArabSeed** | Movies & Series | Arabic |
-| **AnimeBlkom** | Anime | Arabic |
 | **Anime4up Pack** | Anime | Arabic |
 | **MovizLands** | Movies & Series | Arabic |
 
@@ -65,6 +64,7 @@ New plugins or those undergoing maintenance/updates.
 
 | Provider | Status | Progress |
 | :--- | :--- | :--- |
+| **AnimeBlkom** | 🛠️ Cloudflare Fix | `In Progress` |
 | **RistoAnime** | 🛠️ WebView Enabled | `Soon` |
 | **Shahid4u** | 🛠️ URL Updated | `Soon` |
 | **Shed4u** | 🛠️ URL Updated | `Soon` |

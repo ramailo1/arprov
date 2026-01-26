@@ -5,13 +5,14 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 // ramailo
+// Note: This provider requires Cloudflare to be solved via WebView
 class AnimeBlkomProvider : MainAPI() {
     override var mainUrl = "https://animeblkom.net"
     override var name = "AnimeBlkom"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
-    override val usesWebView = false
+    override val usesWebView = true  // Critical for Cloudflare
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -19,12 +20,20 @@ class AnimeBlkomProvider : MainAPI() {
         TvType.OVA,
     )
 
+    // Browser-like headers
+    private fun getHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.5",
+        "Referer" to mainUrl
+    )
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homeList = mutableListOf<HomePageList>()
 
         // 1. Fetch Latest Episodes
         try {
-            val doc = app.get(mainUrl).document
+            val doc = app.get(mainUrl, headers = getHeaders(), allowRedirects = true).document
             val episodesList = doc.select("div.recent-episode").mapNotNull { anime ->
                 anime.toSearchResponse()
             }.distinct()
@@ -37,7 +46,7 @@ class AnimeBlkomProvider : MainAPI() {
 
         // 2. Fetch Most Rated
         try {
-            val doc = app.get("$mainUrl/anime-list?sort_by=rate").document
+            val doc = app.get("$mainUrl/anime-list?sort_by=rate", headers = getHeaders(), allowRedirects = true).document
             val ratedList = doc.select("div.content").mapNotNull { anime ->
                 anime.toSearchResponse()
             }.distinct()
@@ -48,7 +57,7 @@ class AnimeBlkomProvider : MainAPI() {
             e.printStackTrace()
         }
 
-        return newHomePageResponse(homeList, hasNext = false)
+        return newHomePageResponse(homeList)
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
@@ -82,14 +91,14 @@ class AnimeBlkomProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.get("$mainUrl/search?query=$query").document
+        return app.get("$mainUrl/search?query=$query", headers = getHeaders(), allowRedirects = true).document
             .select("div.content, div.recent-episode").mapNotNull {
                 it.toSearchResponse()
             }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = getHeaders(), allowRedirects = true).document
         val title = doc.selectFirst("h1")?.text()?.replace("(anime)", "")?.trim() ?: ""
         val poster = doc.selectFirst("div.poster img")?.let { img ->
             val dataOriginal = img.attr("data-original")
@@ -132,17 +141,17 @@ class AnimeBlkomProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        val doc = app.get(data, headers = getHeaders(), allowRedirects = true).document
         
         // 1. Direct Downloads from Modal
         doc.select("#download .panel-body a.btn").forEach {
             val link = it.attr("href")
-            val qualityText = it.text()
-            val quality = qualityText.replace("p.*".toRegex(), "").trim().toIntOrNull() ?: Qualities.Unknown.value
+            val quality = it.text().filter { c -> c.isDigit() }.toIntOrNull()
+                ?: Qualities.Unknown.value
             if (link.isNotBlank()) {
                  callback(
                    newExtractorLink(
-                       this.name,
+                       name,
                        "Download ${quality}p",
                        link,
                        ExtractorLinkType.VIDEO
