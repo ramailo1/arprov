@@ -20,20 +20,22 @@ open class Anime4upProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime)
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("$mainUrl/").document
-        val homeList = doc.select(".page-content-container")
-            .mapNotNull {
-                val title = it.select("div.main-didget-head h3").text()
-                // Filter sections as requested
-                if (title.contains("أخر الحلقات المضافة")) {
-                    val list = it.select("div.anime-card-container, div.episodes-card-container, div.themexblock").mapNotNull { anime ->
-                        anime.toSearchResponse()
-                    }.distinct()
-                    HomePageList(title, list, isHorizontalImages = true)
-                } else null
-            }.toMutableList()
+        val homeList = mutableListOf<HomePageList>()
 
-        // Add Anime Movies section
+        // 1. Fetch Latest Episodes from /episode/
+        try {
+            val episodesDoc = app.get("$mainUrl/episode/").document
+            val episodesList = episodesDoc.select("div.anime-card-container").mapNotNull { anime ->
+                anime.toSearchResponse()
+            }.distinct()
+            if (episodesList.isNotEmpty()) {
+                homeList.add(HomePageList("أخر الحلقات المضافة", episodesList, isHorizontalImages = true))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Fetch Anime Movies from /anime-type/movie-3/
         try {
             val moviesDoc = app.get("$mainUrl/anime-type/movie-3/").document
             val moviesList = moviesDoc.select(".anime-card-container").mapNotNull { anime ->
@@ -50,7 +52,7 @@ open class Anime4upProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        // Case 1: Standard Anime Card (Movies, Slider)
+        // Case 1: Standard Anime Card (Movies, Slider, Episodes Page)
         val hoverDiv = selectFirst("div.hover")
         if (hoverDiv != null) {
             val url = hoverDiv.select("a").attr("href")
@@ -58,9 +60,11 @@ open class Anime4upProvider : MainAPI() {
                 .replace("episode", "anime")
             
             val imgElement = hoverDiv.select("img")
-            // Prioritize data-image (slider/movies) -> data-src (lazy) -> src (fallback)
+            // Prioritize data-image (slider) -> data-original -> data-src (lazy) -> src (fallback)
             val posterUrl = imgElement.attr("data-image").ifEmpty {
-                imgElement.attr("data-src").ifEmpty { imgElement.attr("src") }
+                imgElement.attr("data-original").ifEmpty {
+                    imgElement.attr("data-src").ifEmpty { imgElement.attr("src") }
+                }
             }
             
             val title = imgElement.attr("alt")
@@ -73,7 +77,7 @@ open class Anime4upProvider : MainAPI() {
             return newAnimeSearchResponse(title, url, type) { this.posterUrl = posterUrl }
         }
 
-        // Case 2: Pinned Card / Episode (Latest Added)
+        // Case 2: Pinned Card (Fallback for main page mixed content)
         val pinnedCard = selectFirst("div.pinned-card") ?: if (this.hasClass("pinned-card")) this else null
         if (pinnedCard != null) {
              val linkElement = pinnedCard.selectFirst("a.image")
@@ -85,6 +89,7 @@ open class Anime4upProvider : MainAPI() {
                  val style = linkElement.attr("style")
                  val posterUrl = style.substringAfter("url(\"").substringBefore("\")")
                      .ifEmpty { style.substringAfter("url(").substringBefore(")") }
+                     .ifEmpty { linkElement.attr("data-src") }
                  
                  return newAnimeSearchResponse(title, url, TvType.Anime) { this.posterUrl = posterUrl }
              }
