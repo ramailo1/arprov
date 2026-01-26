@@ -220,16 +220,16 @@ private fun getSeasonFromString(sName: String): Int {
             if (serverUrl.startsWith("http")) {
                 loadExtractor(serverUrl, data, subtitleCallback) { link ->
                     callback(
-newExtractorLink(
-                        link.source,
-                        "$serverName ${link.name}",
-                        link.url,
-                        if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                        link.quality
-                    ) {
-                        this.headers = link.headers
-                        this.referer = link.referer
-                    }
+ExtractorLink(
+                        source = link.source,
+                        name = "$serverName ${link.name}",
+                        url = link.url,
+                        referer = link.referer,
+                        quality = link.quality,
+                        isM3u8 = link.isM3u8,
+                        headers = link.headers,
+                        type = link.type
+                    )
                     )
                 }
             }
