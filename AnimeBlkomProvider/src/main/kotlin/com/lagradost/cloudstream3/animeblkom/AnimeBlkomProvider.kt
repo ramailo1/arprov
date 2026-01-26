@@ -2,7 +2,6 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Element
 
 // ramailo
@@ -12,8 +11,7 @@ class AnimeBlkomProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
-    
-    private val cfInterceptor = CloudflareKiller()
+    override val usesWebView = true // Enable WebView for Cloudflare
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -35,7 +33,7 @@ class AnimeBlkomProvider : MainAPI() {
             "${request.data}$page"
         }
         
-        val doc = app.get(url, interceptor = cfInterceptor).document
+        val doc = app.get(url).document
         val list = doc.select("div.recent-episode.episode, div.content").mapNotNull {
             it.toSearchResponse()
         }
@@ -59,14 +57,14 @@ class AnimeBlkomProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.get("$mainUrl/search?query=$query", interceptor = cfInterceptor).document
+        return app.get("$mainUrl/search?query=$query").document
             .select("div.content, div.recent-episode.episode").mapNotNull {
                 it.toSearchResponse()
             }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url, interceptor = cfInterceptor).document
+        val doc = app.get(url).document
         val title = doc.selectFirst("h1")?.text()?.replace("(anime)", "")?.trim() ?: ""
         val poster = doc.selectFirst("div.poster img")?.let { img ->
             val dataOriginal = img.attr("data-original")
@@ -107,7 +105,7 @@ class AnimeBlkomProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data, interceptor = cfInterceptor).document
+        val doc = app.get(data).document
         
         // 1. Direct Downloads from Modal
         doc.select("#download .panel-body a.btn").forEach {
