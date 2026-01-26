@@ -1,214 +1,162 @@
-# 🎬 CloudStream Extensions Arabic - نظيف ومنظم
+# 🎬 CloudStream Extensions Arabic - Professional & Organized
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Extensions-48+-green.svg" alt="Extensions Count">
+  <img src="https://img.shields.io/badge/Extensions-50+-green.svg" alt="Extensions Count">
   <img src="https://codeberg.org/dhomred/cloudstream-extensions-arabic/workflows/Build/badge.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/Language-Kotlin-blue.svg" alt="Language">
+  <img src="https://img.shields.io/badge/badge/Language-Kotlin-blue.svg" alt="Language">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
 <p align="center">
-  <strong>إضافات عربية متقدمة لـ CloudStream - بشكل نظيف ومنظم</strong>
+  <strong>Advanced Arabic Extensions for CloudStream – Clean, Organized, and High-Performance</strong>
 </p>
 
-## 📋 فهرس المحتويات
+---
 
-- [🎬 CloudStream Extensions Arabic - نظيف ومنظم](#-cloudstream-extensions-arabic---نظيف-ومنظم)
-  - [📋 فهرس المحتويات](#-فهرس-المحتويات)
-  - [🌟 المميزات](#-المميزات)
-  - [📦 المزودين المتاحين](#-المزودين-المتاحين)
-  - [🔧 التثبيت](#-التثبيت)
-  - [🏗️ البنية المجلدية](#️-البنية-المجلدية)
-  - [🔍 استخدام المستخرجات](#-استخدام-المستخرجات)
-  - [📊 الإحصائيات](#-الإحصائيات)
-  - [🛠️ التطوير](#️-التطوير)
-  - [📝 المساهمة](#-المساهمة)
-  - [📞 التواصل](#-التواصل)
-  - [⚖️ الترخيص](#️-الترخيص)
+## 📋 Table of Contents
 
-## 🌟 المميزات
+- [🚀 Quick Installation](#-quick-installation)
+- [📦 Extension Status](#-extension-status)
+- [🔍 Supported Extractors](#-supported-extractors)
+- [🏗️ Project Architecture](#-project-architecture)
+- [🛠️ Development & Build](#-development--build)
+- [📝 Contributing](#-contributing)
+- [📞 Support & Contact](#-support--contact)
+- [⚖️ License](#-license)
 
-- ✅ **48+ موقع عربي ودولي** مدعوم
-- ✅ **مستخرجات فيديو متقدمة** (StreamTape, DoodStream, MixDrop, MegaUp, FileMoon)
-- ✅ **توثيق شامل** باللغة العربية
-- ✅ **بنية منظمة** وسهلة التوسعة
-- ✅ **اختبارات جودة** مدمجة
-- ✅ **تحديثات دورية** وصيانة مستمرة
-- ✅ **دعم فني** متجاوب
+---
 
-## 📦 المزودين المتاحين
+## 🚀 Quick Installation
 
-### 📺 مزودين الأفلام والمسلسلات
-| المزود | الحالة | النوع |
-|--------|--------|--------|
-| **Akwam** | ✅ نشط | أفلام ومسلسلات |
-| **Anime4up** | ✅ نشط | أنمي مدبلج |
-| **AnimeBlkom** | ✅ نشط | أنمي مترجم |
-| **Animeiat** | ✅ نشط | أنمي عربي |
-| **ArabSeed** | ✅ نشط | أفلام عربية |
-| **Cima4u** | ✅ نشط | سينما عربية |
-| **CimaClub** | ✅ نشط | أفلام ومسلسلات |
-| **CimaLeek** | ✅ نشط | محتوى عربي |
-| **CimaNow** | ✅ نشط | أحدث الأفلام |
-| **EgyBest** | ✅ نشط | أفلام مصرية |
-| **FajerShow** | ✅ نشط | برامج تلفزيونية |
-| **FaselHD** | ✅ نشط | محتوى عربي |
-| **Fushaar** | ✅ نشط | أفلام عالمية |
-| **MovizLands** | ✅ نشط | أفلام ومسلسلات |
-| **Movizland** | ✅ نشط | محتوى متنوع |
-| **MyCima** | ✅ نشط | سينما عربية |
-| **Shahid4u** | ✅ نشط | مسلسلات عربية |
-| **ShahidMBC** | ✅ نشط | محتوى MBC |
-| **Shed4u** | ✅ نشط | أفلام عربية |
-| **TopCinema** | ✅ نشط | سينما عربية |
+### Method 1: Repository Link (Recommended)
+1. Open **CloudStream** app.
+2. Go to **Settings** ⚙️ > **Extensions**.
+3. Tap **Add Repository** (+).
+4. Paste the following URL:
+   ```text
+   https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
+   ```
 
-## 🔧 التثبيت
+### Method 2: Manual Installation
+1. Download `.zip` from [Releases](https://github.com/ramailo1/arprov/releases).
+2. Extract to `cloudstream/extensions/` folder.
+3. Restart the app.
 
-### الطريقة السهلة (موصى بها)
-1. افتح تطبيق CloudStream
-2. اضغط على أيقونة الإعدادات ⚙️
-3. انتقل إلى "المستودعات" أو "Repositories"
-4. اضغط على زر "+" أو "إضافة"
-5. الصق هذا الرابط:
+---
+
+## 📦 Extension Status
+
+We maintain a high standard of quality. Plugins are categorized by their current operational status.
+
+### ✅ Working (Active & Functional)
+These plugins are fully operational and regularly maintained.
+
+| Provider | Type | Language |
+| :--- | :--- | :--- |
+| **Akwam** | Movies & Series | Arabic |
+| **Fushaar** | International | Arabic |
+| **ArabSeed** | Movies & Series | Arabic |
+
+### 🛠️ Working On (WIP / Under Fix)
+New plugins or those undergoing maintenance/updates.
+
+| Provider | Status | Estimated Fix |
+| :--- | :--- | :--- |
+| **MovizLands** | 🛠️ URL Fixed | Soon |
+| **RistoAnime** | 🛠️ WebView Enabled | Soon |
+| **Shahid4u** | 🛠️ URL Updated | Soon |
+| **Shed4u** | 🛠️ URL Updated | Soon |
+| **Anime4up Pack** | 🏗️ Initial Build | Soon |
+| **Cima4u Actor** | 🛠️ Refactoring | Soon |
+| **Cima4u Shop** | 🛠️ Extractors Fix | Soon |
+| **EgyDead** | 🔍 Testing | Soon |
+| **GateAnime** | 🏗️ Initial Build | Soon |
+
+### ❌ Down (Currently Broken)
+These plugins are currently non-functional due to site changes or API issues.
+
+| Provider | Known Issue | Status |
+| :--- | :--- | :--- |
+| **Animeiat** | 🛑 Broken Logic | ⏸️ Paused |
+| **AnimeBlkom** | 🛑 Broken Logic | ⏸️ Paused |
+| **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
+| **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
+| **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
+| **CimaLeek** | 🛑 Broken Logic | ⏸️ Paused |
+| **FajerShow** | 🛑 Broken Logic | ⏸️ Paused |
+| **FaselHD** | 🛑 Broken Logic | ⏸️ Paused |
+| **MyCima** | 🛑 Broken Logic | ⏸️ Paused |
+| **ShahidMBC** | 🛑 Broken Logic | ⏸️ Paused |
+| **TopCinema** | 🛑 Broken Logic | ⏸️ Paused |
+| **EgyBest** | Domain Change / JS Captcha | ⏸️ Paused |
+
+---
+
+## 🔍 Supported Extractors
+
+Our extensions utilize a robust set of underlying extractors to ensure link stability.
+
+- **Fast Streaming**: StreamTape, DoodStream, MixDrop
+- **High Quality**: FileMoon, MegaUp, Vidmoly
+- **Reliability**: JWPlayer, LinkBox, VidHD, VoeSx
+
+---
+
+## 🏗️ Project Architecture
+
+```text
+cloudstream-extensions-arabic/
+├── AkwamProvider/        # Provider Source Code
+├── Extractors/           # Video Link Extractors
+├── docs/                 # Documentation & Guides
+├── scripts/              # Build & Analysis Tools
+├── repo.json             # Repository Manifest
+└── build.gradle.kts      # Global Build Config
 ```
-https://raw.githubusercontent.com/dhomred/cloudstream-extensions-arabic/master/repo.json
-```
 
-⚠️ **روابط بديلة إذا واجهت مشاكل:**
-- **الرئيسي (GitHub):** `https://raw.githubusercontent.com/dhomred/cloudstream-extensions-arabic/master/repo.json`
-- **Codeberg (fallback):** `https://codeberg.org/dhomred/cloudstream-extensions-arabic/src/branch/master/repo.json`
-- **تحميل مباشر:** `https://codeberg.org/dhomred/cloudstream-extensions-arabic/archive/master.zip`
+---
 
-### الطريقة اليدوية
-1. حمل الملفات من قسم [Releases](https://codeberg.org/dhomred/cloudstream-extensions-arabic/releases)
-2. انسخ الملفات إلى مجلد الملحقات
-3. أعد تشغيل التطبيق
+## 🛠️ Development & Build
 
-## 🏗️ البنية المجلدية
+### Requirements
+- **Java 11+** & **Kotlin 1.8+**
+- **Gradle 7.0+**
+- **Python 3.8+** (for management scripts)
 
-```
-cloudstream-extensions-arabic-v2/
-├── 📁 docs/                    # التوثيق
-│   ├── README.md              # هذا الملف
-│   ├── INSTALLATION.md        # دليل التثبيت
-│   ├── EXTRACTORS.md          # توثيق المستخرجات
-│   └── PROVIDERS.md           # توثيق المزودين
-├── 📁 scripts/                # أدوات التطوير
-│   ├── build.py              # بناء المشروع
-│   ├── test.py               # اختبار الملحقات
-│   └── analyze.py            # تحليل الأداء
-├── 📁 tests/                  # اختبارات الجودة
-├── 📁 reports/                # تقارير البناء والاختبار
-├── 📁 .github/workflows/      # CI/CD
-├── 📁 [ProviderName]/         # ملحقات المزودين
-├── 📁 Extractors/             # مستخرجات الفيديو
-└── 📄 repo.json               # ملف الإعدادات
-```
-
-## 🔍 استخدام المستخرجات
-
-المستخرجات تدعم مواقع الفيديو التالية:
-
-- **StreamTape** - مشغل فيديو سريع
-- **DoodStream** - مشغل فيديو موثوق
-- **MixDrop** - مشغل فيديو عالي الجودة
-- **MegaUp** - مشغل فيديو متعدد الجودات
-- **FileMoon** - مشغل فيديو متقدم
-
-## 📊 الإحصائيات
-
-- **عدد المزودين:** 20+ مزود
-- **عدد المستخرجات:** 48+ مستخرج
-- **اللغات المدعومة:** العربية، الإنجليزية
-- **نسبة النجاح:** 95%+
-- **آخر تحديث:** 2025
-
-## 🛠️ التطوير
-
-### المتطلبات
-- Java 11+
-- Kotlin 1.8+
-- Gradle 7.0+
-- Python 3.8+ (للأدوات المساعدة)
-
-### البناء
+### Build Commands
 ```bash
-# بناء جميع الملحقات
+# Build all extensions
 ./gradlew build
 
-# اختبار الملحقات
-./gradlew test
-
-# تحليل الجودة
-python scripts/analyze.py
+# Run quality analysis
+python scripts/analyze_issues.py
 ```
 
-### إضافة مزود جديد
-1. انسخ نموذج المزود من `TemplateProvider/`
-2. عدل الإعدادات في `build.gradle.kts`
-3. طبق معايير الجودة
-4. أضف الاختبارات
-5. حدث التوثيق
+---
 
-## 📝 المساهمة
+## 📝 Contributing
 
-نرحب بالمساهمات! يرجى اتباع الخطوات التالية:
+We value your help! To contribute:
+1. **Fork** the repository.
+2. Create your **Feature Branch** (`git checkout -b feature/NewProvider`).
+3. **Commit** your changes.
+4. **Push** to the branch and open a **Pull Request**.
 
-1. **Fork** المشروع
-2. أنشئ **branch** جديد: `git checkout -b feature/مزود-جديد`
-3. ارتكب التغييرات: `git commit -m 'إضافة مزود جديد'`
-4. ادفع التغييرات: `git push origin feature/مزود-جديد`
-5. افتح **Pull Request**
+---
 
-### معايير المساهمة
-- ✅ اتباع معايير Kotlin
-- ✅ إضافة اختبارات جودة
-- ✅ تحديث التوثيق
-- ✅ اختبار المزود قبل الإرسال
+## 📞 Support & Contact
 
-## 🛠️ استكشاف الأخطاء وإصلاحها
+- **Report Issues**: [Issue Tracker](https://github.com/ramailo1/arprov/issues)
+- **Discussions**: [Community Hub](https://github.com/ramailo1/arprov/discussions)
 
-### مشكلة "الصفحة غير موجودة" أو "404" عند إضافة المستودع:
+---
 
-#### ✅ الحلول المضمونة:
-1. **استخدم الرابط الرئيسي (موصى به):**
-   ```
-   https://raw.githubusercontent.com/dhomred/cloudstream-extensions-arabic/master/repo.json
-   ```
+## ⚖️ License
 
-2. **إذا استمرت المشكلة، جرب التثبيت اليدوي:**
-   - حمل الملف من [Releases](https://codeberg.org/dhomred/cloudstream-extensions-arabic/releases)
-   - استخرج الملفات إلى مجلد `cloudstream/extensions/`
-
-#### ❌ الروابط التي لا تعمل مع Codeberg:
-- `https://codeberg.org/dhomred/cloudstream-extensions-arabic/raw/branch/master/repo.json` (غير مدعوم)
-- `https://codeberg.org/dhomred/cloudstream-extensions-arabic/src/branch/master/repo.json` (يتطلب صلاحيات)
-
-### المزودين لا يعملون
-- تأكد من أنك متصل بالإنترنت
-- جرب تفعيل/إيقاف المزود من الإعدادات
-- تحقق من وجود تحديثات للتطبيق
-- أبلغ عن المشكلة في قسم [Issues](https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues)
-
-## 📞 التواصل
-
-- **الإبلاغ عن المشكلات:** [Issues](https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues)
-- **اقتراحات الميزات:** [Discussions](https://codeberg.org/dhomred/cloudstream-extensions-arabic/issues)
-- **الدعم الفني:** قم بفتح issue جديد
-
-## ⚖️ الترخيص
-
-هذا المشروع مرخص تحت **MIT License**. انظر ملف [LICENSE](LICENSE) للتفاصيل.
+Distributed under the **MIT License**. See `LICENSE` for more information.
 
 ---
 
 <p align="center">
-  ⭐ <strong>إذا أعجبك المشروع، لا تنسى أن تمنحنا نجمة!</strong> ⭐
+  ⭐ <strong>If you find this repository useful, please give it a star!</strong> ⭐
 </p>
-
-<p align="center">
-  <a href="https://codeberg.org/dhomred/cloudstream-extensions-arabic">
-    <img src="https://img.shields.io/github/stars/dhomred/cloudstream-extensions-arabic?style=social" alt="Star">
-  </a>
-</p>#   B u i l d   S t a t u s  
- 
