@@ -11,7 +11,7 @@ class AnimeBlkomProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
-    override val usesWebView = true // Enable WebView for Cloudflare
+    override val usesWebView = false
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -19,34 +19,59 @@ class AnimeBlkomProvider : MainAPI() {
         TvType.OVA,
     )
 
-    override val mainPage = mainPageOf(
-        mainUrl to "Recently Added", 
-        "$mainUrl/anime-list?sort_by=rate&page=" to "Most rated",
-        "$mainUrl/anime-list?sort_by=created_at&page=" to "Recently added List",
-        "$mainUrl/anime-list?states=finished&page=" to "Completed"
-    )
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data == mainUrl) {
-            if (page <= 1) "$mainUrl/" else "$mainUrl/?page=$page"
-        } else {
-            "${request.data}$page"
+        val homeList = mutableListOf<HomePageList>()
+
+        // 1. Fetch Latest Episodes
+        try {
+            val doc = app.get(mainUrl).document
+            val episodesList = doc.select("div.recent-episode").mapNotNull { anime ->
+                anime.toSearchResponse()
+            }.distinct()
+            if (episodesList.isNotEmpty()) {
+                homeList.add(HomePageList("أخر الحلقات المضافة", episodesList, isHorizontalImages = true))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        
-        val doc = app.get(url).document
-        val list = doc.select("div.recent-episode.episode, div.content").mapNotNull {
-            it.toSearchResponse()
+
+        // 2. Fetch Most Rated
+        try {
+            val doc = app.get("$mainUrl/anime-list?sort_by=rate").document
+            val ratedList = doc.select("div.content").mapNotNull { anime ->
+                anime.toSearchResponse()
+            }.distinct()
+            if (ratedList.isNotEmpty()) {
+                homeList.add(HomePageList("الأعلى تقييماً", ratedList, isHorizontalImages = false))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        return newHomePageResponse(request.name, list)
+
+        return newHomePageResponse(homeList, hasNext = false)
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = selectFirst("div.text div.name, div.info div.name a")?.text() ?: return null
+        // For recent episodes (div.recent-episode)
+        val titleFromText = selectFirst("div.text div.name")?.text()
+        // For anime list (div.content)
+        val titleFromInfo = selectFirst("div.info div.name a")?.text()
+        val title = titleFromText ?: titleFromInfo ?: return null
+        
         val href = selectFirst("a")?.attr("href") ?: return null
-        val posterUrl = selectFirst("div.poster img.lazy")?.let { img ->
+        
+        val posterImg = selectFirst("img.lazy") ?: selectFirst("img")
+        val posterUrl = posterImg?.let { img ->
             val dataOriginal = img.attr("data-original")
-            if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" else dataOriginal
+            val dataSrc = img.attr("data-src")
+            val src = img.attr("src")
+            when {
+                dataOriginal.isNotEmpty() -> if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" else dataOriginal
+                dataSrc.isNotEmpty() -> if (dataSrc.startsWith("/")) "$mainUrl$dataSrc" else dataSrc
+                else -> if (src.startsWith("/")) "$mainUrl$src" else src
+            }
         }
+        
         val epNum = selectFirst("div.episode-number")?.text()
             ?.replace("الحلقة :", "")?.replace("الحلقة", "")?.trim()?.toIntOrNull()
 
@@ -58,7 +83,7 @@ class AnimeBlkomProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/search?query=$query").document
-            .select("div.content, div.recent-episode.episode").mapNotNull {
+            .select("div.content, div.recent-episode").mapNotNull {
                 it.toSearchResponse()
             }
     }
@@ -68,7 +93,9 @@ class AnimeBlkomProvider : MainAPI() {
         val title = doc.selectFirst("h1")?.text()?.replace("(anime)", "")?.trim() ?: ""
         val poster = doc.selectFirst("div.poster img")?.let { img ->
             val dataOriginal = img.attr("data-original")
-            if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" else dataOriginal
+            if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" 
+            else if (dataOriginal.isNotEmpty()) dataOriginal
+            else img.attr("src")
         }
         val description = doc.selectFirst(".story")?.text()
         val genre = doc.select(".genres a").map { it.text() }
