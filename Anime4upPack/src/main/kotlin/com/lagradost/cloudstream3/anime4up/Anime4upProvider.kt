@@ -24,12 +24,28 @@ open class Anime4upProvider : MainAPI() {
         val homeList = doc.select(".page-content-container")
             .mapNotNull {
                 val title = it.select("div.main-didget-head h3").text()
-                val list =
-                    it.select("div.anime-card-container, div.episodes-card-container").map { anime ->
+                // Filter sections as requested
+                if (title.contains("أخر الحلقات المضافة")) {
+                    val list = it.select("div.anime-card-container, div.episodes-card-container").map { anime ->
                         anime.toSearchResponse()
                     }.distinct()
-                HomePageList(title, list, isHorizontalImages = title.contains("حلقات"))
+                    HomePageList(title, list, isHorizontalImages = true)
+                } else null
+            }.toMutableList()
+
+        // Add Anime Movies section
+        try {
+            val moviesDoc = app.get("$mainUrl/anime-type/movie-3/").document
+            val moviesList = moviesDoc.select(".anime-card-container").map { anime ->
+                anime.toSearchResponse()
+            }.distinct()
+            if (moviesList.isNotEmpty()) {
+                homeList.add(HomePageList("أفلام الأنمي", moviesList, isHorizontalImages = false))
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return newHomePageResponse(homeList, hasNext = false)
     }
 
@@ -38,8 +54,12 @@ open class Anime4upProvider : MainAPI() {
         val url = select("div.hover > a").attr("href")
             .replace("-%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-.*".toRegex(), "")
             .replace("episode", "anime")
+        
+        // Prioritize data-src for lazy loaded images on main page
+        val posterUrl = imgElement.attr("data-src").ifEmpty { imgElement.attr("src") }
+        
         val title = imgElement.attr("alt")
-        val posterUrl = imgElement.attr("src")
+        
         val typeText = select("div.anime-card-type > a").text()
         val type =
             if (typeText.contains("TV|Special".toRegex())) TvType.Anime
