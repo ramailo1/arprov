@@ -56,6 +56,8 @@ These plugins are fully operational and regularly maintained.
 | **Akwam** | Movies & Series | Arabic |
 | **Fushaar** | International | Arabic |
 | **ArabSeed** | Movies & Series | Arabic |
+| **AnimeBlkom** | Anime | Arabic |
+| **Anime4up Pack** | Anime | Arabic |
 
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
@@ -66,7 +68,7 @@ New plugins or those undergoing maintenance/updates.
 | **RistoAnime** | 🛠️ WebView Enabled | Soon |
 | **Shahid4u** | 🛠️ URL Updated | Soon |
 | **Shed4u** | 🛠️ URL Updated | Soon |
-| **Anime4up Pack** | 🏗️ Initial Build | Soon |
+
 | **Cima4u Actor** | 🛠️ Refactoring | Soon |
 | **Cima4u Shop** | 🛠️ Extractors Fix | Soon |
 | **EgyDead** | 🔍 Testing | Soon |
@@ -78,7 +80,7 @@ These plugins are currently non-functional due to site changes or API issues.
 | Provider | Known Issue | Status |
 | :--- | :--- | :--- |
 | **Animeiat** | 🛑 Broken Logic | ⏸️ Paused |
-| **AnimeBlkom** | 🛑 Broken Logic | ⏸️ Paused |
+
 | **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |

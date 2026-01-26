@@ -1,20 +1,18 @@
 package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.nodes.Element
 
+// ramailo
 class AnimeBlkomProvider : MainAPI() {
     override var mainUrl = "https://animeblkom.net"
     override var name = "AnimeBlkom"
-    override var lang = "ar"
     override val hasMainPage = true
+    override var lang = "ar"
+    override val hasDownloadSupport = true
+    
     private val cfInterceptor = CloudflareKiller()
 
     override val supportedTypes = setOf(
@@ -22,156 +20,114 @@ class AnimeBlkomProvider : MainAPI() {
         TvType.AnimeMovie,
         TvType.OVA,
     )
-	
-    private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("a").attr("href") ?: return null
-        val name = select("div.name").text()
-        val poster = select("div.poster img, div.image img").let { it.attr("data-original").ifEmpty { it.attr("data-src") } }
-        val year = select("div[title=\"سنة الانتاج\"]").text().toIntOrNull()
-        val episodesNumber = select("div[title=\"عدد الحلقات\"]").text().toIntOrNull()
-        val tvType = select("div[title=\"النوع\"]").text().let { if(it.contains("فيلم|خاصة".toRegex())) TvType.AnimeMovie else if(it.contains("أوفا|أونا".toRegex())) TvType.OVA else TvType.Anime }
-        
-        if (name.isBlank() || url.isBlank()) return null
-        
-        return newAnimeSearchResponse(
-            name,
-            url,
-            tvType,
-        ) {
-            addDubStatus(false, episodesNumber)
-            this.year = year
-            this.posterUrl = if (poster.startsWith("http")) poster else "$mainUrl$poster"
-        }
-    }
-    
-    override val mainPage = mainPageOf(
-        "$mainUrl" to "Recently Added", 
-        "$mainUrl/anime-list?sort_by=rate&page=" to "Most rated",
-        "$mainUrl/anime-list?sort_by=created_at&page=" to "Recently added List",
-        "$mainUrl/anime-list?states=finished&page=" to "Completed"
-    )
-    
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + (if (request.data.contains("?")) "" else page), interceptor = cfInterceptor).document
-        val list = doc.select("div.recent-episode, div.item.episode, div.content-inner").mapNotNull { element ->
-            element.toSearchResponse()
+        val doc = app.get("$mainUrl/", interceptor = cfInterceptor).document
+        val list = doc.select("div.recent-episode").mapNotNull {
+            val title = it.selectFirst(".name")?.text() ?: return@mapNotNull null
+            val href = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            val posterUrl = it.selectFirst(".image img")?.let { img ->
+                img.attr("data-src").ifEmpty { img.attr("src") }
+            }
+            val epNum = it.selectFirst(".episode-number")?.text()
+                ?.replace("الحلقة :", "")?.trim()?.toIntOrNull()
+
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
+                addSub(epNum)
+            }
         }
-        return newHomePageResponse(request.name, list) as HomePageResponse
+        return newHomePageResponse(listOf(HomePageList("Latest Added", list)), false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val q = query.replace(" ","+")
-        return app.get("$mainUrl/search?query=$q").document.select("div.content.ratable").mapNotNull {
-            it.toSearchResponse()
-        }
-    }
-    
-    override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
-
-        val title = doc.select("span h1").text().replace("\\(.*".toRegex(),"")
-        val poster = mainUrl + doc.select("div.poster img").attr("data-original")
-        val description = doc.select(".story p").text()
-        val genre = doc.select("p.genres a").map {
-            it.text()
-        }
-        val year = doc.select(".info-table div:contains(تاريخ الانتاج) span.info").text().split("-")[0].toIntOrNull()
-        val status = doc.select(".info-table div:contains(حالة الأنمي) span.info").text().let { if(it.contains("مستمر")) ShowStatus.Ongoing else ShowStatus.Completed }
-        val nativeName = doc.select("span[title=\"الاسم باليابانية\"]").text().replace(".*:".toRegex(),"")
-        val type = doc.select("h1 small").text().let {
-            if (it.contains("movie")) TvType.AnimeMovie
-            else if (it.contains("ova|ona".toRegex())) TvType.OVA
-            else TvType.Anime
-        }
-
-        val mallink = doc.select("a.blue.cta:contains(المزيد من المعلومات)").attr("href")
-        val malId = if(mallink.contains("myanimelist")) mallink.replace(".*e\\/|\\/.*".toRegex(),"").toIntOrNull() else null
-        
-        val episodes = arrayListOf<Episode>()
-        val episodeElements = doc.select(".episode-link")
-        if(episodeElements.isEmpty()) {
-            episodes.add(newEpisode(url) {
-                name = "Watch"
-            })
-        } else {
-            episodeElements.forEach {
-                val a = it.select("a")
-                episodes.add(newEpisode(mainUrl + a.attr("href")) {
-                    name = a.text().replace(":"," ")
-                    episode = a.select("span").not(".pull-left").last()?.text()?.toIntOrNull()
-                })
+        return app.get("$mainUrl/search?query=$query", interceptor = cfInterceptor).document.select(".anime-card-container, .content .item, .recent-episode").mapNotNull {
+            val title = it.selectFirst(".name")?.text() ?: return@mapNotNull null
+            val href = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            val posterUrl = it.selectFirst("img")?.let { img ->
+                img.attr("data-original").ifEmpty { img.attr("data-src").ifEmpty { img.attr("src") } }
+            }
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
             }
         }
-        return newAnimeLoadResponse(title, url, type) {
-            addMalId(malId)
-            japName = nativeName
-            engName = title
-            posterUrl = poster
-            this.year = year
-            addEpisodes(if(title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes)
-            plot = description
-            tags = genre
-            showStatus = status
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val doc = app.get(url, interceptor = cfInterceptor).document
+        val title = doc.selectFirst("h1")?.text()?.replace("(anime)", "")?.trim() ?: ""
+        val poster = doc.selectFirst(".poster img")?.let { img ->
+            img.attr("data-original").ifEmpty { img.attr("src") }
+        }
+        val description = doc.selectFirst(".story")?.text()
+        val genre = doc.select(".genres a").map { it.text() }
+        val statusText = doc.select(".info-table .info").find { it.parent()?.selectFirst(".head")?.text()?.contains("حالة") == true }?.text()
+        
+        val episodes = doc.select("ul.episodes-links li a").mapNotNull {
+            val href = it.attr("href")
+            // Structure: <span>الحلقة</span> <span class="separator">:</span> <span>1</span>
+            val epNum = it.select("span").dropLast(1).lastOrNull()?.text()?.toIntOrNull() ?: it.select("span").last()?.text()?.toIntOrNull()
+            // Adjusted logic: usually the last span is the number. 
+            // Previous logic: `name = it.select("span").dropLast(1).lastOrNull()?.text()`. 
+            // In the HTML: <span>الحلقة</span> <span class="separator">:</span> <span>1</span>
+            // last() is <span>1</span>. dropLast(1).last() is separator. dropLast(2).last() is title.
+            // Actually, `it.select("span").last()?.text()` gives "1".
+            
+            newEpisode(href) {
+                this.episode = epNum
+                this.name = "Episode $epNum"
+            }
+        }
+
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
+            this.posterUrl = poster
+            this.plot = description
+            this.tags = genre
+            this.showStatus = when (statusText) {
+                "مستمر" -> ShowStatus.Ongoing
+                "منتهي" -> ShowStatus.Completed
+                else -> null
+            }
+            addEpisodes(DubStatus.Subbed, if (episodes.isEmpty()) emptyList() else episodes)
         }
     }
-    
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
-        doc.select("div.item a[data-src]").forEach {
-            it.attr("data-src").let { url ->
-                if(url.startsWith("https://animetitans.net/")) {
-                    val iframe = app.get(url).document
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "Animetitans " + it.text(),
-                            iframe.select("script").last()?.data()?.substringAfter("source: \"")?.substringBefore("\"").toString(),
-                            ExtractorLinkType.M3U8
-                        ) {
-                            quality = Qualities.Unknown.value
-                            referer = this@AnimeBlkomProvider.mainUrl
-                        }
-                    )
-                } else if(it.text() == "Blkom") {
-                    val iframe = app.get(url).document
-                    iframe.select("source").forEach { source ->
-                        callback.invoke(
-                            newExtractorLink(
-                                this.name,
-                                it.text(),
-                                source.attr("src"),
-                                ExtractorLinkType.VIDEO
-                            ) {
-                                quality = source.attr("res").toIntOrNull() ?: Qualities.Unknown.value
-                                referer = this@AnimeBlkomProvider.mainUrl
-                            }
-                        )
-                    }
-                } else {
-                    var sourceUrl = url
-                    if(it.text().contains("Google")) sourceUrl = "http://gdriveplayer.to/embed2.php?link=$url"
-                    loadExtractor(sourceUrl, mainUrl, subtitleCallback, callback)
-                }
+        val doc = app.get(data, interceptor = cfInterceptor).document
+        
+        // 1. Direct Downloads from Modal
+        doc.select("#download .panel-body a.btn").forEach {
+            val link = it.attr("href")
+            val qualityText = it.text() // e.g., "360p 45.74 MiB"
+            val quality = qualityText.replace("p.*".toRegex(), "").trim().toIntOrNull() ?: Qualities.Unknown.value
+            if (link.isNotBlank()) {
+                 callback(
+                   newExtractorLink(
+                       this.name,
+                       "Download ${quality}p",
+                       link,
+                       ExtractorLinkType.VIDEO
+                   ) {
+                       this.quality = quality
+                   }
+                )
             }
         }
-        doc.select(".panel .panel-body a").forEach {
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    it.attr("title") + " " + it.select("small").text() + " Download Source",
-                    it.attr("href"),
-                    ExtractorLinkType.VIDEO
-                ) {
-                    quality = it.text().replace("p.*| ".toRegex(),"").toIntOrNull() ?: Qualities.Unknown.value
-                    referer = this@AnimeBlkomProvider.mainUrl
-                }
-            )
+
+        // 2. Stream Servers
+        doc.select(".servers .server a").forEach {
+            val link = it.attr("data-src")
+            val name = it.text()
+            if (link.isNotBlank()) {
+                 loadExtractor(link, data, subtitleCallback, callback)
+            }
         }
+
         return true
     }
 }
