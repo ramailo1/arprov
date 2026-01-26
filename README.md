@@ -64,7 +64,7 @@ New plugins or those undergoing maintenance/updates.
 
 | Provider | Status | Progress |
 | :--- | :--- | :--- |
-| **AnimeBlkom** | 🌐 WebView-Only (Turnstile) | `Testing` |
+| **AnimeBlkom** | 🌐 Hybrid WebView | `Testing` |
 | **RistoAnime** | 🛠️ WebView Enabled | `Soon` |
 | **Shahid4u** | 🛠️ URL Updated | `Soon` |
 | **Shed4u** | 🛠️ URL Updated | `Soon` |
