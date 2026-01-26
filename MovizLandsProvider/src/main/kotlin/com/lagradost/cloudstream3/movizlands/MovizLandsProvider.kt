@@ -136,92 +136,84 @@ private fun getSeasonFromString(sName: String): Int {
         val synopsis = doc.select("section.story").text()
         val trailer = doc.select("div.InnerTrailer iframe").attr("data-src")
         var tags = sdetails.select("li:has(.fa-film) a").map { it.text() }
-	val recommendations = doc.select(".BlocksUI#LoadFilter div.Small--Box").mapNotNull { element ->
-                element.toSearchResponse()
-        }
-
-
-        return if (isMovie) {
-        newMovieLoadResponse(
-                title.cleanTitle().replace("$year",""),
-                url,
-                TvType.Movie,
-        val recommendation = doc.select(".related--Posts .Small--Box").mapNotNull {
+        val recommendations = doc.select(".related--Posts .Small--Box").mapNotNull {
             it.toSearchResponse()
         }
 
-        if (isMovie) {
-            newMovieLoadResponse(title, url, TvType.Movie,
-                dataUrl = doc.select(".BTNSDownWatch a.watch").attr("abs:href")
-            ) {
+        return if (isMovie) {
+            newMovieLoadResponse(title, url, TvType.Movie, doc.select(".BTNSDownWatch a.watch").attr("abs:href")) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.tags = tags
                 this.plot = synopsis
-                this.recommendations = recommendation
+                this.recommendations = recommendations
             }
         } else {
             val episodes = ArrayList<Episode>()
-            // Try to find episodes list directly
             val episodeElements = doc.select(".EpisodesList .EpisodeItem")
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { element ->
                     val epUrl = element.select("a").attr("abs:href")
                     if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
                         episodes.add(
+                            newEpisode(epUrl) {
+                                this.episode = element.select("em").text().getIntFromText()
+                                this.name = element.text()
                             }
                         )
                     }
                 }
+            } else {
+                doc.select(".BlockItem").forEach { element ->
+                    val blockUrl = element.select("a").attr("abs:href")
+                    if (blockUrl.isNotEmpty()) {
+                         val blockName = element.select(".BlockTitle, .title").text()
+                         episodes.add(
+                             newEpisode(blockUrl) {
+                                 this.name = blockName
+                             }
+                         )
+                    }
+                }
             }
-                                
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-		    this.posterUrl = posterUrl?.getFullSize()
-		    this.tags = tags
-               }
+                this.posterUrl = posterUrl
+                this.year = year
+                this.tags = tags
+                this.plot = synopsis
+                this.recommendations = recommendations
             }
         }
     }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data is the movie/series detail page URL
         val doc = app.get(data).document
         
-        // Find the watch page link. In the sample it's often a button or just /watch/ appended.
-        // Try selecting the "Watch Now" button first.
-        val watchUrl = doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() } 
-                      ?: "${data.trimEnd('/')}/watch/"
+        val watchUrl = doc.select(".BTNSDownWatch a.watch").attr("abs:href").takeIf { it.isNotEmpty() } 
+                      ?: doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
+                      ?: if (data.endsWith("/watch/")) data else "${data.trimEnd('/')}/watch/"
 
-        val watchDoc = app.get(watchUrl).document
+        val watchDoc = if (watchUrl == data) doc else app.get(watchUrl).document
         
-        // Extract data-watch links from servers list (e.g., li[data-watch="..."])
-        watchDoc.select("li[data-watch]").forEach { li ->
+        watchDoc.select("ul#watch li").forEach { li ->
             val serverUrl = li.attr("data-watch")
-            if (serverUrl.isNotEmpty()) {
-                loadExtractor(serverUrl, watchUrl, subtitleCallback, callback)
-            }
-        }
-
-        // Also check if there's an iframe directly in WatchIframe (the active one)
-        watchDoc.select(".WatchIframe iframe").attr("abs:src").takeIf { it.isNotEmpty() }?.let { iframeUrl ->
-            loadExtractor(iframeUrl, watchUrl, subtitleCallback, callback)
-        }
-
-        // Check for download links as fallback
-        doc.select("a.download").attr("abs:href").takeIf { it.isNotEmpty() }?.let { downloadUrl ->
-            val downloadDoc = app.get(downloadUrl).document
-            downloadDoc.select(".DownloadsList a, .Downloads li a").forEach { a ->
-                val dlLink = a.attr("abs:href")
-                if (dlLink.isNotEmpty()) {
-                    loadExtractor(dlLink, downloadUrl, subtitleCallback, callback)
+            val serverName = li.text().trim()
+            if (serverUrl.startsWith("http")) {
+                loadExtractor(serverUrl, data, subtitleCallback) { link ->
+                    callback(
+                        link.copy(
+                            name = "$serverName ${link.name}"
+                        )
+                    )
                 }
             }
         }
-
         return true
     }
 }
