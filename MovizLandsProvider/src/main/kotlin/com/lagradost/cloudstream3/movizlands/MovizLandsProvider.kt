@@ -42,16 +42,18 @@ class MovizLandsProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("div.Small--Box, .BlockItem")
-        val title = url.select("h3, .BlockTitle").text()
-        val img = url.select("img")
-        val posterUrl = img?.attr("src")?.ifEmpty { img?.attr("data-src") }
-        val year = url.select(".WatchTime, .InfoEndBlock li:last-child").text()?.getIntFromText()
-        var quality = url.select(".Quality, .RestInformation li:last-child").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
+        val title = select("h3, .BlockTitle").text()
+        val img = select("img").first()
+        val posterUrl = img?.attr("data-src")?.ifEmpty { null } ?: img?.attr("abs:src")
+        val year = select(".WatchTime, .InfoEndBlock li:last-child, .RestInformation li:last-child").text()?.getIntFromText()
+        var quality = select(".Quality, .RestInformation li:first-child").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
         val tvtype = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
+        
+        val url = select("a").first()?.attr("abs:href") ?: return null
+
         return newMovieSearchResponse(
             title.cleanTitle(),
-            url.select("a").attr("href"),
+            url,
             tvtype,
         ) {
             this.posterUrl = posterUrl
@@ -164,7 +166,7 @@ private fun getSeasonFromString(sName: String): Int {
 		 doc.select(".EpisodesList .EpisodeItem").forEach { element ->
 			 if(!element.text().contains("Full")){
 				 episodes.add(
-					 newEpisode(element.select("a").attr("href")) {
+					 newEpisode(element.select("a").attr("abs:href")) {
                                             this.episode = element.select("em").text().getIntFromText()
 					 }
 				 )
@@ -179,26 +181,26 @@ private fun getSeasonFromString(sName: String): Int {
 			// addTrailer(trailer)
                }
 	    }else{	    
-            posterUrl = img?.attr("src")?.ifEmpty { img?.attr("data-src") }
+            posterUrl = img?.attr("abs:src")?.ifEmpty { img?.attr("data-src") }
 	    tags = fBlock?.select(".RestInformation span")!!.mapNotNull { t ->
                 t.text()
             }
 	    title = doc.select(".PageTitle .H1Title").text().cleanTitle()
-            if(doc.select(".BlockItem a").attr("href").contains("/series/")){//seasons
+            if(doc.select(".BlockItem a").attr("abs:href").contains("/series/")){//seasons
                 doc.select(".BlockItem").forEach { seas ->
-                    val pageIt = seas.select("a").attr("href")
+                    val pageIt = seas.select("a").attr("abs:href")
                     val Sedoc = app.get(pageIt).document
                     val pagEl = Sedoc.select(".pagination > div > ul > li").isNotEmpty()
                     if(pagEl) {
                             Sedoc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach {
-                                val epidoc = app.get(it.attr("href")).document
+                                val epidoc = app.get(it.attr("abs:href")).document
                                     epidoc.select(".BlockItem").forEach { element ->
                                     episodes.add(
-                                        newEpisode(element.select("a").attr("href")) {
+                                        newEpisode(element.select("a").attr("abs:href")) {
                                             this.name = element.select(".BlockTitle").text()
                                             this.season = getSeasonFromString(element.select(".BlockTitle").text())
                                             this.episode = element.select(".EPSNumber").text().getIntFromText()
-					                        this.posterUrl = element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+					                        this.posterUrl = element.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
                                         }
                                     )
                                 }
@@ -206,11 +208,11 @@ private fun getSeasonFromString(sName: String): Int {
                         }else{
                         Sedoc.select(".BlockItem").forEach { el ->
                         episodes.add(
-                            newEpisode(el.select("a").attr("href")) {
+                            newEpisode(el.select("a").attr("abs:href")) {
                                     this.name = el.select(".BlockTitle").text()
                                     this.season = getSeasonFromString(el.select(".BlockTitle").text())
                                     this.episode = el.select(".EPSNumber").text().getIntFromText()
-				                    this.posterUrl = el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+				                    this.posterUrl = el.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
                                 }
                             )
                         }
@@ -222,15 +224,15 @@ private fun getSeasonFromString(sName: String): Int {
                     val pagSt = if(pagEl) true else false
                     if(pagSt){
                         doc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach { eppages ->
-                            val it = eppages.attr("href")
+                            val it = eppages.attr("abs:href")
                             val epidoc = app.get(it).document
                                 epidoc.select(".BlockItem").forEach { element ->
                                 episodes.add(
-                                    newEpisode(element.select("a").attr("href")) {
+                                    newEpisode(element.select("a").attr("abs:href")) {
                                         this.name = element.select(".BlockTitle").text()
                                         this.season = getSeasonFromString(element.select(".BlockTitle").text())
                                         this.episode = element.select(".EPSNumber").text().getIntFromText()    
-					                    this.posterUrl = element.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+					                    this.posterUrl = element.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
                                     }
                                 )
                             }
@@ -238,11 +240,11 @@ private fun getSeasonFromString(sName: String): Int {
                     }else{   
                     doc.select(".BlockItem").forEach { el ->
                     episodes.add(
-                        newEpisode(el.select("a").attr("href")) {
+                        newEpisode(el.select("a").attr("abs:href")) {
                                 this.name = el.select(".BlockTitle").text()
                                 this.season = getSeasonFromString(el.select(".BlockTitle").text())
                                 this.episode = el.select(".EPSNumber").text().getIntFromText()
-				                this.posterUrl = el.select("img:last-of-type").attr("src")?.ifEmpty { img?.attr("data-src") }
+				                this.posterUrl = el.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
                             }
                         )
                     }
@@ -262,14 +264,17 @@ private fun getSeasonFromString(sName: String): Int {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // data is the movie/series detail page URL
         val doc = app.get(data).document
         
-        // Find the watch page link (usually ends in /watch/)
-        val watchUrl = doc.select("a.watch").attr("href").takeIf { it.isNotEmpty() } ?: "${data.trimEnd('/')}/watch"
+        // Find the watch page link. In the sample it's often a button or just /watch/ appended.
+        // Try selecting the "Watch Now" button first.
+        val watchUrl = doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() } 
+                      ?: "${data.trimEnd('/')}/watch/"
 
         val watchDoc = app.get(watchUrl).document
         
-        // Extract data-watch links from servers list
+        // Extract data-watch links from servers list (e.g., li[data-watch="..."])
         watchDoc.select("li[data-watch]").forEach { li ->
             val serverUrl = li.attr("data-watch")
             if (serverUrl.isNotEmpty()) {
@@ -277,16 +282,16 @@ private fun getSeasonFromString(sName: String): Int {
             }
         }
 
-        // Also check if there's an iframe directly in WatchIframe (often present on first load/default)
-        watchDoc.select(".WatchIframe iframe").attr("src").takeIf { it.isNotEmpty() }?.let { iframeUrl ->
+        // Also check if there's an iframe directly in WatchIframe (the active one)
+        watchDoc.select(".WatchIframe iframe").attr("abs:src").takeIf { it.isNotEmpty() }?.let { iframeUrl ->
             loadExtractor(iframeUrl, watchUrl, subtitleCallback, callback)
         }
 
-        // Check for download links as fallback (redundancy)
-        doc.select("a.download").attr("href").takeIf { it.isNotEmpty() }?.let { downloadUrl ->
+        // Check for download links as fallback
+        doc.select("a.download").attr("abs:href").takeIf { it.isNotEmpty() }?.let { downloadUrl ->
             val downloadDoc = app.get(downloadUrl).document
-            downloadDoc.select(".DownloadsList a").forEach { a ->
-                val dlLink = a.attr("href")
+            downloadDoc.select(".DownloadsList a, .Downloads li a").forEach { a ->
+                val dlLink = a.attr("abs:href")
                 if (dlLink.isNotEmpty()) {
                     loadExtractor(dlLink, downloadUrl, subtitleCallback, callback)
                 }
