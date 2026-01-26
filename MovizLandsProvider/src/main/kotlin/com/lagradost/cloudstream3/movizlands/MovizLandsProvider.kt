@@ -132,24 +132,24 @@ private fun getSeasonFromString(sName: String): Int {
     override suspend fun load(url: String): LoadResponse {
         var doc = app.get(url).document
         
-        // Poster (Updated to .MainSingle .image img)
-        val posterUrl = doc.select(".MainSingle .image img").attr("src").ifEmpty {
-            doc.select(".MainSingle .image img").attr("data-src")
+        // Poster (Prioritize data-src)
+        val posterUrl = doc.select(".MainSingle .image img").attr("data-src").ifEmpty {
+            doc.select(".MainSingle .image img").attr("src")
         }
 
-        // Title (Updated to h1.PostTitle)
+        // Title
         var title = doc.select("h1.PostTitle").text().cleanTitle()
         
-        // Year (Updated to .RightTaxContent li with calendar icon)
+        // Year
         val year = doc.select(".RightTaxContent li:has(.fa-calendar) a").text()?.getIntFromText()
         
-        // Plot (Updated to .StoryArea)
+        // Plot
         val synopsis = doc.select(".StoryArea").text()
         
-        // Tags (Updated to .RightTaxContent li with bars icon)
+        // Tags
         var tags = doc.select(".RightTaxContent li:has(.fa-bars) a").map { it.text() }
         
-        // Recommendations (Updated to .mitatagall or .otherser)
+        // Recommendations
         val recommendations = doc.select(".mitatagall .Small--Box, .otherser .Small--Box").mapNotNull {
             it.toSearchResponse()
         }
@@ -166,7 +166,7 @@ private fun getSeasonFromString(sName: String): Int {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElements = doc.select(".allepcont a") // Using the tab content class directly
+            val episodeElements = doc.select(".allepcont a")
             
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { element ->
@@ -176,13 +176,12 @@ private fun getSeasonFromString(sName: String): Int {
                             newEpisode(epUrl) {
                                 this.episode = element.select(".epnum").text().getIntFromText()
                                 this.name = element.select("div.ep-info h2").text().ifEmpty { element.text() }
-                                this.posterUrl = element.select("img").attr("src").ifEmpty { element.select("img").attr("data-src") }
+                                this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
                             }
                         )
                     }
                 }
             } else {
-                 // Fallback for different layout or single episode listing
                  doc.select(".EpisodesList .EpisodeItem").forEach { element ->
                     val epUrl = element.select("a").attr("abs:href")
                     if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
@@ -215,9 +214,13 @@ private fun getSeasonFromString(sName: String): Int {
     ): Boolean {
         val doc = app.get(data).document
         
-        val watchUrl = doc.select(".BTNSDownWatch a.watch").attr("abs:href").takeIf { it.isNotEmpty() } 
-                      ?: doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
-                      ?: if (data.endsWith("/watch/")) data else "${data.trimEnd('/')}/watch/"
+        val watchUrl = if (doc.select("ul#watch li").isNotEmpty()) {
+            data
+        } else {
+            doc.select(".BTNSDownWatch a.watch").attr("abs:href").takeIf { it.isNotEmpty() }
+                ?: doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
+                ?: if (data.endsWith("/watch/")) data else "${data.trimEnd('/')}/watch/"
+        }
 
         val watchDoc = if (watchUrl == data) doc else app.get(watchUrl).document
         
