@@ -26,7 +26,7 @@ open class Anime4upProvider : MainAPI() {
                 val title = it.select("div.main-didget-head h3").text()
                 // Filter sections as requested
                 if (title.contains("أخر الحلقات المضافة")) {
-                    val list = it.select("div.anime-card-container, div.episodes-card-container").map { anime ->
+                    val list = it.select("div.anime-card-container, div.episodes-card-container, div.themexblock").mapNotNull { anime ->
                         anime.toSearchResponse()
                     }.distinct()
                     HomePageList(title, list, isHorizontalImages = true)
@@ -36,7 +36,7 @@ open class Anime4upProvider : MainAPI() {
         // Add Anime Movies section
         try {
             val moviesDoc = app.get("$mainUrl/anime-type/movie-3/").document
-            val moviesList = moviesDoc.select(".anime-card-container").map { anime ->
+            val moviesList = moviesDoc.select(".anime-card-container").mapNotNull { anime ->
                 anime.toSearchResponse()
             }.distinct()
             if (moviesList.isNotEmpty()) {
@@ -49,30 +49,48 @@ open class Anime4upProvider : MainAPI() {
         return newHomePageResponse(homeList, hasNext = false)
     }
 
-    private fun Element.toSearchResponse(): SearchResponse {
-        val imgElement = select("div.hover > img")
-        val url = select("div.hover > a").attr("href")
-            .replace("-%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-.*".toRegex(), "")
-            .replace("episode", "anime")
-        
-        // Prioritize data-src for lazy loaded images on main page
-        val posterUrl = imgElement.attr("data-src").ifEmpty { imgElement.attr("src") }
-        
-        val title = imgElement.attr("alt")
-        
-        val typeText = select("div.anime-card-type > a").text()
-        val type =
-            if (typeText.contains("TV|Special".toRegex())) TvType.Anime
-            else if (typeText.contains("OVA|ONA".toRegex())) TvType.OVA
-            else if (typeText.contains("Movie")) TvType.AnimeMovie
-            else TvType.Others
-        return newAnimeSearchResponse(
-            title,
-            url,
-            type,
-        ) {
-            this.posterUrl = posterUrl
+    private fun Element.toSearchResponse(): SearchResponse? {
+        // Case 1: Standard Anime Card (Movies, Slider)
+        val hoverDiv = selectFirst("div.hover")
+        if (hoverDiv != null) {
+            val url = hoverDiv.select("a").attr("href")
+                .replace("-%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-.*".toRegex(), "")
+                .replace("episode", "anime")
+            
+            val imgElement = hoverDiv.select("img")
+            // Prioritize data-image (slider/movies) -> data-src (lazy) -> src (fallback)
+            val posterUrl = imgElement.attr("data-image").ifEmpty {
+                imgElement.attr("data-src").ifEmpty { imgElement.attr("src") }
+            }
+            
+            val title = imgElement.attr("alt")
+            val typeText = select("div.anime-card-type > a").text()
+            val type =
+                if (typeText.contains("TV|Special".toRegex())) TvType.Anime
+                else if (typeText.contains("OVA|ONA".toRegex())) TvType.OVA
+                else if (typeText.contains("Movie")) TvType.AnimeMovie
+                else TvType.Others
+            return newAnimeSearchResponse(title, url, type) { this.posterUrl = posterUrl }
         }
+
+        // Case 2: Pinned Card / Episode (Latest Added)
+        val pinnedCard = selectFirst("div.pinned-card") ?: if (this.hasClass("pinned-card")) this else null
+        if (pinnedCard != null) {
+             val linkElement = pinnedCard.selectFirst("a.image")
+             if (linkElement != null) {
+                 val url = linkElement.attr("href")
+                    .replace("-%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-.*".toRegex(), "")
+                    .replace("episode", "anime")
+                 val title = linkElement.attr("title")
+                 val style = linkElement.attr("style")
+                 val posterUrl = style.substringAfter("url(\"").substringBefore("\")")
+                     .ifEmpty { style.substringAfter("url(").substringBefore(")") }
+                 
+                 return newAnimeSearchResponse(title, url, TvType.Anime) { this.posterUrl = posterUrl }
+             }
+        }
+        
+        return null
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
