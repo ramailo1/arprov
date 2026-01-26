@@ -30,52 +30,57 @@ class AnimeBlkomProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (request.data == mainUrl) {
-            if (page <= 1) "$mainUrl/" else "$mainUrl/recently-added?page=$page"
+            if (page <= 1) "$mainUrl/" else "$mainUrl/?page=$page"
         } else {
             "${request.data}$page"
         }
         
         val doc = app.get(url, interceptor = cfInterceptor).document
-        val list = doc.select("div.recent-episode, div.anime-card-container, div.item.episode").mapNotNull {
+        val list = doc.select("div.recent-episode.episode, div.content").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, list)
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = selectFirst(".name")?.text() ?: return null
+        val title = selectFirst("div.text div.name, div.info div.name a")?.text() ?: return null
         val href = selectFirst("a")?.attr("href") ?: return null
-        val posterUrl = selectFirst("img")?.let { img ->
-            img.attr("data-original").ifEmpty { img.attr("data-src").ifEmpty { img.attr("src") } }
+        val posterUrl = selectFirst("div.poster img.lazy")?.let { img ->
+            val dataOriginal = img.attr("data-original")
+            if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" else dataOriginal
         }
-        val epNum = selectFirst(".episode-number")?.text()
-            ?.replace("الحلقة :", "")?.trim()?.toIntOrNull()
+        val epNum = selectFirst("div.episode-number")?.text()
+            ?.replace("الحلقة :", "")?.replace("الحلقة", "")?.trim()?.toIntOrNull()
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
-            addSub(epNum)
+            if (epNum != null) addSub(epNum)
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.get("$mainUrl/search?query=$query", interceptor = cfInterceptor).document.select(".anime-card-container, .content .item, .recent-episode").mapNotNull {
-            it.toSearchResponse()
-        }
+        return app.get("$mainUrl/search?query=$query", interceptor = cfInterceptor).document
+            .select("div.content, div.recent-episode.episode").mapNotNull {
+                it.toSearchResponse()
+            }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, interceptor = cfInterceptor).document
         val title = doc.selectFirst("h1")?.text()?.replace("(anime)", "")?.trim() ?: ""
-        val poster = doc.selectFirst(".poster img")?.let { img ->
-            img.attr("data-original").ifEmpty { img.attr("src") }
+        val poster = doc.selectFirst("div.poster img")?.let { img ->
+            val dataOriginal = img.attr("data-original")
+            if (dataOriginal.startsWith("/")) "$mainUrl$dataOriginal" else dataOriginal
         }
         val description = doc.selectFirst(".story")?.text()
         val genre = doc.select(".genres a").map { it.text() }
-        val statusText = doc.select(".info-table .info").find { it.parent()?.selectFirst(".head")?.text()?.contains("حالة") == true }?.text()
+        val statusText = doc.select(".info-table .info").find { 
+            it.parent()?.selectFirst(".head")?.text()?.contains("حالة") == true 
+        }?.text()
         
         val episodes = doc.select("ul.episodes-links li a").mapNotNull {
             val href = it.attr("href")
-            val epNum = it.select("span").dropLast(1).lastOrNull()?.text()?.toIntOrNull() ?: it.select("span").last()?.text()?.toIntOrNull()
+            val epNum = it.select("span").last()?.text()?.toIntOrNull()
             
             newEpisode(href) {
                 this.episode = epNum
@@ -107,7 +112,7 @@ class AnimeBlkomProvider : MainAPI() {
         // 1. Direct Downloads from Modal
         doc.select("#download .panel-body a.btn").forEach {
             val link = it.attr("href")
-            val qualityText = it.text() // e.g., "360p 45.74 MiB"
+            val qualityText = it.text()
             val quality = qualityText.replace("p.*".toRegex(), "").trim().toIntOrNull() ?: Qualities.Unknown.value
             if (link.isNotBlank()) {
                  callback(
@@ -124,9 +129,8 @@ class AnimeBlkomProvider : MainAPI() {
         }
 
         // 2. Stream Servers
-        doc.select(".servers .server a").forEach {
+        doc.select(".servers .server a, .servers a[data-src]").forEach {
             val link = it.attr("data-src")
-            val name = it.text()
             if (link.isNotBlank()) {
                  loadExtractor(link, data, subtitleCallback, callback)
             }
