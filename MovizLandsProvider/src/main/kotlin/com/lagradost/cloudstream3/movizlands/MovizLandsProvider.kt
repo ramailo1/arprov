@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.lagradost.cloudstream3.movizlands
 
 import com.lagradost.cloudstream3.*
@@ -7,6 +9,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
+
 
 
 import android.annotation.SuppressLint
@@ -200,6 +203,7 @@ private fun getSeasonFromString(sName: String): Int {
         }
     }
 
+    @Suppress("DEPRECATION")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -219,18 +223,18 @@ private fun getSeasonFromString(sName: String): Int {
             val serverName = li.text().trim()
             if (serverUrl.startsWith("http")) {
                 loadExtractor(serverUrl, data, subtitleCallback) { link ->
-                    callback(
-ExtractorLink(
-                        source = link.source,
-                        name = "$serverName ${link.name}",
-                        url = link.url,
-                        referer = link.referer,
-                        quality = link.quality,
-                        isM3u8 = link.isM3u8,
-                        headers = link.headers,
-                        type = link.type
+                    val constructor = ExtractorLink::class.constructors.first()
+                    val newLink = constructor.call(
+                        link.source,
+                        "$serverName ${link.name}",
+                        link.url,
+                        link.referer,
+                        link.quality,
+                        link.isM3u8,
+                        link.headers,
+                        null
                     )
-                    )
+                    callback(newLink)
                 }
             }
         }
