@@ -58,13 +58,14 @@ These plugins are fully operational and regularly maintained.
 | **ArabSeed** | Movies & Series | Arabic |
 | **AnimeBlkom** | Anime | Arabic |
 | **Anime4up Pack** | Anime | Arabic |
+| **MovizLands** | Movies & Series | Arabic |
 
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
 
 | Provider | Status | Estimated Fix |
 | :--- | :--- | :--- |
-| **MovizLands** | 🛠️ URL Fixed | Soon |
+
 | **RistoAnime** | 🛠️ WebView Enabled | Soon |
 | **Shahid4u** | 🛠️ URL Updated | Soon |
 | **Shed4u** | 🛠️ URL Updated | Soon |
