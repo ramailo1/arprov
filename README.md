@@ -63,17 +63,15 @@ These plugins are fully operational and regularly maintained.
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
 
-| Provider | Status | Estimated Fix |
+| Provider | Status | Progress |
 | :--- | :--- | :--- |
-
-| **RistoAnime** | 🛠️ WebView Enabled | Soon |
-| **Shahid4u** | 🛠️ URL Updated | Soon |
-| **Shed4u** | 🛠️ URL Updated | Soon |
-
-| **Cima4u Actor** | 🛠️ Refactoring | Soon |
-| **Cima4u Shop** | 🛠️ Extractors Fix | Soon |
-| **EgyDead** | 🔍 Testing | Soon |
-| **GateAnime** | 🏗️ Initial Build | Soon |
+| **RistoAnime** | 🛠️ WebView Enabled | `Soon` |
+| **Shahid4u** | 🛠️ URL Updated | `Soon` |
+| **Shed4u** | 🛠️ URL Updated | `Soon` |
+| **Cima4u Actor** | 🛠️ Refactoring | `Soon` |
+| **Cima4u Shop** | 🛠️ Extractors Fix | `Soon` |
+| **EgyDead** | 🔍 Testing | `Soon` |
+| **GateAnime** | 🏗️ Initial Build | `Soon` |
 
 ### ❌ Down (Currently Broken)
 These plugins are currently non-functional due to site changes or API issues.
@@ -81,7 +79,6 @@ These plugins are currently non-functional due to site changes or API issues.
 | Provider | Known Issue | Status |
 | :--- | :--- | :--- |
 | **Animeiat** | 🛑 Broken Logic | ⏸️ Paused |
-
 | **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
