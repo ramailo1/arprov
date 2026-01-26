@@ -131,17 +131,30 @@ private fun getSeasonFromString(sName: String): Int {
         
     override suspend fun load(url: String): LoadResponse {
         var doc = app.get(url).document
-        val sdetails = doc.select(".SingleDetails")
-        var posterUrl = sdetails.select("img")?.attr("data-src")?.getFullSize()
-        val year = sdetails.select("li:has(.fa-clock) a").text()?.getIntFromText()
-        var title = doc.select("h1, h2.postTitle").text()
-        val isMovie = title.contains("عرض|فيلم".toRegex())
-        val synopsis = doc.select("section.story").text()
-        val trailer = doc.select("div.InnerTrailer iframe").attr("data-src")
-        var tags = sdetails.select("li:has(.fa-film) a").map { it.text() }
-        val recommendations = doc.select(".related--Posts .Small--Box").mapNotNull {
+        
+        // Poster (Updated to .MainSingle .image img)
+        val posterUrl = doc.select(".MainSingle .image img").attr("src").ifEmpty {
+            doc.select(".MainSingle .image img").attr("data-src")
+        }
+
+        // Title (Updated to h1.PostTitle)
+        var title = doc.select("h1.PostTitle").text().cleanTitle()
+        
+        // Year (Updated to .RightTaxContent li with calendar icon)
+        val year = doc.select(".RightTaxContent li:has(.fa-calendar) a").text()?.getIntFromText()
+        
+        // Plot (Updated to .StoryArea)
+        val synopsis = doc.select(".StoryArea").text()
+        
+        // Tags (Updated to .RightTaxContent li with bars icon)
+        var tags = doc.select(".RightTaxContent li:has(.fa-bars) a").map { it.text() }
+        
+        // Recommendations (Updated to .mitatagall or .otherser)
+        val recommendations = doc.select(".mitatagall .Small--Box, .otherser .Small--Box").mapNotNull {
             it.toSearchResponse()
         }
+
+        val isMovie = title.contains("عرض|فيلم".toRegex()) || doc.select(".mitatagall").isEmpty()
 
         return if (isMovie) {
             newMovieLoadResponse(title, url, TvType.Movie, doc.select(".BTNSDownWatch a.watch").attr("abs:href")) {
@@ -153,9 +166,24 @@ private fun getSeasonFromString(sName: String): Int {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElements = doc.select(".EpisodesList .EpisodeItem")
+            val episodeElements = doc.select(".allepcont a") // Using the tab content class directly
+            
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { element ->
+                    val epUrl = element.attr("abs:href")
+                    if (epUrl.isNotEmpty()) {
+                        episodes.add(
+                            newEpisode(epUrl) {
+                                this.episode = element.select(".epnum").text().getIntFromText()
+                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text() }
+                                this.posterUrl = element.select("img").attr("src").ifEmpty { element.select("img").attr("data-src") }
+                            }
+                        )
+                    }
+                }
+            } else {
+                 // Fallback for different layout or single episode listing
+                 doc.select(".EpisodesList .EpisodeItem").forEach { element ->
                     val epUrl = element.select("a").attr("abs:href")
                     if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
                         episodes.add(
@@ -164,31 +192,6 @@ private fun getSeasonFromString(sName: String): Int {
                                 this.name = element.text()
                             }
                         )
-                    }
-                }
-            } else if (doc.select(".allepcont a").isNotEmpty()) {
-                doc.select(".allepcont a").forEach { element ->
-                    val epUrl = element.attr("abs:href")
-                    if(epUrl.isNotEmpty()) {
-                        episodes.add(
-                            newEpisode(epUrl) {
-                                this.episode = element.select(".epnum").text().getIntFromText() ?: element.attr("title").getIntFromText()
-                                this.name = element.attr("title").ifEmpty { element.text() }
-                                this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
-                            }
-                        )
-                    }
-                }
-            } else {
-                doc.select(".BlockItem").forEach { element ->
-                    val blockUrl = element.select("a").attr("abs:href")
-                    if (blockUrl.isNotEmpty()) {
-                         val blockName = element.select(".BlockTitle, .title").text()
-                         episodes.add(
-                             newEpisode(blockUrl) {
-                                 this.name = blockName
-                             }
-                         )
                     }
                 }
             }
@@ -223,18 +226,7 @@ private fun getSeasonFromString(sName: String): Int {
             val serverName = li.text().trim()
             if (serverUrl.startsWith("http")) {
                 loadExtractor(serverUrl, data, subtitleCallback) { link ->
-                    val constructor = ExtractorLink::class.constructors.first()
-                    val newLink = constructor.call(
-                        link.source,
-                        "$serverName ${link.name}",
-                        link.url,
-                        link.referer,
-                        link.quality,
-                        link.isM3u8,
-                        link.headers,
-                        null
-                    )
-                    callback(newLink)
+                    callback(link)
                 }
             }
         }
