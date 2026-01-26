@@ -7,20 +7,10 @@ import org.jsoup.nodes.Document
 
 /**
  * Cloudflare-aware request helper for CloudStream providers.
- * 
- * Usage in any provider:
- * ```
- * // For main page / search (graceful failure)
- * val doc = CloudflareHelper.getDocOrNull(url) ?: return emptyList()
- * 
- * // For load() / loadLinks() (throws for WebView trigger)
- * val doc = CloudflareHelper.getDocOrThrow(url)
- * ```
- * 
- * This helper:
- * - Detects all Cloudflare protection types (IUAM, Managed Challenge, Turnstile)
- * - Returns null or throws ErrorLoadingException if blocked
- * - Works with usesWebView = true to trigger WebView when needed
+ *
+ * Usage:
+ *  - getDocOrNull(): returns null if blocked (main page / search)
+ *  - getDocOrThrow(): throws ErrorLoadingException if blocked (load / loadLinks)
  */
 object CloudflareHelper {
 
@@ -30,23 +20,16 @@ object CloudflareHelper {
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3"
     )
 
-    private fun headers(
-        referer: String,
-        custom: Map<String, String>
-    ): Map<String, String> {
-        // Only add Referer if not blank (some sites break with empty Referer)
+    private fun headers(referer: String, custom: Map<String, String>): Map<String, String> {
         val ref = if (referer.isNotBlank()) mapOf("Referer" to referer) else emptyMap()
         return baseHeaders() + ref + custom
     }
 
-    /**
-     * Detects Cloudflare challenge pages (IUAM, Managed, Turnstile, Bot Fight)
-     */
+    /** Detects Cloudflare IUAM, Managed, Turnstile, Bot Fight pages */
     fun isCloudflare(doc: Document): Boolean {
         val title = doc.title()
-
         return (
-            title.contains("Just a moment", true) ||
+            title.contains("Just a moment", ignoreCase = true) ||
             title.isEmpty() && (
                 doc.select("iframe[src*='challenge']").isNotEmpty() ||
                 doc.select("script[src*='challenge']").isNotEmpty()
@@ -58,50 +41,31 @@ object CloudflareHelper {
         )
     }
 
-    /**
-     * Fetches a URL and returns null if Cloudflare is detected.
-     * Use for main page / search where graceful failure is appropriate.
-     * 
-     * @param url The URL to fetch
-     * @param referer Optional referer header (only sent if not blank)
-     * @param customHeaders Optional additional headers to merge
-     * @return Document or null if Cloudflare blocked
-     */
+    /** Fetch a document, return null if Cloudflare blocks */
     suspend fun getDocOrNull(
         url: String,
         referer: String = "",
         customHeaders: Map<String, String> = emptyMap()
     ): Document? {
-
         val response = app.get(
             url,
             headers = headers(referer, customHeaders),
-            allowRedirects = true
+            allowRedirects = true,
+            timeout = 15 // 15s timeout to avoid long black pages
         )
 
-        // Cloudflare often returns 403, 429, or 503
         if (response.code in listOf(403, 429, 503)) return null
 
         val doc = response.document
-        if (isCloudflare(doc)) return null
-        return doc
+        return if (isCloudflare(doc)) null else doc
     }
 
-    /**
-     * Fetches a URL and throws ErrorLoadingException if Cloudflare is detected.
-     * Use in load() and loadLinks() to trigger WebView flow.
-     * 
-     * @param url The URL to fetch
-     * @param referer Optional referer header
-     * @param errorMessage Custom error message for the exception
-     * @throws ErrorLoadingException if Cloudflare is detected
-     */
+    /** Fetch a document, throws ErrorLoadingException if blocked */
     suspend fun getDocOrThrow(
         url: String,
         referer: String = "",
         errorMessage: String = "Cloudflare protection – please open in WebView"
     ): Document {
-        return getDocOrNull(url, referer)
-            ?: throw ErrorLoadingException(errorMessage)
+        return getDocOrNull(url, referer) ?: throw ErrorLoadingException(errorMessage)
     }
 }
