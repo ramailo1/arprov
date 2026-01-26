@@ -163,6 +163,19 @@ private fun getSeasonFromString(sName: String): Int {
                         )
                     }
                 }
+            } else if (doc.select(".allepcont a").isNotEmpty()) {
+                doc.select(".allepcont a").forEach { element ->
+                    val epUrl = element.attr("abs:href")
+                    if(epUrl.isNotEmpty()) {
+                        episodes.add(
+                            newEpisode(epUrl) {
+                                this.episode = element.select(".epnum").text().getIntFromText() ?: element.attr("title").getIntFromText()
+                                this.name = element.attr("title").ifEmpty { element.text() }
+                                this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
+                            }
+                        )
+                    }
+                }
             } else {
                 doc.select(".BlockItem").forEach { element ->
                     val blockUrl = element.select("a").attr("abs:href")
@@ -207,9 +220,16 @@ private fun getSeasonFromString(sName: String): Int {
             if (serverUrl.startsWith("http")) {
                 loadExtractor(serverUrl, data, subtitleCallback) { link ->
                     callback(
-                        link.copy(
-                            name = "$serverName ${link.name}"
-                        )
+newExtractorLink(
+                        link.source,
+                        "$serverName ${link.name}",
+                        link.url,
+                        if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                        link.quality
+                    ) {
+                        this.headers = link.headers
+                        this.referer = link.referer
+                    }
                     )
                 }
             }

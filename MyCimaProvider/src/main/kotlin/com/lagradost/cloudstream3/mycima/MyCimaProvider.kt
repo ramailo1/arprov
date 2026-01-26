@@ -198,7 +198,7 @@ class MyCimaProvider : MainAPI() {
                             "$mainUrl/AjaxCenter/MoreEpisodes/${moreButton.attr("data-term")}/$it"
                         val jsonResponse = app.get(ajaxURL)
                         val json = parseJson<MoreEPS>(jsonResponse.text)
-                        val document = Jsoup.parse(json.output?.replace("""\""", ""))
+                        val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
                         document.select("a").forEach {
                             episodes.add(
                                 newEpisode(it.attr("href")) {
@@ -273,7 +273,7 @@ class MyCimaProvider : MainAPI() {
                                     "$mainUrl/AjaxCenter/MoreEpisodes/${fmoreButton.attr("data-term")}/$it"
                                 val jsonResponse = app.get(ajaxURL)
                                 val json = parseJson<MoreEPS>(jsonResponse.text)
-                                val document = Jsoup.parse(json.output?.replace("""\""", ""))
+                                val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
                                 document.select("a").forEach {
                                     episodes.add(
                                         newEpisode(it.attr("href")) {
