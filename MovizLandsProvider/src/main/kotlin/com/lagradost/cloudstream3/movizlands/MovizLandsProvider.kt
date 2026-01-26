@@ -131,7 +131,7 @@ private fun getSeasonFromString(sName: String): Int {
         val sdetails = doc.select(".SingleDetails")
         var posterUrl = sdetails.select("img")?.attr("data-src")?.getFullSize()
         val year = sdetails.select("li:has(.fa-clock) a").text()?.getIntFromText()
-        var title = doc.select("h2.postTitle").text()
+        var title = doc.select("h1, h2.postTitle").text()
         val isMovie = title.contains("عرض|فيلم".toRegex())
         val synopsis = doc.select("section.story").text()
         val trailer = doc.select("div.InnerTrailer iframe").attr("data-src")
@@ -182,10 +182,11 @@ private fun getSeasonFromString(sName: String): Int {
                }
 	    }else{	    
             posterUrl = img?.attr("abs:src")?.ifEmpty { img?.attr("data-src") }
-	    tags = fBlock?.select(".RestInformation span")!!.mapNotNull { t ->
+	    fBlock?.select(".RestInformation span")?.mapNotNull { t ->
                 t.text()
-            }
-	    title = doc.select(".PageTitle .H1Title").text().cleanTitle()
+            }?.let { tags = it }
+
+	    title = doc.select(".PageTitle .H1Title, h1.postTitle, h1").text().cleanTitle()
             if(doc.select(".BlockItem a").attr("abs:href").contains("/series/")){//seasons
                 doc.select(".BlockItem").forEach { seas ->
                     val pageIt = seas.select("a").attr("abs:href")
