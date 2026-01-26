@@ -146,106 +146,29 @@ private fun getSeasonFromString(sName: String): Int {
                 title.cleanTitle().replace("$year",""),
                 url,
                 TvType.Movie,
-                url
+        val recommendation = doc.select(".related--Posts .Small--Box").mapNotNull {
+            it.toSearchResponse()
+        }
+
+        if (isMovie) {
+            newMovieLoadResponse(title, url, TvType.Movie,
+                dataUrl = doc.select(".BTNSDownWatch a.watch").attr("abs:href")
             ) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.tags = tags
                 this.plot = synopsis
-		this.recommendations = recommendations
-		// addTrailer(trailer)
+                this.recommendations = recommendation
             }
-    }   else    {
+        } else {
             val episodes = ArrayList<Episode>()
-	    val episodesItem = doc.select(".EpisodesList").isNotEmpty()
-	    val fBlock = doc.select(".BlockItem")?.first()
-	    val img = fBlock?.select("img:last-of-type")
-
-	    if(episodesItem){
-		 title = doc.select(".SeriesSingle .ButtonsFilter.WidthAuto span").text()
-		 doc.select(".EpisodesList .EpisodeItem").forEach { element ->
-			 if(!element.text().contains("Full")){
-				 episodes.add(
-					 newEpisode(element.select("a").attr("abs:href")) {
-                                            this.episode = element.select("em").text().getIntFromText()
-					 }
-				 )
-			 }
-		 }
-		newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                	this.posterUrl = posterUrl
-                	this.year = year
-                	this.tags = tags
-                	this.plot = synopsis
-			this.recommendations = recommendations
-			// addTrailer(trailer)
-               }
-	    }else{	    
-            posterUrl = img?.attr("abs:src")?.ifEmpty { img?.attr("data-src") }
-	    fBlock?.select(".RestInformation span")?.mapNotNull { t ->
-                t.text()
-            }?.let { tags = it }
-
-	    title = doc.select(".PageTitle .H1Title, h1.postTitle, h1").text().cleanTitle()
-            if(doc.select(".BlockItem a").attr("abs:href").contains("/series/")){//seasons
-                doc.select(".BlockItem").forEach { seas ->
-                    val pageIt = seas.select("a").attr("abs:href")
-                    val Sedoc = app.get(pageIt).document
-                    val pagEl = Sedoc.select(".pagination > div > ul > li").isNotEmpty()
-                    if(pagEl) {
-                            Sedoc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach {
-                                val epidoc = app.get(it.attr("abs:href")).document
-                                    epidoc.select(".BlockItem").forEach { element ->
-                                    episodes.add(
-                                        newEpisode(element.select("a").attr("abs:href")) {
-                                            this.name = element.select(".BlockTitle").text()
-                                            this.season = getSeasonFromString(element.select(".BlockTitle").text())
-                                            this.episode = element.select(".EPSNumber").text().getIntFromText()
-					                        this.posterUrl = element.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
-                                        }
-                                    )
-                                }
-                            }
-                        }else{
-                        Sedoc.select(".BlockItem").forEach { el ->
+            // Try to find episodes list directly
+            val episodeElements = doc.select(".EpisodesList .EpisodeItem")
+            if (episodeElements.isNotEmpty()) {
+                episodeElements.forEach { element ->
+                    val epUrl = element.select("a").attr("abs:href")
+                    if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
                         episodes.add(
-                            newEpisode(el.select("a").attr("abs:href")) {
-                                    this.name = el.select(".BlockTitle").text()
-                                    this.season = getSeasonFromString(el.select(".BlockTitle").text())
-                                    this.episode = el.select(".EPSNumber").text().getIntFromText()
-				                    this.posterUrl = el.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
-                                }
-                            )
-                        }
-                    }
-                }
-
-                        }   else    {//episodes
-                    val pagEl = doc.select(".pagination > div > ul > li.active > a").isNotEmpty()
-                    val pagSt = if(pagEl) true else false
-                    if(pagSt){
-                        doc.select(".pagination > div > ul > li:nth-child(n):not(:last-child) a").forEach { eppages ->
-                            val it = eppages.attr("abs:href")
-                            val epidoc = app.get(it).document
-                                epidoc.select(".BlockItem").forEach { element ->
-                                episodes.add(
-                                    newEpisode(element.select("a").attr("abs:href")) {
-                                        this.name = element.select(".BlockTitle").text()
-                                        this.season = getSeasonFromString(element.select(".BlockTitle").text())
-                                        this.episode = element.select(".EPSNumber").text().getIntFromText()    
-					                    this.posterUrl = element.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
-                                    }
-                                )
-                            }
-                        }
-                    }else{   
-                    doc.select(".BlockItem").forEach { el ->
-                    episodes.add(
-                        newEpisode(el.select("a").attr("abs:href")) {
-                                this.name = el.select(".BlockTitle").text()
-                                this.season = getSeasonFromString(el.select(".BlockTitle").text())
-                                this.episode = el.select(".EPSNumber").text().getIntFromText()
-				                this.posterUrl = el.select("img:last-of-type").attr("abs:src")?.ifEmpty { img?.attr("data-src") }
                             }
                         )
                     }
