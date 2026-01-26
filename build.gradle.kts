@@ -71,7 +71,7 @@ subprojects {
         val implementation by configurations
 
         // Stubs for all Cloudstream classes
-        apk("com.lagradost:cloudstream3:pre-release")
+        apk("com.github.recloudstream:cloudstream:master-SNAPSHOT")
 
         // these dependencies can include any of those which are added by the app,
         // but you dont need to include any of them if you dont need them
@@ -81,6 +81,7 @@ subprojects {
         implementation("org.jsoup:jsoup:1.13.1") // html parser
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.+")
 		implementation("org.mozilla:rhino:1.7.14")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
     }
 }
 

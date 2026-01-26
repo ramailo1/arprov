@@ -2,6 +2,7 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 
 class AnimeBlkomProvider : MainAPI() {
@@ -49,10 +50,17 @@ class AnimeBlkomProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Try to fetch the page using WebView session cookies
+        // Fetch User-Agent from WebViewResolver if available, otherwise use a default Android one
+        // This is CRITICAL: Cloudflare cookies are bound to the User-Agent.
+        val ua = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+        // Try to fetch the page using WebView session cookies AND matching User-Agent
         val doc = try {
-            CloudflareHelper.getDocOrThrow(data)
-        } catch (_: Exception) {
+            app.get(
+                data, 
+                headers = mapOf("User-Agent" to ua)
+            ).document
+        } catch (e: Exception) {
             // If cookies don't work, force WebView again
             throw ErrorLoadingException("Unable to load links; open in WebView first")
         }

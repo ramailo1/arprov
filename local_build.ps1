@@ -14,4 +14,4 @@ Write-Host "JAVA_HOME: $env:JAVA_HOME"
 Write-Host "ANDROID_HOME: $env:ANDROID_HOME"
 Write-Host "Command: .\gradlew.bat $argsStr"
 
-& .\gradlew.bat $args
+& .\gradlew.bat --refresh-dependencies $args
