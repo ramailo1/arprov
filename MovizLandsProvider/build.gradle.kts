@@ -1,12 +1,12 @@
 // use an integer for version numbers
-version = 1
+version = 2
 
 cloudstream {
     language = "ar"
     status = 1
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     iconUrl = "https://www.google.com/s2/favicons?domain=movizlands.com&sz=%size%"
-    authors = listOf("AntiBotDev")
+    authors = listOf("Ramailo")
 }
 android {
     namespace = "com.lagradost.cloudstream3.movizlands"
