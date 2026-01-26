@@ -4,30 +4,16 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-
-import com.fasterxml.jackson.annotation.JsonProperty
-import okio.ByteString.Companion.decodeBase64
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URL
-import com.fasterxml.jackson.module.kotlin.readValue
 
-
-private fun String.getIntFromText(): Int? {
-    return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
-}
 class WitAnime : Anime4upProvider() {
     override var name = "WitAnime"
     override var mainUrl = "https://witanime.com"
 }
+
 open class Anime4upProvider : MainAPI() {
-    private inline fun <reified T> parseJson(text: String): T {
-        return mapper.readValue(text)
-    }
     override var lang = "ar"
-    override var mainUrl = "https://w1.anime4up.rest" 
+    override var mainUrl = "https://w1.anime4up.rest"
     override var name = "Anime4up"
     override val usesWebView = false
     override val hasMainPage = true
@@ -39,15 +25,14 @@ open class Anime4upProvider : MainAPI() {
             .mapNotNull {
                 val title = it.select("div.main-didget-head h3").text()
                 val list =
-                    it.select("div.anime-card-container, div.episodes-card-container").map {
-                            anime -> anime.toSearchResponse()
+                    it.select("div.anime-card-container, div.episodes-card-container").map { anime ->
+                        anime.toSearchResponse()
                     }.distinct()
                 HomePageList(title, list, isHorizontalImages = title.contains("حلقات"))
             }
         return newHomePageResponse(homeList, hasNext = false)
     }
 
-    
     private fun Element.toSearchResponse(): SearchResponse {
         val imgElement = select("div.hover > img")
         val url = select("div.hover > a").attr("href")
@@ -58,8 +43,8 @@ open class Anime4upProvider : MainAPI() {
         val typeText = select("div.anime-card-type > a").text()
         val type =
             if (typeText.contains("TV|Special".toRegex())) TvType.Anime
-            else if(typeText.contains("OVA|ONA".toRegex())) TvType.OVA
-            else if(typeText.contains("Movie")) TvType.AnimeMovie
+            else if (typeText.contains("OVA|ONA".toRegex())) TvType.OVA
+            else if (typeText.contains("Movie")) TvType.AnimeMovie
             else TvType.Others
         return newAnimeSearchResponse(
             title,
@@ -69,8 +54,6 @@ open class Anime4upProvider : MainAPI() {
             this.posterUrl = posterUrl
         }
     }
-
-
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?search_param=animes&s=$query").document
@@ -90,40 +73,45 @@ open class Anime4upProvider : MainAPI() {
         val typeText = doc.select(".anime-info:contains(النوع) a").text()
         val type =
             if (typeText.contains("TV|Special".toRegex())) TvType.Anime
-            else if(typeText.contains("OVA|ONA".toRegex())) TvType.OVA
-            else if(typeText.contains("Movie")) TvType.AnimeMovie
+            else if (typeText.contains("OVA|ONA".toRegex())) TvType.OVA
+            else if (typeText.contains("Movie")) TvType.AnimeMovie
             else TvType.Others
 
-        val malId = doc.select("a.anime-mal").attr("href").replace(".*e\\/|\\/.*".toRegex(),"").toIntOrNull()
+        val malId = doc.select("a.anime-mal").attr("href").replace(".*e\\/|\\/.*".toRegex(), "").toIntOrNull()
 
-        val episodes = doc.select("div#DivEpisodesList > div").map {
-            val episodeElement = it.select("h3 a")
-            val episodeUrl = episodeElement.attr("href")
-            val episodeTitle = episodeElement.text()
-            val posterUrl = it.select(".hover img").attr("src")
+        // Updated Episodes Selector for new layout
+        val episodes = doc.select("#episodesList .themexblock").mapNotNull {
+            val aTag = it.selectFirst(".pinned-card > a") ?: return@mapNotNull null
+            val episodeUrl = aTag.attr("href")
+            
+            // Image is in style="background-image: url('...')"
+            val style = aTag.attr("style")
+            val posterUrl = style.substringAfter("url(\"").substringBefore("\")")
+                .ifEmpty { style.substringAfter("url('").substringBefore("')") }
+            
+            // Title/Number
+            val infoDiv = it.selectFirst(".pinned-card .info")
+            val episodeName = infoDiv?.selectFirst("h3")?.text() ?: "Episode"
+            val episodeNumText = infoDiv?.selectFirst(".badge.light-soft span")?.text() 
+            val episodeNum = episodeNumText?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+
             newEpisode(episodeUrl) {
-                this.name = episodeTitle
-                this.episode = episodeTitle.getIntFromText()
+                this.name = episodeName
+                this.episode = episodeNum
                 this.posterUrl = posterUrl
             }
         }
+
         return newAnimeLoadResponse(title, url, type) {
             this.apiName = this@Anime4upProvider.name
             addMalId(malId)
             engName = title
             posterUrl = poster
             this.year = year
-            addEpisodes(if(title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes)
+            addEpisodes(if (title.contains("مدبلج")) DubStatus.Dubbed else DubStatus.Subbed, episodes)
             plot = description
-            // this.score = rating
-            
         }
     }
-    data class sources (
-        @JsonProperty("hd"  ) var hd  : Map<String, String>? = null,
-        @JsonProperty("fhd" ) var fhd : Map<String, String>? = null,
-        @JsonProperty("sd"  ) var sd  : Map<String, String>?  = null
-    )
 
     override suspend fun loadLinks(
         data: String,
@@ -132,43 +120,20 @@ open class Anime4upProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        if(data.contains("anime4up")) {
-            val watchJSON = parseJson<sources>(doc.select("input[name=\"wl\"]").attr("value").decodeBase64()?.utf8() ?: "")
-            watchJSON.let { source ->
-                source.fhd?.forEach {
-                    loadExtractor(it.value, data, subtitleCallback, callback)
+        
+        // New Logic: Iterate over UL li elements with data-watch attribute
+        doc.select("ul#episode-servers li[data-watch]").forEach { li ->
+            val link = li.attr("data-watch")
+            if (link.isNotBlank()) {
+                loadExtractor(link, data, subtitleCallback, callback)
+                
+                // Add specific handling for megamax if needed, or if the user wants the /e/ variant for megamax
+                if (link.contains("megamax.me/iframe/")) {
+                     val id = link.substringAfter("/iframe/").substringBefore("\"").substringBefore("'")
+                     if(id.isNotEmpty()) {
+                         loadExtractor("https://megamax.me/e/$id", data, subtitleCallback, callback)
+                     }
                 }
-                source.hd?.forEach {
-                    loadExtractor(it.value, data, subtitleCallback, callback)
-                }
-                source.sd?.forEach {
-                    loadExtractor(it.value, data, subtitleCallback, callback)
-                }
-            }
-            val moshahdaID =  doc.select("input[name=\"moshahda\"]").attr("value").decodeBase64()?.utf8()  ?: ""
-            if(moshahdaID.isNotEmpty()) {
-                mapOf(
-                    "Original" to "download_o",
-                    "720" to "download_x",
-                    "480" to "download_h",
-                    "360" to "download_n",
-                    "240" to "download_l"
-                ).forEach { (quality, qualityCode) ->
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            this.name + " Moshahda",
-                            "https://moshahda.net/$moshahdaID.html?${qualityCode}",
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.quality = quality.toIntOrNull() ?: 1080
-                            referer = "https://moshahda.net"
-                        }
-                    ) }
-            }
-        } else if(data.contains("witanime")) { // witanime
-            doc.select("ul#episode-servers li a").forEach {
-                loadExtractor(it.attr("data-ep-url"), data, subtitleCallback, callback)
             }
         }
         return true
