@@ -42,12 +42,12 @@ class MovizLandsProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("div.Small--Box")
-        val title = url.select("h3").text()
+        val url = select("div.Small--Box, .BlockItem")
+        val title = url.select("h3, .BlockTitle").text()
         val img = url.select("img")
         val posterUrl = img?.attr("src")?.ifEmpty { img?.attr("data-src") }
-        val year = url.select(".WatchTime").text()?.getIntFromText()
-        var quality = url.select(".Quality").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
+        val year = url.select(".WatchTime, .InfoEndBlock li:last-child").text()?.getIntFromText()
+        var quality = url.select(".Quality, .RestInformation li:last-child").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
         val tvtype = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
         return newMovieSearchResponse(
             title.cleanTitle(),
@@ -60,14 +60,19 @@ class MovizLandsProvider : MainAPI() {
         }
     }
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "أضيف حديثا",
-        "$mainUrl/category/movies/page/" to "أفلام",
-        "$mainUrl/series/page/" to "مسلسلات"
+        "$mainUrl/home13/" to "الرئيسية",
+        "$mainUrl/category/افلام-اجنبي/" to "افلام اجنبي",
+        "$mainUrl/last/" to "أضيف حديثا",
+        "$mainUrl/category/مسلسلات-اسيوية/" to "مسلسلات اسيوية",
+        "$mainUrl/category/مسلسلات-اجنبي/" to "مسلسلات اجنبي",
+        "$mainUrl/category/مسلسلات-انمي/" to "مسلسلات انمي",
+        "$mainUrl/category/افلام-اسيوي/" to "افلام اسيوي",
     )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + page).document   
-        val list = doc.select("div.Small--Box").mapNotNull { element ->
+        val url = if (page <= 1) request.data else "${request.data}page/$page/"
+        val doc = app.get(url).document   
+        val list = doc.select("div.Small--Box, .BlockItem").mapNotNull { element ->
             element.toSearchResponse()
         }
         return newHomePageResponse(request.name, list)
@@ -251,17 +256,43 @@ private fun getSeasonFromString(sName: String): Int {
             }
         }
     }
-override suspend fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-	doc.select("code[id*='Embed'] iframe,.DownloadsList a").forEach {
-                            val sourceUrl = it.attr("data-srcout").ifEmpty { it.attr("href") }
-                            loadExtractor(sourceUrl, data, subtitleCallback, callback)
+        
+        // Find the watch page link (usually ends in /watch/)
+        val watchUrl = doc.select("a.watch").attr("href").takeIf { it.isNotEmpty() } ?: "${data.trimEnd('/')}/watch"
+
+        val watchDoc = app.get(watchUrl).document
+        
+        // Extract data-watch links from servers list
+        watchDoc.select("li[data-watch]").forEach { li ->
+            val serverUrl = li.attr("data-watch")
+            if (serverUrl.isNotEmpty()) {
+                loadExtractor(serverUrl, watchUrl, subtitleCallback, callback)
             }
-	return true
+        }
+
+        // Also check if there's an iframe directly in WatchIframe (often present on first load/default)
+        watchDoc.select(".WatchIframe iframe").attr("src").takeIf { it.isNotEmpty() }?.let { iframeUrl ->
+            loadExtractor(iframeUrl, watchUrl, subtitleCallback, callback)
+        }
+
+        // Check for download links as fallback (redundancy)
+        doc.select("a.download").attr("href").takeIf { it.isNotEmpty() }?.let { downloadUrl ->
+            val downloadDoc = app.get(downloadUrl).document
+            downloadDoc.select(".DownloadsList a").forEach { a ->
+                val dlLink = a.attr("href")
+                if (dlLink.isNotEmpty()) {
+                    loadExtractor(dlLink, downloadUrl, subtitleCallback, callback)
+                }
+            }
+        }
+
+        return true
     }
 }
