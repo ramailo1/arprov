@@ -2,7 +2,8 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
 
@@ -12,7 +13,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = false 
+    override val usesWebView = false // Disabled to prevent app-level hangs
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -27,26 +28,35 @@ class AnimeBlkomProvider : MainAPI() {
     )
     override var mainUrl = domains.first()
 
-    private val cfKiller = CloudflareKiller()
-    
-    // Professional Standard: Use Desktop Chrome UA to bypass aggressive mobile-targeted Turnstile challenges
+    // Bypassing mobile-targeted Turnstile by pretending to be Desktop Chrome on Windows 10
     private val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    /** Centralized request helper with Industry Standard bypass pattern */
+    /** 
+     * Custom "Build-Our-Own" Bypass Solution (Double-Dip Approach):
+     * 1. Detect block.
+     * 2. Use WebViewResolver to actively solve challenge and sync cookies.
+     * 3. Perform second request using standard app client.
+     */
     private suspend fun getDoc(url: String): Document {
-        // Step 1: Attempt direct request with Desktop UA
-        var response = app.get(url, headers = mapOf("User-Agent" to desktopUA), timeout = 15L)
+        val headers = mapOf("User-Agent" to desktopUA)
+        var response = app.get(url, headers = headers, timeout = 15L)
         var doc = response.document
         
-        // Step 2: Detect if blocked by Cloudflare (Just a moment / Turnstile)
-        if (doc.select("title").text() == "Just a moment..." || doc.html().contains("cf-turnstile")) {
-            // Step 3: Trigger native CloudStream interceptor with the SAME headers
-            response = app.get(
-                url, 
-                interceptor = cfKiller, 
-                headers = mapOf("User-Agent" to desktopUA),
-                timeout = 120L 
+        // Detect Cloudflare / Turnstile
+        val isBlocked = response.code in listOf(403, 503) || 
+                        doc.title().contains("Just a moment", ignoreCase = true) ||
+                        doc.html().contains("cf-turnstile", ignoreCase = true)
+
+        if (isBlocked) {
+            // Solve challenge in WebView to update app cookies
+            WebViewResolver(
+                Regex("blkom\\.com")
+            ).resolveUsingWebView(
+                requestCreator("GET", url, headers = headers)
             )
+
+            // Second request now that challenge is solved and cookies are synced
+            response = app.get(url, headers = headers)
             doc = response.document
         }
         
@@ -125,6 +135,7 @@ class AnimeBlkomProvider : MainAPI() {
                 callback(
                     newExtractorLink(name, "Download ${quality}p", link, ExtractorLinkType.VIDEO) {
                         this.quality = quality
+                        this.headers = mapOf("User-Agent" to desktopUA)
                     }
                 )
             }
