@@ -2,7 +2,7 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
 
@@ -12,7 +12,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = false 
+    override val usesWebView = false // Manual handling to avoid hangs
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -21,20 +21,36 @@ class AnimeBlkomProvider : MainAPI() {
     )
 
     private val domains = listOf(
+        "https://animeblkom.net",
         "https://animeblkom.com",
-        "https://animeblkom.tv",
-        "https://animeblkom.net"
+        "https://animeblkom.tv"
     )
     override var mainUrl = domains.first()
 
-    private val cfKiller = CloudflareKiller()
+    /** Helper to get headers with verified User-Agent */
+    private fun getHeaders(): Map<String, String> {
+        val ua = WebViewResolver.webViewUserAgent ?: USER_AGENT
+        return mapOf("User-Agent" to ua)
+    }
 
-    /** Centralized request helper matching working Shahid4u pattern */
+    /** Centralized request helper with robust block detection */
     private suspend fun getDoc(url: String): Document {
-        var doc = app.get(url, timeout = 15L).document
-        if (doc.select("title").text() == "Just a moment..." || doc.html().contains("cf-turnstile")) {
-            // This triggers the CloudStream 3 system prompt to "Open in WebView"
-            doc = app.get(url, interceptor = cfKiller, timeout = 120).document
+        val response = try {
+            app.get(url, headers = getHeaders(), timeout = 15L)
+        } catch (e: Exception) {
+            throw ErrorLoadingException("Connection timeout - Please open in WebView")
+        }
+        
+        val doc = response.document
+        // Detect Cloudflare Turnstile or IUAM
+        val isBlocked = response.code in listOf(403, 503) || 
+                        doc.title().contains("Just a moment", ignoreCase = true) ||
+                        doc.html().contains("cf-turnstile", ignoreCase = true) ||
+                        doc.select("div#cf-wrapper").isNotEmpty() ||
+                        doc.select("iframe[src*='challenge']").isNotEmpty()
+
+        if (isBlocked) {
+            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
         }
         return doc
     }
