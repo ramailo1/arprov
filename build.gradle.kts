@@ -71,7 +71,7 @@ subprojects {
         val implementation by configurations
 
         // Stubs for all Cloudstream classes
-        apk("com.github.recloudstream:cloudstream:master-SNAPSHOT")
+        apk("com.lagradost:cloudstream3:pre-release")
 
         // these dependencies can include any of those which are added by the app,
         // but you dont need to include any of them if you dont need them
