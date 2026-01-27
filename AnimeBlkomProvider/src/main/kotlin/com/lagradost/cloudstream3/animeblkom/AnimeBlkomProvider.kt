@@ -2,8 +2,9 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 
 class AnimeBlkomProvider : MainAPI() {
 
@@ -11,7 +12,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = false // Disable built-in webview to avoid black screen hang
+    override val usesWebView = false 
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -26,14 +27,16 @@ class AnimeBlkomProvider : MainAPI() {
     )
     override var mainUrl = domains.first()
 
-    /** Helper to perform requests through CloudflareHelper */
-    private suspend fun getDoc(url: String): org.jsoup.nodes.Document {
-        // This will automatically throw ErrorLoadingException("Please open in WebView...") if blocked
-        return CloudflareHelper.getDocOrThrow(
-            url, 
-            referer = mainUrl,
-            errorMessage = "Please open in WebView to solve Cloudflare"
-        )
+    private val cfKiller = CloudflareKiller()
+
+    /** Centralized request helper matching working Shahid4u pattern */
+    private suspend fun getDoc(url: String): Document {
+        var doc = app.get(url, timeout = 15L).document
+        if (doc.select("title").text() == "Just a moment..." || doc.html().contains("cf-turnstile")) {
+            // This triggers the CloudStream 3 system prompt to "Open in WebView"
+            doc = app.get(url, interceptor = cfKiller, timeout = 120).document
+        }
+        return doc
     }
 
     // ================= MAIN PAGE =================
