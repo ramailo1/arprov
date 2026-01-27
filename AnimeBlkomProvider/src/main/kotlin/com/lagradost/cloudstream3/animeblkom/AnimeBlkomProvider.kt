@@ -11,7 +11,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = true  // Critical: forces WebView for Turnstile
+    override val usesWebView = false // Disable built-in webview to avoid black screen hang
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -20,28 +20,26 @@ class AnimeBlkomProvider : MainAPI() {
     )
 
     private val domains = listOf(
-        "https://animeblkom.tv",
         "https://animeblkom.com",
+        "https://animeblkom.tv",
         "https://animeblkom.net"
     )
     override var mainUrl = domains.first()
 
-    // Helper to get headers with WebView UA
-    private fun getHeaders(): Map<String, String> {
-        // Fallback User-Agent if WebView hasn't set one yet
-        val ua = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        return mapOf("User-Agent" to ua)
+    /** Helper to perform requests through CloudflareHelper */
+    private suspend fun getDoc(url: String): org.jsoup.nodes.Document {
+        // This will automatically throw ErrorLoadingException("Please open in WebView...") if blocked
+        return CloudflareHelper.getDocOrThrow(
+            url, 
+            referer = mainUrl,
+            errorMessage = "Please open in WebView to solve Cloudflare"
+        )
     }
 
     // ================= MAIN PAGE =================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homeList = mutableListOf<HomePageList>()
-        val doc = try {
-            // Set short timeout (15s). If Cloudflare stalls us, fail fast and prompt WebView.
-            app.get(mainUrl, headers = getHeaders(), timeout = 15L).document
-        } catch (e: Exception) {
-            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
-        }
+        val doc = getDoc(mainUrl)
 
         // 1. Recently Added Episodes
         val recentList = doc.select(".content .item").mapNotNull { it.toSearch() }
@@ -55,22 +53,13 @@ class AnimeBlkomProvider : MainAPI() {
     // ================= SEARCH =================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?search=$query"
-        val doc = try {
-            app.get(url, headers = getHeaders(), timeout = 15L).document
-        } catch (e: Exception) {
-            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
-        }
-        
+        val doc = getDoc(url)
         return doc.select(".content .item").mapNotNull { it.toSearch() }
     }
 
     // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse {
-        val doc = try {
-            app.get(url, headers = getHeaders(), timeout = 15L).document
-        } catch (e: Exception) {
-             throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
-        }
+        val doc = getDoc(url)
 
         val title = doc.selectFirst("h1.name")?.text()?.trim() ?: "Unknown"
         val poster = doc.selectFirst(".poster img")?.absUrl("src")
@@ -110,12 +99,7 @@ class AnimeBlkomProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        val doc = try {
-            // Short timeout here too
-            app.get(data, headers = getHeaders(), timeout = 15L).document
-        } catch (e: Exception) {
-            throw ErrorLoadingException("Unable to load links; open in WebView first")
-        }
+        val doc = getDoc(data)
 
         // Direct downloads
         doc.select("#download a.btn").forEach {
