@@ -2,7 +2,7 @@ package com.lagradost.cloudstream3.animeblkom
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
 
@@ -12,7 +12,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = false // Manual handling to avoid hangs
+    override val usesWebView = false 
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -21,37 +21,35 @@ class AnimeBlkomProvider : MainAPI() {
     )
 
     private val domains = listOf(
+        "https://blkom.com",
         "https://animeblkom.net",
-        "https://animeblkom.com",
-        "https://animeblkom.tv"
+        "https://animeblkom.com"
     )
     override var mainUrl = domains.first()
 
-    /** Helper to get headers with verified User-Agent */
-    private fun getHeaders(): Map<String, String> {
-        val ua = WebViewResolver.webViewUserAgent ?: USER_AGENT
-        return mapOf("User-Agent" to ua)
-    }
+    private val cfKiller = CloudflareKiller()
+    
+    // Professional Standard: Use Desktop Chrome UA to bypass aggressive mobile-targeted Turnstile challenges
+    private val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    /** Centralized request helper with robust block detection */
+    /** Centralized request helper with Industry Standard bypass pattern */
     private suspend fun getDoc(url: String): Document {
-        val response = try {
-            app.get(url, headers = getHeaders(), timeout = 15L)
-        } catch (e: Exception) {
-            throw ErrorLoadingException("Connection timeout - Please open in WebView")
+        // Step 1: Attempt direct request with Desktop UA
+        var response = app.get(url, headers = mapOf("User-Agent" to desktopUA), timeout = 15L)
+        var doc = response.document
+        
+        // Step 2: Detect if blocked by Cloudflare (Just a moment / Turnstile)
+        if (doc.select("title").text() == "Just a moment..." || doc.html().contains("cf-turnstile")) {
+            // Step 3: Trigger native CloudStream interceptor with the SAME headers
+            response = app.get(
+                url, 
+                interceptor = cfKiller, 
+                headers = mapOf("User-Agent" to desktopUA),
+                timeout = 120L 
+            )
+            doc = response.document
         }
         
-        val doc = response.document
-        // Detect Cloudflare Turnstile or IUAM
-        val isBlocked = response.code in listOf(403, 503) || 
-                        doc.title().contains("Just a moment", ignoreCase = true) ||
-                        doc.html().contains("cf-turnstile", ignoreCase = true) ||
-                        doc.select("div#cf-wrapper").isNotEmpty() ||
-                        doc.select("iframe[src*='challenge']").isNotEmpty()
-
-        if (isBlocked) {
-            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
-        }
         return doc
     }
 
@@ -60,7 +58,7 @@ class AnimeBlkomProvider : MainAPI() {
         val homeList = mutableListOf<HomePageList>()
         val doc = getDoc(mainUrl)
 
-        // 1. Recently Added Episodes
+        // Recently Added Episodes
         val recentList = doc.select(".content .item").mapNotNull { it.toSearch() }
         if (recentList.isNotEmpty()) {
             homeList.add(HomePageList("Recently Added", recentList))
@@ -90,8 +88,7 @@ class AnimeBlkomProvider : MainAPI() {
             statusText?.contains("منتهي") == true -> ShowStatus.Completed
             else -> null
         }
-        val type = TvType.Anime
-
+        
         // Episodes
         val episodes = doc.select(".episodes .episode a").mapNotNull {
             val epNum = it.text().filter { c -> c.isDigit() }.toIntOrNull()
@@ -101,7 +98,7 @@ class AnimeBlkomProvider : MainAPI() {
             }
         }.reversed()
 
-        return newAnimeLoadResponse(title, url, type) {
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
             this.tags = tags
