@@ -28,6 +28,7 @@ class AnimeBlkomProvider : MainAPI() {
 
     // Helper to get headers with WebView UA
     private fun getHeaders(): Map<String, String> {
+        // Fallback User-Agent if WebView hasn't set one yet
         val ua = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         return mapOf("User-Agent" to ua)
     }
@@ -36,7 +37,8 @@ class AnimeBlkomProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homeList = mutableListOf<HomePageList>()
         val doc = try {
-            app.get(mainUrl, headers = getHeaders()).document
+            // Set short timeout (15s). If Cloudflare stalls us, fail fast and prompt WebView.
+            app.get(mainUrl, headers = getHeaders(), timeout = 15L).document
         } catch (e: Exception) {
             throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
         }
@@ -54,7 +56,7 @@ class AnimeBlkomProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?search=$query"
         val doc = try {
-            app.get(url, headers = getHeaders()).document
+            app.get(url, headers = getHeaders(), timeout = 15L).document
         } catch (e: Exception) {
             throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
         }
@@ -65,7 +67,7 @@ class AnimeBlkomProvider : MainAPI() {
     // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse {
         val doc = try {
-            app.get(url, headers = getHeaders()).document
+            app.get(url, headers = getHeaders(), timeout = 15L).document
         } catch (e: Exception) {
              throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
         }
@@ -109,7 +111,8 @@ class AnimeBlkomProvider : MainAPI() {
     ): Boolean {
         
         val doc = try {
-            app.get(data, headers = getHeaders()).document
+            // Short timeout here too
+            app.get(data, headers = getHeaders(), timeout = 15L).document
         } catch (e: Exception) {
             throw ErrorLoadingException("Unable to load links; open in WebView first")
         }
