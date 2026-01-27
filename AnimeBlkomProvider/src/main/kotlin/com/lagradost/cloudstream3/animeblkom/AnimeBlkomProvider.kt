@@ -26,42 +26,91 @@ class AnimeBlkomProvider : MainAPI() {
     )
     override var mainUrl = domains.first()
 
+    // Helper to get headers with WebView UA
+    private fun getHeaders(): Map<String, String> {
+        val ua = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        return mapOf("User-Agent" to ua)
+    }
+
     // ================= MAIN PAGE =================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Turnstile cannot be bypassed programmatically
-        throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        val homeList = mutableListOf<HomePageList>()
+        val doc = try {
+            app.get(mainUrl, headers = getHeaders()).document
+        } catch (e: Exception) {
+            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        }
+
+        // 1. Recently Added Episodes
+        val recentList = doc.select(".content .item").mapNotNull { it.toSearch() }
+        if (recentList.isNotEmpty()) {
+            homeList.add(HomePageList("Recently Added", recentList))
+        }
+
+        return newHomePageResponse(homeList, hasNext = false)
     }
 
     // ================= SEARCH =================
     override suspend fun search(query: String): List<SearchResponse> {
-        throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        val url = "$mainUrl/?search=$query"
+        val doc = try {
+            app.get(url, headers = getHeaders()).document
+        } catch (e: Exception) {
+            throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        }
+        
+        return doc.select(".content .item").mapNotNull { it.toSearch() }
     }
 
     // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse {
-        throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        val doc = try {
+            app.get(url, headers = getHeaders()).document
+        } catch (e: Exception) {
+             throw ErrorLoadingException("Please open in WebView to solve Cloudflare")
+        }
+
+        val title = doc.selectFirst("h1.name")?.text()?.trim() ?: "Unknown"
+        val poster = doc.selectFirst(".poster img")?.absUrl("src")
+        val description = doc.selectFirst(".story")?.text()?.trim()
+        val tags = doc.select(".genre a").map { it.text() }
+        val statusText = doc.selectFirst(".info .status")?.text()
+        val status = when {
+            statusText?.contains("مستمر") == true -> ShowStatus.Ongoing
+            statusText?.contains("منتهي") == true -> ShowStatus.Completed
+            else -> null
+        }
+        val type = TvType.Anime
+
+        // Episodes
+        val episodes = doc.select(".episodes .episode a").mapNotNull {
+            val epNum = it.text().filter { c -> c.isDigit() }.toIntOrNull()
+            val link = it.absUrl("href")
+            newEpisode(link) {
+                 this.episode = epNum
+            }
+        }.reversed()
+
+        return newAnimeLoadResponse(title, url, type) {
+            this.posterUrl = poster
+            this.plot = description
+            this.tags = tags
+            this.showStatus = status
+            addEpisodes(DubStatus.Subbed, episodes)
+        }
     }
 
     // ================= LOAD LINKS =================
-    // This runs after the user opens WebView and CloudStream has cookies
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Fetch User-Agent from WebViewResolver if available, otherwise use a default Android one
-        // This is CRITICAL: Cloudflare cookies are bound to the User-Agent.
-        val ua = WebViewResolver.webViewUserAgent ?: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-
-        // Try to fetch the page using WebView session cookies AND matching User-Agent
+        
         val doc = try {
-            app.get(
-                data, 
-                headers = mapOf("User-Agent" to ua)
-            ).document
+            app.get(data, headers = getHeaders()).document
         } catch (e: Exception) {
-            // If cookies don't work, force WebView again
             throw ErrorLoadingException("Unable to load links; open in WebView first")
         }
 
