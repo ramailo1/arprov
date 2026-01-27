@@ -64,7 +64,6 @@ New plugins or those undergoing maintenance/updates.
 
 | Provider | Status | Progress |
 | :--- | :--- | :--- |
-| **AnimeBlkom** | 🌐 Hybrid WebView | `Testing` |
 | **RistoAnime** | 🛠️ WebView Enabled | `Soon` |
 | **Shahid4u** | 🛠️ URL Updated | `Soon` |
 | **Shed4u** | 🛠️ URL Updated | `Soon` |
@@ -72,6 +71,13 @@ New plugins or those undergoing maintenance/updates.
 | **Cima4u Shop** | 🛠️ Extractors Fix | `Soon` |
 | **EgyDead** | 🔍 Testing | `Soon` |
 | **GateAnime** | 🏗️ Initial Build | `Soon` |
+
+### ⚠️ Cloudflare Blocked / Issues
+Plugins that are currently facing persistent Cloudflare protection issues (Black Screen / Turnstile Loop).
+
+| Provider | Status | Note |
+| :--- | :--- | :--- |
+| **AnimeBlkom** | 🛑 Blocked | Persistent Turnstile Loop (Mobile/Webview) |
 
 ### ❌ Down (Currently Broken)
 These plugins are currently non-functional due to site changes or API issues.
