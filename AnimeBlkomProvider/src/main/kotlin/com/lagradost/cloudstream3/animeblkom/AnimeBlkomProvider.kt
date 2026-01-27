@@ -13,7 +13,7 @@ class AnimeBlkomProvider : MainAPI() {
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true
-    override val usesWebView = false // Disabled to prevent app-level hangs
+    override val usesWebView = false 
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -28,34 +28,50 @@ class AnimeBlkomProvider : MainAPI() {
     )
     override var mainUrl = domains.first()
 
-    // Bypassing mobile-targeted Turnstile by pretending to be Desktop Chrome on Windows 10
-    private val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    /**
+     * Phase 7: Universal International Persona (Chrome 121 on Windows 10)
+     * This UA matched with stripped X-Requested-With is the current 'Gold Standard' 
+     * for bypassing Turnstile challenges that hang on Mobile WebViews.
+     */
+    private val desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
     /** 
-     * Custom "Build-Our-Own" Bypass Solution (Double-Dip Approach):
+     * Custom "Universal International" Bypass (Phase 7):
+     * Uses the 'Double-Dip 2.0' strategy found in Hexated/SoraStream.
      * 1. Detect block.
-     * 2. Use WebViewResolver to actively solve challenge and sync cookies.
-     * 3. Perform second request using standard app client.
+     * 2. Force WebView solve with Desktop UA and NO X-Requested-With.
+     * 3. Sync cookies and perform final data fetch.
      */
     private suspend fun getDoc(url: String): Document {
-        val headers = mapOf("User-Agent" to desktopUA)
-        var response = app.get(url, headers = headers, timeout = 15L)
+        // Step 1: Force standard request with desktop persona
+        val headers = mapOf(
+            "User-Agent" to desktopUA,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
+            "Sec-Ch-Ua" to "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"",
+            "Sec-Ch-Ua-Mobile" to "?0",
+            "Sec-Ch-Ua-Platform" to "\"Windows\""
+        )
+        
+        var response = app.get(url, headers = headers, timeout = 20L)
         var doc = response.document
         
-        // Detect Cloudflare / Turnstile
+        // Step 2: Detect Managed Challenge
         val isBlocked = response.code in listOf(403, 503) || 
                         doc.title().contains("Just a moment", ignoreCase = true) ||
                         doc.html().contains("cf-turnstile", ignoreCase = true)
 
         if (isBlocked) {
-            // Solve challenge in WebView to update app cookies
-            WebViewResolver(
-                Regex("blkom\\.com")
-            ).resolveUsingWebView(
+            // Step 3: Trigger Active Resolver
+            // Using a specific Regex that matches the domain to ensure cookie sync
+            val resolver = WebViewResolver(Regex("blkom\\.com|animeblkom\\.net"))
+            
+            // CRITICAL: We do NOT send X-Requested-With here to avoid app-detection
+            resolver.resolveUsingWebView(
                 requestCreator("GET", url, headers = headers)
             )
 
-            // Second request now that challenge is solved and cookies are synced
+            // Step 4: Double-Dip final request now that session is verified
             response = app.get(url, headers = headers)
             doc = response.document
         }
@@ -68,7 +84,6 @@ class AnimeBlkomProvider : MainAPI() {
         val homeList = mutableListOf<HomePageList>()
         val doc = getDoc(mainUrl)
 
-        // Recently Added Episodes
         val recentList = doc.select(".content .item").mapNotNull { it.toSearch() }
         if (recentList.isNotEmpty()) {
             homeList.add(HomePageList("Recently Added", recentList))
@@ -99,7 +114,6 @@ class AnimeBlkomProvider : MainAPI() {
             else -> null
         }
         
-        // Episodes
         val episodes = doc.select(".episodes .episode a").mapNotNull {
             val epNum = it.text().filter { c -> c.isDigit() }.toIntOrNull()
             val link = it.absUrl("href")
@@ -152,7 +166,6 @@ class AnimeBlkomProvider : MainAPI() {
         return true
     }
 
-    // ================= ELEMENT PARSER =================
     private fun Element.toSearch(): SearchResponse? {
         val title = selectFirst(".name")?.text() ?: return null
         val link = selectFirst("a")?.attr("href") ?: return null
