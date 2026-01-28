@@ -10,10 +10,6 @@ import android.util.Base64
 
 class AnimeiatProvider : MainAPI() {
 
-    private inline fun <reified T> parseJson(text: String): T {
-        return mapper.readValue(text)
-    }
-
     override var lang = "ar"
     override var mainUrl = "https://api.animegarden.net/v1/animeiat"
     val pageUrl = "https://www.animeiat.tv"
@@ -22,7 +18,12 @@ class AnimeiatProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
 
+    private inline fun <reified T> parseJson(text: String): T {
+        return mapper.readValue(text)
+    }
+
     data class Poster(@JsonProperty("url") var url: String? = null)
+
     data class AnimeData(
         @JsonProperty("name") var name: String? = null,
         @JsonProperty("slug") var slug: String? = null,
@@ -30,10 +31,12 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("poster") var poster: Poster? = Poster(),
         @JsonProperty("episodes") var episodes: Int? = null
     )
+
     data class HomeResponse(@JsonProperty("data") var data: ArrayList<AnimeData> = arrayListOf())
 
     data class Year(@JsonProperty("name") var name: String? = null)
     data class Genres(@JsonProperty("name") var name: String? = null)
+
     data class LoadData(
         @JsonProperty("id") var id: Int? = null,
         @JsonProperty("name") var name: String? = null,
@@ -55,6 +58,7 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("slug") var slug: String? = null,
         @JsonProperty("video") var video: Map<String, Any>? = null
     )
+
     data class Episodes(@JsonProperty("data") var data: ArrayList<EpisodeData> = arrayListOf(), @JsonProperty("meta") var meta: Map<String, Any>? = null)
 
     override val mainPage = mainPageOf(
@@ -95,13 +99,8 @@ class AnimeiatProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var slug = url.replace("$pageUrl/anime/", "")
-        
-        // Fix: If the slug ends with "-episode-{number}", strip it to get the anime slug
-        // This handles clicks from "Latest Episodes" which pass the episode URL
         val episodeRegex = "(.*)-episode-\\d+$".toRegex()
-        episodeRegex.find(slug)?.groupValues?.get(1)?.let {
-            slug = it
-        }
+        episodeRegex.find(slug)?.groupValues?.get(1)?.let { slug = it }
 
         val animeApiUrl = "$mainUrl/anime/$slug"
         val json = parseJson<Load>(app.get(animeApiUrl).text)
@@ -136,131 +135,46 @@ class AnimeiatProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data here is the Watch URL (e.g. .../watch/slug-episode-1)
-        // We append /_payload.json to get the Nuxt payload directly
         val payloadUrl = if (data.endsWith("/_payload.json")) data else "$data/_payload.json"
 
         try {
             val jsonString = app.get(payloadUrl).text
-            // Parse the Nuxt payload (Array of objects)
             val rawJson = parseJson<List<Any>>(jsonString)
 
-            // Helper to resolve Nuxt references (indices)
+            // Nuxt Reference Resolver
             fun resolve(element: Any?): Any? {
                 return when (element) {
                     is Int -> if (element in rawJson.indices) rawJson[element] else element
                     else -> element
                 }
             }
+            
+            // Helper to resolved specific values as Types
+            fun resolveAsMap(element: Any?): Map<*, *>? = resolve(element) as? Map<*, *>
+            fun resolveAsString(element: Any?): String? = resolve(element) as? String
 
-            // Recursive URL extractor that handles dereferencing
-            fun extractUrl(obj: Any?, depth: Int = 0): String? {
-                if (depth > 10 || obj == null) return null
+            // Step 1: Find the episode object
+            // We need to resolve each item to check if it's the right map
+            val episodeObj = rawJson.mapNotNull { resolveAsMap(it) }
+                .firstOrNull { it["video_id"] != null }
 
-                // If we found a string that looks like a URL, check it
-                if (obj is String) {
-                    if (obj.startsWith("http")) return obj
-                    // Check for Base64 encoded URL
-                    if (obj.length > 20 && !obj.contains(" ")) {
-                        try {
-                            val decoded = String(Base64.decode(obj, Base64.DEFAULT))
-                            if (decoded.startsWith("http")) return decoded
-                        } catch (_: Exception) { }
-                    }
-                    // Check if it's a UUID (Player Slug) -> Fetch Player Payload
-                    if (obj.matches(Regex("^[0-9a-fA-F-]{36}$"))) {
-                        return "UUID:$obj"
-                    }
-                    return null
-                }
+            // Step 2: Get video URLs (highest quality first)
+            // 'video' field is likely an index, so we resolve it
+            val videoMap = resolveAsMap(episodeObj?.get("video"))
+            
+            val urls = arrayListOf<String>()
 
-                // If it's an index, resolve and recurse
-                if (obj is Int) {
-                    return extractUrl(resolve(obj), depth + 1)
-                }
+            // 'url' and 'streamable_path' fields might also be indices to strings
+            resolveAsString(videoMap?.get("url"))?.let { urls.add(it) }
+            resolveAsString(videoMap?.get("streamable_path"))?.let { urls.add(it) }
 
-                // If it's a Map/Object
-                if (obj is Map<*, *>) {
-                    // Prioritize specific keys
-                    val keys = listOf("url", "file", "src", "video", "slug", "link")
-
-                    // First pass: direct checks
-                    for (key in keys) {
-                        val value = obj[key]
-                        // Don't recurse yet, check if immediate value is useful
-                        if (value is String && value.startsWith("http")) return value
-                    }
-
-                    // Second pass: resolve indices/recurse
-                    for (key in keys) {
-                        val value = obj[key]
-                        // Skip primitive non-string values to save recursion except for Ints which are indices
-                        if (value is Int || value is Map<*, *> || value is List<*>) {
-                             val result = extractUrl(value, depth + 1)
-                             if (result != null) return result
-                        }
-                    }
-                    
-                    // Third pass: check values of video/source objects
-                    obj.forEach { (k, v) ->
-                        if (k is String && k == "video") { // Look hard at video object
-                             val result = extractUrl(v, depth + 1)
-                             if (result != null) return result
-                        }
-                    }
-                }
-                
-                return null
+            val selectedUrl = urls.firstOrNull()?.let {
+                if (it.startsWith("http")) it else "$pageUrl/$it"
             }
 
-            var foundUrl: String? = null
-
-            // Iterate through top-level objects to find the detailed data
-            // We iterate reversed because data is usually at the end
-            for (item in rawJson.reversed()) {
-                val resolvedItem = if (item is Int) resolve(item) else item
-                val result = extractUrl(resolvedItem)
-
-                if (result != null) {
-                    if (result.startsWith("UUID:")) {
-                        // It's a UUID, fetch nested player payload as fallback
-                        val uuid = result.removePrefix("UUID:")
-                        val playerPayloadUrl = "$pageUrl/player/$uuid/_payload.json"
-                        try {
-                            val playerJsonString = app.get(playerPayloadUrl).text
-                            val playerRawJson = parseJson<List<Any>>(playerJsonString)
-                            
-                            // Simple linear search in player payload (no deep recursion needed usually)
-                            fun simpleSearch(pObj: Any?): String? {
-                                if (pObj is String && pObj.startsWith("http")) return pObj
-                                if (pObj is Int && pObj in playerRawJson.indices) return simpleSearch(playerRawJson[pObj])
-                                if (pObj is Map<*, *>) {
-                                    pObj["url"]?.let { return simpleSearch(it) }
-                                }
-                                return null
-                            }
-                            
-                            for (pItem in playerRawJson.reversed()) {
-                                val res = simpleSearch(pItem)
-                                if (res != null) {
-                                    foundUrl = res
-                                    break
-                                }
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    } else {
-                        foundUrl = result
-                    }
-
-                    if (foundUrl != null) break
-                }
-            }
-
-            if (foundUrl != null) {
-                callback.invoke(
-                    newExtractorLink(this.name, this.name, foundUrl!!) {
+            if (!selectedUrl.isNullOrEmpty()) {
+                callback(
+                    newExtractorLink(this.name, this.name, selectedUrl) {
                         referer = pageUrl
                         quality = Qualities.Unknown.value
                     }
@@ -268,9 +182,41 @@ class AnimeiatProvider : MainAPI() {
                 return true
             }
 
+            // Step 3: Fallback to UUID/player payload
+            val uuid = resolveAsString(videoMap?.get("slug"))
+            if (!uuid.isNullOrEmpty()) {
+                val playerPayloadUrl = "$pageUrl/player/$uuid/_payload.json"
+                val playerJsonString = app.get(playerPayloadUrl).text
+                val playerRawJson = parseJson<List<Any>>(playerJsonString)
+
+                fun findUrl(obj: Any?): String? {
+                    if (obj is Map<*, *>) {
+                        (obj["url"] as? String)?.let { return it }
+                        obj.values.forEach { findUrl(it)?.let { return it } }
+                    } else if (obj is List<*>) {
+                        // Also iterate integers which might be indices in player payload?
+                        // For simplicity assuming player payload key/values are strings/maps or simple lists
+                        obj.forEach { findUrl(it)?.let { return it } }
+                    }
+                    return null
+                }
+
+                val fallbackUrl = playerRawJson.mapNotNull { findUrl(it) }.firstOrNull()
+                if (!fallbackUrl.isNullOrEmpty()) {
+                    callback(
+                        newExtractorLink(this.name, this.name, fallbackUrl) {
+                            referer = pageUrl
+                            quality = Qualities.Unknown.value
+                        }
+                    )
+                    return true
+                }
+            }
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
         return false
     }
 }
