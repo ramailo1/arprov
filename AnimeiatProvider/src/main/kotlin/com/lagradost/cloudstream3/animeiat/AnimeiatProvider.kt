@@ -158,8 +158,11 @@ class AnimeiatProvider : MainAPI() {
         val url = if(data.contains("-episode")) data else "$data-episode-1"
         println(url)
         val doc = app.get(url).document
-        val script = doc.select("body > script").first()?.html()
-        val id = script?.replace(".*4\",slug:\"|\"duration:.*".toRegex(),"")
+        val script = doc.select("script").find { it.html().contains("slug:\"") }?.html()
+        val id = script?.let {
+            """slug:"([^"]+)"""".toRegex().find(it)?.groupValues?.get(1)
+        }
+        if (id == null) return false
         val player = app.get("$pageUrl/player/$id").document
         player.select("source").map {
             callback.invoke(
