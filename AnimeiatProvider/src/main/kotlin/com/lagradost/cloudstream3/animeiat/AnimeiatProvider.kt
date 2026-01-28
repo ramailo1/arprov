@@ -192,7 +192,7 @@ class AnimeiatProvider : MainAPI() {
                     newEpisode("$pageUrl/watch/"+it.slug) {
                         this.name = it.title
                         this.episode = it.number
-                        this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
+                        this.posterUrl = "https://api.animegarden.net/storage/poster/" + it.posterPath
                     }
                 )
             }
@@ -200,7 +200,7 @@ class AnimeiatProvider : MainAPI() {
         return newAnimeLoadResponse(json.data?.animeName.toString(), "$mainUrl/anime/"+json.data?.slug, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
             japName = json.data?.otherNames?.replace("\\n.*".toRegex(), "")
             engName = json.data?.animeName
-            posterUrl = "https://api.animeiat.co/storage/" + json.data?.posterPath
+            posterUrl = "https://api.animegarden.net/storage/poster/" + json.data?.posterPath
             this.year = json.data?.year?.name?.toIntOrNull()
             addEpisodes(DubStatus.Subbed, episodes)
             plot = json.data?.story
