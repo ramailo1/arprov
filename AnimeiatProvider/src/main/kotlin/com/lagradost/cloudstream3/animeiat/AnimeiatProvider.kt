@@ -94,7 +94,15 @@ class AnimeiatProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val slug = url.replace("$pageUrl/anime/", "")
+        var slug = url.replace("$pageUrl/anime/", "")
+        
+        // Fix: If the slug ends with "-episode-{number}", strip it to get the anime slug
+        // This handles clicks from "Latest Episodes" which pass the episode URL
+        val episodeRegex = "(.*)-episode-\\d+$".toRegex()
+        episodeRegex.find(slug)?.groupValues?.get(1)?.let {
+            slug = it
+        }
+
         val animeApiUrl = "$mainUrl/anime/$slug"
         val json = parseJson<Load>(app.get(animeApiUrl).text)
         val animeId = json.data?.id ?: throw ErrorLoadingException("Anime ID not found")
