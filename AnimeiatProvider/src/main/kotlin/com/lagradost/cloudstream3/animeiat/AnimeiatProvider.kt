@@ -113,7 +113,7 @@ class AnimeiatProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val json = parseJson<HomeResponse>(app.get("$mainUrl/anime?q=$query").text)
+        val json = parseJson<HomeResponse>(app.get("$mainUrl/anime?search=$query").text)
         return json.data.map {
             newAnimeSearchResponse(
                 it.name.toString(),
@@ -134,6 +134,7 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("name"        ) var name        : String? = null,
     )
     data class LoadData (
+        @JsonProperty("id"             ) var id            : Int? = null,
         @JsonProperty("anime_name"     ) var animeName     : String? = null,
         @JsonProperty("slug"           ) var slug          : String? = null,
         @JsonProperty("story"          ) var story         : String? = null,
@@ -182,22 +183,42 @@ class AnimeiatProvider : MainAPI() {
     )
     
     override suspend fun load(url: String): LoadResponse {
-        val loadSession = Requests()
-        val request = loadSession.get(url.replace(pageUrl, mainUrl)).text
-        val json = parseJson<Load>(request)
+        // Extract slug from URL: https://www.animeiat.tv/anime/{slug}
+        val slug = url.replace("$pageUrl/anime/", "")
+        
+        // Fetch anime details using slug
+        val animeApiUrl = "$mainUrl/anime/$slug"
+        val animeResponse = app.get(animeApiUrl).text
+        val json = parseJson<Load>(animeResponse)
+        
+        // Get the anime ID for fetching episodes
+        val animeId = json.data?.id ?: throw ErrorLoadingException("Anime ID not found")
+        
+        // Fetch episodes using the anime ID
         val episodes = arrayListOf<Episode>()
-        (1..parseJson<Episodes>(loadSession.get("$url/episodes").text).meta.lastPage!!).map { pageNumber ->
-            parseJson<Episodes>(loadSession.get("$url/episodes?page=$pageNumber").text).data.map {
-                episodes.add(
-                    newEpisode("$pageUrl/watch/"+it.slug) {
-                        this.name = it.title
-                        this.episode = it.number
-                        this.posterUrl = "https://api.animegarden.net/storage/poster/" + it.posterPath
-                    }
-                )
+        val episodesApiUrl = "$mainUrl/anime/$animeId/episodes"
+        
+        try {
+            val episodesResponse = parseJson<Episodes>(app.get(episodesApiUrl).text)
+            val totalPages = episodesResponse.meta.lastPage ?: 1
+            
+            (1..totalPages).map { pageNumber ->
+                val pageUrl = if (pageNumber == 1) episodesApiUrl else "$episodesApiUrl?page=$pageNumber"
+                parseJson<Episodes>(app.get(pageUrl).text).data.map {
+                    episodes.add(
+                        newEpisode("$pageUrl/watch/"+it.slug) {
+                            this.name = it.title
+                            this.episode = it.number
+                            this.posterUrl = "https://api.animegarden.net/storage/poster/" + it.posterPath
+                        }
+                    )
+                }
             }
+        } catch (e: Exception) {
+            // If episodes fetch fails, continue without episodes
         }
-        return newAnimeLoadResponse(json.data?.animeName.toString(), "$mainUrl/anime/"+json.data?.slug, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
+        
+        return newAnimeLoadResponse(json.data?.animeName.toString(), url, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
             japName = json.data?.otherNames?.replace("\\n.*".toRegex(), "")
             engName = json.data?.animeName
             posterUrl = "https://api.animegarden.net/storage/poster/" + json.data?.posterPath
