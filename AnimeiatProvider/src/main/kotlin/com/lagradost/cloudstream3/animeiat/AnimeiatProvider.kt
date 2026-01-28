@@ -204,8 +204,10 @@ class AnimeiatProvider : MainAPI() {
             (1..totalPages).map { pageNumber ->
                 val pageUrl = if (pageNumber == 1) episodesApiUrl else "$episodesApiUrl?page=$pageNumber"
                 parseJson<Episodes>(app.get(pageUrl).text).data.map {
+                    // Get the video slug (player ID) from the episode data
+                    val playerSlug = it.video?.slug ?: it.slug
                     episodes.add(
-                        newEpisode(it.slug.toString()) {
+                        newEpisode(playerSlug.toString()) {
                             this.name = it.title
                             this.episode = it.number
                             this.posterUrl = it.poster?.url
@@ -236,13 +238,13 @@ class AnimeiatProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data contains the episode slug
-        val episodeSlug = data
-        
-        // Fetch the Nuxt payload JSON from the watch page
-        val payloadUrl = "$pageUrl/watch/$episodeSlug/_payload.json"
-        
         try {
+            // data contains the player ID (video slug)
+            val playerSlug = data
+            
+            // Fetch the Nuxt payload JSON from the player page
+            val payloadUrl = "$pageUrl/player/$playerSlug/_payload.json"
+            
             val response = app.get(payloadUrl, headers = mapOf(
                 "Referer" to pageUrl
             )).text
@@ -250,58 +252,33 @@ class AnimeiatProvider : MainAPI() {
             // Parse the payload JSON as a raw list
             val payload = parseJson<List<Any>>(response)
             
-            // Step 1: Find the index of the slug string in the array
-            var slugIndex: Int? = null
-            for (i in payload.indices) {
-                if (payload[i] is String && payload[i] == episodeSlug) {
-                    slugIndex = i
-                    break
-                }
-            }
-            
-            if (slugIndex == null) {
-                return false
-            }
-            
-            // Step 2: Find the episode object that references this slug index
             var videoUrl: String? = null
             
-            for (i in payload.indices) {
-                val item = payload[i]
-                if (item is Map<*, *>) {
-                    // Check if this episode object's slug field equals our slug index
-                    if (item.containsKey("slug") && item.containsKey("video")) {
-                        val itemSlugIndex = when (val s = item["slug"]) {
-                            is Number -> s.toInt()
-                            is String -> s.toIntOrNull()
-                            else -> null
-                        }
-                        
-                        if (itemSlugIndex == slugIndex) {
-                            // Found the episode object! Now get the video
-                            val videoIndex = when (val v = item["video"]) {
-                                is Number -> v.toInt()
-                                is String -> v.toIntOrNull()
+            // The player payload has a simpler structure
+            // Look for an object with a "video" key
+            for (item in payload) {
+                if (item is Map<*, *> && item.containsKey("video")) {
+                    val videoIndex = when (val v = item["video"]) {
+                        is Number -> v.toInt()
+                        is String -> v.toIntOrNull()
+                        else -> null
+                    }
+                    
+                    if (videoIndex != null && videoIndex < payload.size) {
+                        val videoObj = payload[videoIndex]
+                        if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
+                            // Get the URL index
+                            val urlIndex = when (val u = videoObj["url"]) {
+                                is Number -> u.toInt()
+                                is String -> u.toIntOrNull()
                                 else -> null
                             }
                             
-                            if (videoIndex != null && videoIndex < payload.size) {
-                                val videoObj = payload[videoIndex]
-                                if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
-                                    // Get the URL index
-                                    val urlIndex = when (val u = videoObj["url"]) {
-                                        is Number -> u.toInt()
-                                        is String -> u.toIntOrNull()
-                                        else -> null
-                                    }
-                                    
-                                    if (urlIndex != null && urlIndex < payload.size) {
-                                        val urlString = payload[urlIndex]
-                                        if (urlString is String && urlString.startsWith("http")) {
-                                            videoUrl = urlString
-                                            break
-                                        }
-                                    }
+                            if (urlIndex != null && urlIndex < payload.size) {
+                                val urlString = payload[urlIndex]
+                                if (urlString is String && urlString.startsWith("http")) {
+                                    videoUrl = urlString
+                                    break
                                 }
                             }
                         }
@@ -324,7 +301,7 @@ class AnimeiatProvider : MainAPI() {
             }
         } catch (e: Exception) {
             // If payload fetch fails, return false
-            return false
+            e.printStackTrace()
         }
         
         return false
