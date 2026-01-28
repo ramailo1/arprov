@@ -85,7 +85,6 @@ These plugins are currently non-functional due to site changes or API issues.
 
 | Provider | Known Issue | Status |
 | :--- | :--- | :--- |
-
 | **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
