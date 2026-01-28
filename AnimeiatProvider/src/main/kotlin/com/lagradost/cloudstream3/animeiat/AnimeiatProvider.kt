@@ -135,15 +135,15 @@ class AnimeiatProvider : MainAPI() {
     )
     data class LoadData (
         @JsonProperty("id"             ) var id            : Int? = null,
-        @JsonProperty("anime_name"     ) var animeName     : String? = null,
+        @JsonProperty("name"           ) var name          : String? = null,
         @JsonProperty("slug"           ) var slug          : String? = null,
-        @JsonProperty("story"          ) var story         : String? = null,
+        @JsonProperty("synopsis"       ) var synopsis      : String? = null,
         @JsonProperty("other_names"    ) var otherNames    : String? = null,
         @JsonProperty("age"            ) var age           : String? = null,
         @JsonProperty("type"           ) var type          : String? = null,
         @JsonProperty("status"         ) var status        : String? = null,
-        @JsonProperty("poster_path"    ) var posterPath    : String? = null,
-        @JsonProperty("year"           ) var year          : Year?              = Year(),
+        @JsonProperty("poster"         ) var poster        : Poster? = Poster(),
+        @JsonProperty("year"           ) var year          : Year?   = Year(),
         @JsonProperty("genres"         ) var genres        : ArrayList<Genres>  = arrayListOf(),
 
     )
@@ -156,11 +156,12 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("last_page"    ) var lastPage    : Int? = null,
     )
     data class EpisodeData (
+        @JsonProperty("id"           ) var id          : Int? = null,
         @JsonProperty("title"        ) var title       : String? = null,
         @JsonProperty("slug"         ) var slug        : String? = null,
         @JsonProperty("number"       ) var number      : Int? = null,
         @JsonProperty("video_id"     ) var videoId     : Int? = null,
-        @JsonProperty("poster_path"  ) var posterPath  : String? = null,
+        @JsonProperty("poster"       ) var poster      : Poster? = Poster(),
     )
     data class Episodes (
         @JsonProperty("data"  ) var data  : ArrayList<EpisodeData> = arrayListOf(),
@@ -206,10 +207,10 @@ class AnimeiatProvider : MainAPI() {
                 val pageUrl = if (pageNumber == 1) episodesApiUrl else "$episodesApiUrl?page=$pageNumber"
                 parseJson<Episodes>(app.get(pageUrl).text).data.map {
                     episodes.add(
-                        newEpisode("$pageUrl/watch/"+it.slug) {
+                        newEpisode(it.id.toString()) {
                             this.name = it.title
                             this.episode = it.number
-                            this.posterUrl = "https://api.animegarden.net/storage/poster/" + it.posterPath
+                            this.posterUrl = it.poster?.url
                         }
                     )
                 }
@@ -218,15 +219,15 @@ class AnimeiatProvider : MainAPI() {
             // If episodes fetch fails, continue without episodes
         }
         
-        return newAnimeLoadResponse(json.data?.animeName.toString(), url, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
+        return newAnimeLoadResponse(json.data?.name.toString(), url, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
             japName = json.data?.otherNames?.replace("\\n.*".toRegex(), "")
-            engName = json.data?.animeName
-            posterUrl = "https://api.animegarden.net/storage/poster/" + json.data?.posterPath
+            engName = json.data?.name
+            posterUrl = json.data?.poster?.url
             this.year = json.data?.year?.name?.toIntOrNull()
             addEpisodes(DubStatus.Subbed, episodes)
-            plot = json.data?.story
+            plot = json.data?.synopsis
             tags = json.data?.genres?.map { it.name.toString() }
-            this.showStatus = if(json.data?.status == "completed") ShowStatus.Completed else ShowStatus.Ongoing
+            this.showStatus = if(json.data?.status == "finished_airing") ShowStatus.Completed else ShowStatus.Ongoing
         }
     }
 
@@ -236,15 +237,17 @@ class AnimeiatProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Extract episode slug from the watch URL
-        // URL format: https://www.animeiat.tv/watch/{episode-slug}
-        val episodeSlug = data.replace("$pageUrl/watch/", "")
+        // data contains the episode ID (numeric)
+        val episodeId = data
         
-        // Call the new episode API endpoint
-        val episodeApiUrl = "$mainUrl/episodes/$episodeSlug"
+        // Call the episode API endpoint with the numeric ID
+        val episodeApiUrl = "$mainUrl/episode/$episodeId"
         
         try {
-            val response = app.get(episodeApiUrl).text
+            val response = app.get(episodeApiUrl, headers = mapOf(
+                "Referer" to pageUrl,
+                "Origin" to pageUrl
+            )).text
             val episodeDetail = parseJson<EpisodeDetailResponse>(response)
             
             // Extract the direct video URL from the response
