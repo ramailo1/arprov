@@ -186,6 +186,12 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("slug" ) var slug : Any? = null,
     )
 
+    // Internal data model to pass both URL and UUID
+    data class LinkData(
+        val url: String,
+        val uuid: String
+    )
+
     override suspend fun load(url: String): LoadResponse {
         // Extract slug from URL: https://www.animeiat.tv/anime/{slug}
         val slug = url.replace("$pageUrl/anime/", "")
@@ -210,10 +216,17 @@ class AnimeiatProvider : MainAPI() {
                 val pageData = parseJson<Episodes>(app.get(pageUrl).text)
 
                 pageData.data.forEach {
-                    // 1️⃣ Use the video slug if available, else fallback to episode slug
+                    // Assign the player ID as the video slug (UUID)
                     val playerSlug = it.video?.slug ?: it.slug ?: return@forEach
+                    
+                    // Create proper Watch URL for the user/browser
+                    val watchUrl = "$pageUrl/watch/${json.data?.slug}-episode-${it.number}"
+                    
+                    // Serialize both to pass to loadLinks
+                    val linkData = LinkData(watchUrl, playerSlug.toString())
+                    val dataString = mapper.writeValueAsString(linkData)
 
-                    episodesList.add(newEpisode(playerSlug.toString()) {
+                    episodesList.add(newEpisode(dataString) {
                         name = it.title
                         episode = it.number
                         posterUrl = it.poster?.url
@@ -253,7 +266,15 @@ class AnimeiatProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val payloadUrl = "$pageUrl/player/$data/_payload.json"
+            // Parse the data string to get the UUID
+            // We support both legacy (string) and new (JSON) formats for backward compatibility
+            val playerSlug = try {
+                parseJson<LinkData>(data).uuid
+            } catch (e: Exception) {
+                data // Fallback for old cached data
+            }
+            
+            val payloadUrl = "$pageUrl/player/$playerSlug/_payload.json"
             val response = app.get(payloadUrl, headers = mapOf("Referer" to pageUrl)).text
             val payload = parseJson<List<Any>>(response)
 
