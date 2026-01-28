@@ -207,7 +207,7 @@ class AnimeiatProvider : MainAPI() {
                 val pageUrl = if (pageNumber == 1) episodesApiUrl else "$episodesApiUrl?page=$pageNumber"
                 parseJson<Episodes>(app.get(pageUrl).text).data.map {
                     episodes.add(
-                        newEpisode(it.id.toString()) {
+                        newEpisode(it.slug.toString()) {
                             this.name = it.title
                             this.episode = it.number
                             this.posterUrl = it.poster?.url
@@ -231,27 +231,44 @@ class AnimeiatProvider : MainAPI() {
         }
     }
 
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data contains the episode ID (numeric)
-        val episodeId = data
+        // data contains the episode slug
+        val episodeSlug = data
         
-        // Call the episode API endpoint with the numeric ID
-        val episodeApiUrl = "$mainUrl/episode/$episodeId"
+        // Fetch the Nuxt payload JSON from the watch page
+        val payloadUrl = "$pageUrl/watch/$episodeSlug/_payload.json"
         
         try {
-            val response = app.get(episodeApiUrl, headers = mapOf(
-                "Referer" to pageUrl,
-                "Origin" to pageUrl
+            val response = app.get(payloadUrl, headers = mapOf(
+                "Referer" to pageUrl
             )).text
-            val episodeDetail = parseJson<EpisodeDetailResponse>(response)
             
-            // Extract the direct video URL from the response
-            val videoUrl = episodeDetail.data?.video?.url
+            // Parse the payload JSON (it's an array)
+            val payload = parseJson<List<Any>>(response)
+            
+            // Search for the video URL in the payload
+            // The payload contains nested objects, we need to find the video.url field
+            var videoUrl: String? = null
+            
+            for (item in payload) {
+                val itemStr = item.toString()
+                // Look for CDN URLs (they contain shahidha.net and .mp4)
+                if (itemStr.contains("shahidha.net") && itemStr.contains(".mp4")) {
+                    // Extract the URL using regex
+                    val urlPattern = "https://cdn\\.shahidha\\.net/[^\"\\s]+\\.mp4".toRegex()
+                    val match = urlPattern.find(itemStr)
+                    if (match != null) {
+                        videoUrl = match.value
+                        break
+                    }
+                }
+            }
             
             if (videoUrl != null) {
                 callback.invoke(
@@ -267,7 +284,7 @@ class AnimeiatProvider : MainAPI() {
                 return true
             }
         } catch (e: Exception) {
-            // If API call fails, return false
+            // If payload fetch fails, return false
             return false
         }
         
