@@ -191,50 +191,59 @@ class AnimeiatProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         // Extract slug from URL: https://www.animeiat.tv/anime/{slug}
         val slug = url.replace("$pageUrl/anime/", "")
-        
+
         // Fetch anime details using slug
         val animeApiUrl = "$mainUrl/anime/$slug"
         val animeResponse = app.get(animeApiUrl).text
         val json = parseJson<Load>(animeResponse)
-        
-        // Get the anime ID for fetching episodes
+
         val animeId = json.data?.id ?: throw ErrorLoadingException("Anime ID not found")
-        
+
         // Fetch episodes using the anime ID
-        val episodes = arrayListOf<Episode>()
+        val episodesList = arrayListOf<Episode>()
         val episodesApiUrl = "$mainUrl/anime/$animeId/episodes"
-        
+
         try {
             val episodesResponse = parseJson<Episodes>(app.get(episodesApiUrl).text)
             val totalPages = episodesResponse.meta.lastPage ?: 1
-            
-            (1..totalPages).map { pageNumber ->
+
+            (1..totalPages).forEach { pageNumber ->
                 val pageUrl = if (pageNumber == 1) episodesApiUrl else "$episodesApiUrl?page=$pageNumber"
-                parseJson<Episodes>(app.get(pageUrl).text).data.map {
-                    // Get the video slug (player ID) from the episode data
+                val pageData = parseJson<Episodes>(app.get(pageUrl).text)
+
+                pageData.data.forEach {
+                    // Assign the player ID as the video slug (UUID)
+                    // We use video.slug because the player endpoint requires a UUID
                     val playerSlug = it.video?.slug ?: it.slug
-                    episodes.add(
-                        newEpisode(playerSlug.toString()) {
-                            this.name = it.title
-                            this.episode = it.number
-                            this.posterUrl = it.poster?.url
-                        }
-                    )
+                    episodesList.add(newEpisode(playerSlug.toString()) {
+                        name = it.title
+                        episode = it.number
+                        posterUrl = it.poster?.url
+                    })
                 }
             }
-        } catch (e: Exception) {
-            // If episodes fetch fails, continue without episodes
+        } catch (_: Exception) {
+            // If episodes fetch fails, continue with empty list
         }
-        
-        return newAnimeLoadResponse(json.data?.name.toString(), url, if(json.data?.type == "movie") TvType.AnimeMovie else if(json.data?.type == "tv") TvType.Anime else TvType.OVA) {
+
+        return newAnimeLoadResponse(
+            json.data?.name.toString(),
+            url,
+            when (json.data?.type) {
+                "movie" -> TvType.AnimeMovie
+                "tv" -> TvType.Anime
+                "ova" -> TvType.OVA
+                else -> TvType.Anime
+            }
+        ) {
             japName = json.data?.otherNames?.replace("\\n.*".toRegex(), "")
             engName = json.data?.name
             posterUrl = json.data?.poster?.url
-            this.year = json.data?.year?.name?.toIntOrNull()
-            addEpisodes(DubStatus.Subbed, episodes)
+            year = json.data?.year?.name?.toIntOrNull()
+            addEpisodes(DubStatus.Subbed, episodesList)
             plot = json.data?.synopsis
             tags = json.data?.genres?.map { it.name.toString() }
-            this.showStatus = if(json.data?.status == "finished_airing") ShowStatus.Completed else ShowStatus.Ongoing
+            showStatus = if (json.data?.status == "finished_airing") ShowStatus.Completed else ShowStatus.Ongoing
         }
     }
 
