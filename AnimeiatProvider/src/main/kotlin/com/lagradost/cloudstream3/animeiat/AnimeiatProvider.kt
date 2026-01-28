@@ -155,6 +155,12 @@ class AnimeiatProvider : MainAPI() {
     data class Meta (
         @JsonProperty("last_page"    ) var lastPage    : Int? = null,
     )
+    
+    data class VideoData (
+        @JsonProperty("slug" ) var slug : String? = null,
+        @JsonProperty("url"  ) var url  : String? = null,
+    )
+    
     data class EpisodeData (
         @JsonProperty("id"           ) var id          : Int? = null,
         @JsonProperty("title"        ) var title       : String? = null,
@@ -162,6 +168,7 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("number"       ) var number      : Int? = null,
         @JsonProperty("video_id"     ) var videoId     : Int? = null,
         @JsonProperty("poster"       ) var poster      : Poster? = Poster(),
+        @JsonProperty("video"        ) var video       : VideoData? = VideoData(),
     )
     data class Episodes (
         @JsonProperty("data"  ) var data  : ArrayList<EpisodeData> = arrayListOf(),
@@ -239,71 +246,59 @@ class AnimeiatProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            // data contains the player ID (video slug)
             val playerSlug = data
-            
-            // Fetch the Nuxt payload JSON from the player page
             val payloadUrl = "$pageUrl/player/$playerSlug/_payload.json"
-            
-            val response = app.get(payloadUrl, headers = mapOf(
-                "Referer" to pageUrl
-            )).text
-            
-            // Parse the payload JSON as a raw list
+
+            val response = app.get(payloadUrl, headers = mapOf("Referer" to pageUrl)).text
+
+            // Parse payload as list of Any
             val payload = parseJson<List<Any>>(response)
-            
-            var videoUrl: String? = null
-            
-            // The player payload has a simpler structure
-            // Look for an object with a "video" key
+
             for (item in payload) {
-                if (item is Map<*, *> && item.containsKey("video")) {
+                if (item is Map<*, *>) {
+                    // 1️⃣ Check if there is a direct URL
+                    val directUrl = item["url"] as? String
+                    if (directUrl != null && directUrl.startsWith("http")) {
+                        callback.invoke(newExtractorLink(this.name, this.name, directUrl) {
+                            this.referer = pageUrl
+                            this.quality = Qualities.Unknown.value
+                        })
+                        return true
+                    }
+
+                    // 2️⃣ If not, check for index-based video field
                     val videoIndex = when (val v = item["video"]) {
                         is Number -> v.toInt()
                         is String -> v.toIntOrNull()
                         else -> null
                     }
-                    
+
                     if (videoIndex != null && videoIndex < payload.size) {
                         val videoObj = payload[videoIndex]
-                        if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
-                            // Get the URL index
+                        if (videoObj is Map<*, *>) {
                             val urlIndex = when (val u = videoObj["url"]) {
                                 is Number -> u.toInt()
                                 is String -> u.toIntOrNull()
                                 else -> null
                             }
-                            
                             if (urlIndex != null && urlIndex < payload.size) {
-                                val urlString = payload[urlIndex]
-                                if (urlString is String && urlString.startsWith("http")) {
-                                    videoUrl = urlString
-                                    break
+                                val urlString = payload[urlIndex] as? String
+                                if (urlString != null && urlString.startsWith("http")) {
+                                    callback.invoke(newExtractorLink(this.name, this.name, urlString) {
+                                        this.referer = pageUrl
+                                        this.quality = Qualities.Unknown.value
+                                    })
+                                    return true
                                 }
                             }
                         }
                     }
                 }
             }
-            
-            if (videoUrl != null) {
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        this.name,
-                        videoUrl
-                    ) {
-                        this.referer = pageUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-                return true
-            }
         } catch (e: Exception) {
-            // If payload fetch fails, return false
             e.printStackTrace()
         }
-        
+
         return false
     }
 }
