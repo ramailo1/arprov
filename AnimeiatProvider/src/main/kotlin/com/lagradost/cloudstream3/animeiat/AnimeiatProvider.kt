@@ -11,6 +11,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.nicehttp.Requests
 
 import com.fasterxml.jackson.module.kotlin.readValue
+import android.util.Base64
 
 class AnimeiatProvider : MainAPI() {
     private inline fun <reified T> parseJson(text: String): T {
@@ -159,8 +160,15 @@ class AnimeiatProvider : MainAPI() {
         println(url)
         val doc = app.get(url).document
         val script = doc.select("script").find { it.html().contains("slug:\"") }?.html()
-        val id = script?.let {
+        var id = script?.let {
             """slug:"([^"]+)"""".toRegex().find(it)?.groupValues?.get(1)
+        }
+        if (id == null) {
+            val anTv = doc.select("input[name=an_tv]").attr("value")
+            if (anTv.isNotEmpty()) {
+                val decoded = String(Base64.decode(anTv, Base64.DEFAULT))
+                id = """"url";s:\d+:"([^"]+)"""".toRegex().find(decoded)?.groupValues?.get(1)
+            }
         }
         if (id == null) return false
         val player = app.get("$pageUrl/player/$id").document
