@@ -186,15 +186,15 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("slug" ) var slug : Any? = null,
     )
 
-    // Internal data model to pass both URL and UUID
-    data class LinkData(
-        val url: String,
-        val uuid: String
-    )
-
     override suspend fun load(url: String): LoadResponse {
-        // Extract slug from URL: https://www.animeiat.tv/anime/{slug}
-        val slug = url.replace("$pageUrl/anime/", "")
+        // Extract slug from URL. Handle both /anime/ and /watch/ formats
+        // https://www.animeiat.tv/anime/{slug}
+        // https://www.animeiat.tv/watch/{slug}-episode-{number}
+        val slug = if (url.contains("/watch/")) {
+            url.substringAfter("/watch/").substringBefore("-episode")
+        } else {
+            url.replace("$pageUrl/anime/", "")
+        }
 
         // Fetch anime details using slug
         val animeApiUrl = "$mainUrl/anime/$slug"
@@ -219,14 +219,15 @@ class AnimeiatProvider : MainAPI() {
                     // Assign the player ID as the video slug (UUID)
                     val playerSlug = it.video?.slug ?: it.slug ?: return@forEach
                     
-                    // Create proper Watch URL for the user/browser
+                    // Proper Watch URL for the user/browser
                     val watchUrl = "$pageUrl/watch/${json.data?.slug}-episode-${it.number}"
                     
-                    // Serialize both to pass to loadLinks
-                    val linkData = LinkData(watchUrl, playerSlug.toString())
-                    val dataString = mapper.writeValueAsString(linkData)
+                    // Append UUID as a fake query parameter for loadLinks to extract
+                    // This creates a valid URL for the browser (which ignores the extra param)
+                    // and passes the UUID to loadLinks
+                    val episodeData = "$watchUrl?uid=$playerSlug"
 
-                    episodesList.add(newEpisode(dataString) {
+                    episodesList.add(newEpisode(episodeData) {
                         name = it.title
                         episode = it.number
                         posterUrl = it.poster?.url
@@ -266,26 +267,33 @@ class AnimeiatProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            // Parse the data string to get the UUID
-            // We support both legacy (string) and new (JSON) formats for backward compatibility
-            val playerSlug = try {
-                parseJson<LinkData>(data).uuid
-            } catch (e: Exception) {
-                data // Fallback for old cached data
+            // Extract UUID from the fake query parameter "?uid="
+            // Fallback to raw data if not found (backward compatibility)
+            val playerSlug = if (data.contains("?uid=")) {
+                data.substringAfter("?uid=")
+            } else {
+                // Try decoding legacy Base64 or LinkData if present, else raw
+                try {
+                     // Check if it's Base64 (simple check)
+                     if (data.length > 20 && !data.contains("/")) String(Base64.decode(data, Base64.DEFAULT)) else data
+                } catch (e: Exception) {
+                    data
+                }
             }
             
             val payloadUrl = "$pageUrl/player/$playerSlug/_payload.json"
             val response = app.get(payloadUrl, headers = mapOf("Referer" to pageUrl)).text
             val payload = parseJson<List<Any>>(response)
 
+            // Recursive extraction helper (Handles Direct, Base64, and Index dereferencing)
             fun extractUrl(obj: Any?): String? {
                 if (obj !is Map<*, *>) return null
 
-                // Direct URL
+                // 1. Direct URL
                 val direct = obj["url"] as? String
                 if (direct != null && direct.startsWith("http")) return direct
 
-                // Base64 URL
+                // 2. Base64 URL
                 val b64 = obj["url"] as? String
                 if (b64 != null && b64.isNotEmpty()) {
                     try {
@@ -294,7 +302,7 @@ class AnimeiatProvider : MainAPI() {
                     } catch (_: Exception) {}
                 }
 
-                // Index-based URL
+                // 3. Index-based URL (Dereferencing)
                 val index = when (val v = obj["url"]) {
                     is Number -> v.toInt()
                     is String -> v.toIntOrNull()
