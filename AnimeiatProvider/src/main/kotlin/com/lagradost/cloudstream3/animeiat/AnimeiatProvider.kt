@@ -141,72 +141,93 @@ class AnimeiatProvider : MainAPI() {
             val jsonString = app.get(payloadUrl).text
             val rawJson = parseJson<List<Any>>(jsonString)
 
-            // Nuxt Reference Resolver
-            fun resolve(element: Any?): Any? {
+            // Nuxt Reference Resolver: converts indices to objects
+            fun resolve(element: Any?, depth: Int = 0): Any? {
+                if (depth > 20 || element == null) return null
                 return when (element) {
-                    is Int -> if (element in rawJson.indices) rawJson[element] else element
+                    is Int -> if (element in rawJson.indices) resolve(rawJson[element], depth + 1) else element
                     else -> element
                 }
             }
-            
-            // Helper to resolved specific values as Types
-            fun resolveAsMap(element: Any?): Map<*, *>? = resolve(element) as? Map<*, *>
-            fun resolveAsString(element: Any?): String? = resolve(element) as? String
 
-            // Step 1: Find the episode object
-            // We need to resolve each item to check if it's the right map
-            val episodeObj = rawJson.mapNotNull { resolveAsMap(it) }
-                .firstOrNull { it["video_id"] != null }
-
-            // Step 2: Get video URLs (highest quality first)
-            // 'video' field is likely an index, so we resolve it
-            val videoMap = resolveAsMap(episodeObj?.get("video"))
-            
-            val urls = arrayListOf<String>()
-
-            // 'url' and 'streamable_path' fields might also be indices to strings
-            resolveAsString(videoMap?.get("url"))?.let { urls.add(it) }
-            resolveAsString(videoMap?.get("streamable_path"))?.let { urls.add(it) }
-
-            val selectedUrl = urls.firstOrNull()?.let {
-                if (it.startsWith("http")) it else "$pageUrl/$it"
+            // Recursively search for .mp4 or .m3u8 URLs
+            fun findVideoUrls(obj: Any?): List<String> {
+                val urls = mutableListOf<String>()
+                when (obj) {
+                    is String -> {
+                        if (obj.startsWith("http") && (obj.endsWith(".mp4") || obj.endsWith(".m3u8"))) {
+                            urls.add(obj)
+                        } else {
+                            // Try Base64 decode
+                            if (obj.length > 20 && !obj.contains(" ")) {
+                                try {
+                                    val decoded = String(Base64.decode(obj, Base64.DEFAULT))
+                                    if (decoded.startsWith("http") && (decoded.endsWith(".mp4") || decoded.endsWith(".m3u8"))) {
+                                        urls.add(decoded)
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                    is Int -> findVideoUrls(resolve(obj))?.let { urls.addAll(it) }
+                    is Map<*, *> -> {
+                        // Common video keys
+                        val keys = listOf("url", "file", "src", "video", "streamable_path")
+                        keys.forEach { key ->
+                            val value = obj[key]
+                            findVideoUrls(value).let { urls.addAll(it) }
+                        }
+                        // Also search all values recursively
+                        obj.values.forEach { findVideoUrls(it).let { urls.addAll(it) } }
+                    }
+                    is List<*> -> obj.forEach { findVideoUrls(it).let { urls.addAll(it) } }
+                }
+                return urls
             }
+
+            // Step 1: Collect all video URLs in the payload
+            val allVideoUrls = rawJson.flatMap { findVideoUrls(it) }
+
+            // Step 2: Pick the "best" URL (we can improve quality selection later)
+            val selectedUrl = allVideoUrls.firstOrNull()
 
             if (!selectedUrl.isNullOrEmpty()) {
                 callback(
                     newExtractorLink(this.name, this.name, selectedUrl) {
                         referer = pageUrl
-                        quality = Qualities.Unknown.value
+                        quality = when {
+                            selectedUrl.contains("1080") -> 1080
+                            selectedUrl.contains("720") -> 720
+                            selectedUrl.contains("480") -> 480
+                            else -> Qualities.Unknown.value
+                        }
                     }
                 )
                 return true
             }
 
-            // Step 3: Fallback to UUID/player payload
-            val uuid = resolveAsString(videoMap?.get("slug"))
+            // Step 3: Fallback to player UUID payload if no direct URL found
+            val episodeObj = rawJson.mapNotNull { resolve(it) as? Map<*, *> }
+                .firstOrNull { it["video_id"] != null }
+            val videoMap = resolve(episodeObj?.get("video")) as? Map<*, *>
+            val uuid = videoMap?.get("slug") as? String
+
             if (!uuid.isNullOrEmpty()) {
                 val playerPayloadUrl = "$pageUrl/player/$uuid/_payload.json"
                 val playerJsonString = app.get(playerPayloadUrl).text
                 val playerRawJson = parseJson<List<Any>>(playerJsonString)
-
-                fun findUrl(obj: Any?): String? {
-                    if (obj is Map<*, *>) {
-                        (obj["url"] as? String)?.let { return it }
-                        obj.values.forEach { findUrl(it)?.let { return it } }
-                    } else if (obj is List<*>) {
-                        // Also iterate integers which might be indices in player payload?
-                        // For simplicity assuming player payload key/values are strings/maps or simple lists
-                        obj.forEach { findUrl(it)?.let { return it } }
-                    }
-                    return null
-                }
-
-                val fallbackUrl = playerRawJson.mapNotNull { findUrl(it) }.firstOrNull()
+                val fallbackUrls = playerRawJson.flatMap { findVideoUrls(it) }
+                val fallbackUrl = fallbackUrls.firstOrNull()
                 if (!fallbackUrl.isNullOrEmpty()) {
                     callback(
                         newExtractorLink(this.name, this.name, fallbackUrl) {
                             referer = pageUrl
-                            quality = Qualities.Unknown.value
+                            quality = when {
+                                fallbackUrl.contains("1080") -> 1080
+                                fallbackUrl.contains("720") -> 720
+                                fallbackUrl.contains("480") -> 480
+                                else -> Qualities.Unknown.value
+                            }
                         }
                     )
                     return true

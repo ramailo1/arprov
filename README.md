@@ -58,6 +58,7 @@ These plugins are fully operational and regularly maintained.
 | **ArabSeed** | Movies & Series | Arabic |
 | **Anime4up Pack** | Anime | Arabic |
 | **MovizLands** | Movies & Series | Arabic |
+| **Animeiat** | Anime | Arabic |
 
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
@@ -84,7 +85,7 @@ These plugins are currently non-functional due to site changes or API issues.
 
 | Provider | Known Issue | Status |
 | :--- | :--- | :--- |
-| **Animeiat** | 🛑 Broken Logic | ⏸️ Paused |
+
 | **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
