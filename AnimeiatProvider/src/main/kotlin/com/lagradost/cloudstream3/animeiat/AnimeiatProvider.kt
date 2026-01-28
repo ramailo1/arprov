@@ -172,14 +172,14 @@ class AnimeiatProvider : MainAPI() {
             if (videoUrl != null) {
                 // Direct video URL found in JSON
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         this.name,
                         this.name,
-                        videoUrl,
-                        url,
-                        Qualities.Unknown.value,
-                        false
-                    )
+                        videoUrl
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
                 return true
             }
@@ -191,28 +191,28 @@ class AnimeiatProvider : MainAPI() {
             // Check for video tags
             playerDoc.select("video[src]").forEach { video ->
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         this.name,
                         this.name,
-                        video.attr("src"),
-                        playerUrl,
-                        Qualities.Unknown.value,
-                        false
-                    )
+                        video.attr("src")
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
             
             // Check for source tags
             playerDoc.select("video source[src]").forEach { source ->
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         this.name,
                         this.name,
-                        source.attr("src"),
-                        playerUrl,
-                        source.attr("size").toIntOrNull() ?: Qualities.Unknown.value,
-                        false
-                    )
+                        source.attr("src")
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = source.attr("size").toIntOrNull() ?: Qualities.Unknown.value
+                    }
                 )
             }
             
