@@ -168,21 +168,19 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("meta"  ) var meta  : Meta = Meta()
     )
     
-    // New API video data models
-    data class VideoData (
-        @JsonProperty("url"  ) var url  : String? = null,
-        @JsonProperty("slug" ) var slug : String? = null,
-        @JsonProperty("hash" ) var hash : String? = null,
+    // Nuxt Payload data models for video extraction
+    data class PayloadEpisode (
+        @JsonProperty("id"    ) var id    : Any? = null,
+        @JsonProperty("title" ) var title : Any? = null,
+        @JsonProperty("slug"  ) var slug  : Any? = null,
+        @JsonProperty("video" ) var video : Any? = null,  // This is an index to the video object
     )
-    
-    data class EpisodeDetailData (
-        @JsonProperty("video") var video: VideoData? = VideoData(),
+    data class PayloadVideo (
+        @JsonProperty("id"   ) var id   : Any? = null,
+        @JsonProperty("url"  ) var url  : Any? = null,  // This is an index to the URL string
+        @JsonProperty("slug" ) var slug : Any? = null,
     )
-    
-    data class EpisodeDetailResponse (
-        @JsonProperty("data") var data: EpisodeDetailData? = EpisodeDetailData(),
-    )
-    
+
     override suspend fun load(url: String): LoadResponse {
         // Extract slug from URL: https://www.animeiat.tv/anime/{slug}
         val slug = url.replace("$pageUrl/anime/", "")
@@ -249,23 +247,43 @@ class AnimeiatProvider : MainAPI() {
                 "Referer" to pageUrl
             )).text
             
-            // Parse the payload JSON (it's an array)
+            // Parse the payload JSON as a raw list
             val payload = parseJson<List<Any>>(response)
             
-            // Search for the video URL in the payload
-            // The payload contains nested objects, we need to find the video.url field
+            // Find the episode object (contains id, title, slug, video)
             var videoUrl: String? = null
             
-            for (item in payload) {
-                val itemStr = item.toString()
-                // Look for CDN URLs (they contain shahidha.net and .mp4)
-                if (itemStr.contains("shahidha.net") && itemStr.contains(".mp4")) {
-                    // Extract the URL using regex
-                    val urlPattern = "https://cdn\\.shahidha\\.net/[^\"\\s]+\\.mp4".toRegex()
-                    val match = urlPattern.find(itemStr)
-                    if (match != null) {
-                        videoUrl = match.value
-                        break
+            for (i in payload.indices) {
+                val item = payload[i]
+                if (item is Map<*, *>) {
+                    // Check if this is an episode object
+                    if (item.containsKey("video") && item.containsKey("slug") && item.containsKey("title")) {
+                        // Get the video index
+                        val videoIndex = when (val v = item["video"]) {
+                            is Number -> v.toInt()
+                            is String -> v.toIntOrNull()
+                            else -> null
+                        }
+                        
+                        if (videoIndex != null && videoIndex < payload.size) {
+                            val videoObj = payload[videoIndex]
+                            if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
+                                // Get the URL index
+                                val urlIndex = when (val u = videoObj["url"]) {
+                                    is Number -> u.toInt()
+                                    is String -> u.toIntOrNull()
+                                    else -> null
+                                }
+                                
+                                if (urlIndex != null && urlIndex < payload.size) {
+                                    val urlString = payload[urlIndex]
+                                    if (urlString is String && urlString.startsWith("http")) {
+                                        videoUrl = urlString
+                                        break
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
