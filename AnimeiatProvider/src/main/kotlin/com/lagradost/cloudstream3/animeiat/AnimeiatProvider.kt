@@ -250,36 +250,57 @@ class AnimeiatProvider : MainAPI() {
             // Parse the payload JSON as a raw list
             val payload = parseJson<List<Any>>(response)
             
-            // Find the episode object (contains id, title, slug, video)
+            // Step 1: Find the index of the slug string in the array
+            var slugIndex: Int? = null
+            for (i in payload.indices) {
+                if (payload[i] is String && payload[i] == episodeSlug) {
+                    slugIndex = i
+                    break
+                }
+            }
+            
+            if (slugIndex == null) {
+                return false
+            }
+            
+            // Step 2: Find the episode object that references this slug index
             var videoUrl: String? = null
             
             for (i in payload.indices) {
                 val item = payload[i]
                 if (item is Map<*, *>) {
-                    // Check if this is an episode object
-                    if (item.containsKey("video") && item.containsKey("slug") && item.containsKey("title")) {
-                        // Get the video index
-                        val videoIndex = when (val v = item["video"]) {
-                            is Number -> v.toInt()
-                            is String -> v.toIntOrNull()
+                    // Check if this episode object's slug field equals our slug index
+                    if (item.containsKey("slug") && item.containsKey("video")) {
+                        val itemSlugIndex = when (val s = item["slug"]) {
+                            is Number -> s.toInt()
+                            is String -> s.toIntOrNull()
                             else -> null
                         }
                         
-                        if (videoIndex != null && videoIndex < payload.size) {
-                            val videoObj = payload[videoIndex]
-                            if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
-                                // Get the URL index
-                                val urlIndex = when (val u = videoObj["url"]) {
-                                    is Number -> u.toInt()
-                                    is String -> u.toIntOrNull()
-                                    else -> null
-                                }
-                                
-                                if (urlIndex != null && urlIndex < payload.size) {
-                                    val urlString = payload[urlIndex]
-                                    if (urlString is String && urlString.startsWith("http")) {
-                                        videoUrl = urlString
-                                        break
+                        if (itemSlugIndex == slugIndex) {
+                            // Found the episode object! Now get the video
+                            val videoIndex = when (val v = item["video"]) {
+                                is Number -> v.toInt()
+                                is String -> v.toIntOrNull()
+                                else -> null
+                            }
+                            
+                            if (videoIndex != null && videoIndex < payload.size) {
+                                val videoObj = payload[videoIndex]
+                                if (videoObj is Map<*, *> && videoObj.containsKey("url")) {
+                                    // Get the URL index
+                                    val urlIndex = when (val u = videoObj["url"]) {
+                                        is Number -> u.toInt()
+                                        is String -> u.toIntOrNull()
+                                        else -> null
+                                    }
+                                    
+                                    if (urlIndex != null && urlIndex < payload.size) {
+                                        val urlString = payload[urlIndex]
+                                        if (urlString is String && urlString.startsWith("http")) {
+                                            videoUrl = urlString
+                                            break
+                                        }
                                     }
                                 }
                             }
