@@ -7,9 +7,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.fasterxml.jackson.annotation.JsonProperty
-
 import com.lagradost.nicehttp.Requests
-
 import com.fasterxml.jackson.module.kotlin.readValue
 import android.util.Base64
 
@@ -212,9 +210,9 @@ class AnimeiatProvider : MainAPI() {
                 val pageData = parseJson<Episodes>(app.get(pageUrl).text)
 
                 pageData.data.forEach {
-                    // Assign the player ID as the video slug (UUID)
-                    // We use video.slug because the player endpoint requires a UUID
-                    val playerSlug = it.video?.slug ?: it.slug
+                    // 1️⃣ Use the video slug if available, else fallback to episode slug
+                    val playerSlug = it.video?.slug ?: it.slug ?: return@forEach
+
                     episodesList.add(newEpisode(playerSlug.toString()) {
                         name = it.title
                         episode = it.number
@@ -255,55 +253,51 @@ class AnimeiatProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val playerSlug = data
-            val payloadUrl = "$pageUrl/player/$playerSlug/_payload.json"
-
+            val payloadUrl = "$pageUrl/player/$data/_payload.json"
             val response = app.get(payloadUrl, headers = mapOf("Referer" to pageUrl)).text
-
-            // Parse payload as list of Any
             val payload = parseJson<List<Any>>(response)
 
+            fun extractUrl(obj: Any?): String? {
+                if (obj !is Map<*, *>) return null
+
+                // Direct URL
+                val direct = obj["url"] as? String
+                if (direct != null && direct.startsWith("http")) return direct
+
+                // Base64 URL
+                val b64 = obj["url"] as? String
+                if (b64 != null && b64.isNotEmpty()) {
+                    try {
+                        val decoded = String(Base64.decode(b64, Base64.DEFAULT))
+                        if (decoded.startsWith("http")) return decoded
+                    } catch (_: Exception) {}
+                }
+
+                // Index-based URL
+                val index = when (val v = obj["url"]) {
+                    is Number -> v.toInt()
+                    is String -> v.toIntOrNull()
+                    else -> null
+                }
+                if (index != null && index < payload.size) {
+                    return extractUrl(payload[index])
+                }
+
+                return null
+            }
+
+            // Loop through payload to find the correct URL
             for (item in payload) {
-                if (item is Map<*, *>) {
-                    // 1️⃣ Check if there is a direct URL
-                    val directUrl = item["url"] as? String
-                    if (directUrl != null && directUrl.startsWith("http")) {
-                        callback.invoke(newExtractorLink(this.name, this.name, directUrl) {
-                            this.referer = pageUrl
-                            this.quality = Qualities.Unknown.value
-                        })
-                        return true
-                    }
-
-                    // 2️⃣ If not, check for index-based video field
-                    val videoIndex = when (val v = item["video"]) {
-                        is Number -> v.toInt()
-                        is String -> v.toIntOrNull()
-                        else -> null
-                    }
-
-                    if (videoIndex != null && videoIndex < payload.size) {
-                        val videoObj = payload[videoIndex]
-                        if (videoObj is Map<*, *>) {
-                            val urlIndex = when (val u = videoObj["url"]) {
-                                is Number -> u.toInt()
-                                is String -> u.toIntOrNull()
-                                else -> null
-                            }
-                            if (urlIndex != null && urlIndex < payload.size) {
-                                val urlString = payload[urlIndex] as? String
-                                if (urlString != null && urlString.startsWith("http")) {
-                                    callback.invoke(newExtractorLink(this.name, this.name, urlString) {
-                                        this.referer = pageUrl
-                                        this.quality = Qualities.Unknown.value
-                                    })
-                                    return true
-                                }
-                            }
-                        }
-                    }
+                val url = extractUrl(item)
+                if (!url.isNullOrEmpty()) {
+                    callback.invoke(newExtractorLink(this.name, this.name, url) {
+                        this.referer = pageUrl
+                        this.quality = Qualities.Unknown.value
+                    })
+                    return true
                 }
             }
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
