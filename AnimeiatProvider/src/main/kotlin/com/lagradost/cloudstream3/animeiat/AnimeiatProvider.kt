@@ -44,9 +44,9 @@ class AnimeiatProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/home/sticky-episodes?page=" to "Episodes (H)",
-        "$mainUrl/anime?status=completed&page=" to "Completed",
-        "$mainUrl/anime?status=ongoing&page=" to "Ongoing",
+        "$mainUrl/anime?featured=1&page=" to "حلقات مثبتة",
+        "$mainUrl/anime?status=ongoing&page=" to "يعرض حاليا",
+        "$mainUrl/anime?status=completed&page=" to "مكتمل",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -62,9 +62,7 @@ class AnimeiatProvider : MainAPI() {
                 this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
             }
         }
-        return if(request.name.contains("(H)")) {
-             newHomePageResponse(request.name.replace(" (H)",""), list, true)
-        } else newHomePageResponse(request.name, list)
+        return newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -157,34 +155,70 @@ class AnimeiatProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val url = if(data.contains("-episode")) data else "$data-episode-1"
-        println(url)
         val doc = app.get(url).document
-        val script = doc.select("script").find { it.html().contains("slug:\"") }?.html()
-        var id = script?.let {
-            """slug:"([^"]+)"""".toRegex().find(it)?.groupValues?.get(1)
-        }
-        if (id == null) {
-            val anTv = doc.select("input[name=an_tv]").attr("value")
-            if (anTv.isNotEmpty()) {
-                val decoded = String(Base64.decode(anTv, Base64.DEFAULT))
-                id = """"url";s:\d+:"([^"]+)"""".toRegex().find(decoded)?.groupValues?.get(1)
+        
+        // Extract the video slug from the JSON data in the page
+        val scriptData = doc.select("script#__NUXT_DATA__").html()
+        
+        // Look for the video slug pattern (UUID format)
+        val slugRegex = """"slug":"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"""".toRegex()
+        val slug = slugRegex.find(scriptData)?.groupValues?.get(1)
+        
+        if (slug != null) {
+            // Also try to extract the video URL from the JSON data
+            val urlRegex = """"url":"(https://[^"]+\.mp4)"""".toRegex()
+            val videoUrl = urlRegex.find(scriptData)?.groupValues?.get(1)
+            
+            if (videoUrl != null) {
+                // Direct video URL found in JSON
+                callback.invoke(
+                    ExtractorLink(
+                        this.name,
+                        this.name,
+                        videoUrl,
+                        url,
+                        Qualities.Unknown.value,
+                        false
+                    )
+                )
+                return true
             }
+            
+            // If no direct URL, try the player page
+            val playerUrl = "$pageUrl/player/$slug"
+            val playerDoc = app.get(playerUrl).document
+            
+            // Check for video tags
+            playerDoc.select("video[src]").forEach { video ->
+                callback.invoke(
+                    ExtractorLink(
+                        this.name,
+                        this.name,
+                        video.attr("src"),
+                        playerUrl,
+                        Qualities.Unknown.value,
+                        false
+                    )
+                )
+            }
+            
+            // Check for source tags
+            playerDoc.select("video source[src]").forEach { source ->
+                callback.invoke(
+                    ExtractorLink(
+                        this.name,
+                        this.name,
+                        source.attr("src"),
+                        playerUrl,
+                        source.attr("size").toIntOrNull() ?: Qualities.Unknown.value,
+                        false
+                    )
+                )
+            }
+            
+            return true
         }
-        if (id == null) return false
-        val player = app.get("$pageUrl/player/$id").document
-        player.select("source").map {
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    it.attr("src"),
-                    ExtractorLinkType.VIDEO
-                ) {
-                    quality = it.attr("size").toIntOrNull() ?: Qualities.Unknown.value
-                    referer = pageUrl
-                }
-            )
-        }
-        return true
+        
+        return false
     }
 }
