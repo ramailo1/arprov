@@ -18,7 +18,7 @@ class AnimeiatProvider : MainAPI() {
         return mapper.readValue(text)
     }
     override var lang = "ar"
-    override var mainUrl = "https://api.animeiat.co/v1"
+    override var mainUrl = "https://api.animegarden.net/v1/animeiat"
     val pageUrl = "https://www.animeiat.tv"
     override var name = "Animeiat"
     override val usesWebView = false
@@ -26,6 +26,7 @@ class AnimeiatProvider : MainAPI() {
     override val supportedTypes =
         setOf(TvType.Anime, TvType.AnimeMovie)
 
+    // Old API data models (kept for compatibility)
     data class Data (
         @JsonProperty("anime_name"     ) var animeName     : String? = null,
         @JsonProperty("title"     ) var title     : String? = null,
@@ -43,42 +44,86 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("data"  ) var data  : ArrayList<Data> = arrayListOf(),
     )
 
+    // New API data models
+    data class Poster (
+        @JsonProperty("url") var url: String? = null
+    )
+    
+    data class AnimeData (
+        @JsonProperty("name"           ) var name          : String? = null,
+        @JsonProperty("slug"           ) var slug          : String? = null,
+        @JsonProperty("status"         ) var status        : String? = null,
+        @JsonProperty("episodes"       ) var episodes      : Int? = null,
+        @JsonProperty("type"           ) var type          : String? = null,
+        @JsonProperty("poster"         ) var poster        : Poster? = Poster(),
+    )
+    
+    data class EpisodeHomeData (
+        @JsonProperty("title"          ) var title         : String? = null,
+        @JsonProperty("slug"           ) var slug          : String? = null,
+        @JsonProperty("number"         ) var number        : Int? = null,
+        @JsonProperty("poster"         ) var poster        : Poster? = Poster(),
+        @JsonProperty("anime"          ) var anime         : AnimeData? = AnimeData(),
+    )
+    
+    data class HomeResponse (
+        @JsonProperty("data") var data: ArrayList<AnimeData> = arrayListOf(),
+    )
+    
+    data class HomeEpisodeResponse (
+        @JsonProperty("data") var data: ArrayList<EpisodeHomeData> = arrayListOf(),
+    )
+
     override val mainPage = mainPageOf(
-        "$mainUrl/anime?featured=1&page=" to "حلقات مثبتة",
-        "$mainUrl/anime?status=ongoing&page=" to "يعرض حاليا",
-        "$mainUrl/anime?status=completed&page=" to "مكتمل",
+        "$mainUrl/home/sticky-episodes" to "حلقات مثبتة",
+        "$mainUrl/home/currently-airing-animes" to "يعرض حاليا",
+        "$mainUrl/home/completed-animes" to "مكتمل",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val json = parseJson<All>(app.get(request.data + page).text)
-        val list = json.data.map {
-            newAnimeSearchResponse(
-                it.animeName ?: it.title.toString(),
-                mainUrl + "/anime/" + it.slug.toString().replace("-episode.*".toRegex(),""),
-                if (it.type == "movie") TvType.AnimeMovie else if (it.type == "tv") TvType.Anime else TvType.OVA,
-            ) {
-                addDubStatus(false, it.totalEpisodes ?: it.number)
-                this.otherName = it.otherNames?.split("\n")?.last()
-                this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
+        val list = if (request.data.contains("sticky-episodes")) {
+            // Sticky episodes returns episode objects
+            val json = parseJson<HomeEpisodeResponse>(app.get(request.data).text)
+            json.data.map {
+                val animeSlug = it.anime?.slug ?: it.slug?.replace("-episode.*".toRegex(), "")
+                newAnimeSearchResponse(
+                    it.anime?.name ?: it.title.toString(),
+                    "$pageUrl/anime/$animeSlug",
+                    if (it.anime?.type == "movie") TvType.AnimeMovie else TvType.Anime,
+                ) {
+                    this.posterUrl = it.poster?.url
+                    addDubStatus(false, 1) // Episode count not available in this endpoint
+                }
+            }
+        } else {
+            // Currently airing and completed return anime objects
+            val json = parseJson<HomeResponse>(app.get(request.data).text)
+            json.data.map {
+                newAnimeSearchResponse(
+                    it.name.toString(),
+                    "$pageUrl/anime/${it.slug}",
+                    if (it.type == "movie") TvType.AnimeMovie else TvType.Anime,
+                ) {
+                    this.posterUrl = it.poster?.url
+                    addDubStatus(false, it.episodes)
+                }
             }
         }
         return newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val json = parseJson<All>(app.get("$mainUrl/anime?q=$query").text)
+        val json = parseJson<HomeResponse>(app.get("$mainUrl/anime?q=$query").text)
         return json.data.map {
             newAnimeSearchResponse(
-                it.animeName.toString(),
-                mainUrl + "/anime/" + it.slug.toString(),
-                if(it.type == "movie") TvType.AnimeMovie else if(it.type == "tv") TvType.Anime else TvType.OVA,
+                it.name.toString(),
+                "$pageUrl/anime/${it.slug}",
+                if(it.type == "movie") TvType.AnimeMovie else TvType.Anime,
             ) {
-                addDubStatus(false, it.totalEpisodes)
-                this.otherName = it.otherNames?.split("\n")?.last()
-                this.posterUrl = "https://api.animeiat.co/storage/" + it.posterPath
+                addDubStatus(false, it.episodes)
+                this.posterUrl = it.poster?.url
             }
         }
-
     }
 
     data class Year (
@@ -120,6 +165,22 @@ class AnimeiatProvider : MainAPI() {
         @JsonProperty("data"  ) var data  : ArrayList<EpisodeData> = arrayListOf(),
         @JsonProperty("meta"  ) var meta  : Meta = Meta()
     )
+    
+    // New API video data models
+    data class VideoData (
+        @JsonProperty("url"  ) var url  : String? = null,
+        @JsonProperty("slug" ) var slug : String? = null,
+        @JsonProperty("hash" ) var hash : String? = null,
+    )
+    
+    data class EpisodeDetailData (
+        @JsonProperty("video") var video: VideoData? = VideoData(),
+    )
+    
+    data class EpisodeDetailResponse (
+        @JsonProperty("data") var data: EpisodeDetailData? = EpisodeDetailData(),
+    )
+    
     override suspend fun load(url: String): LoadResponse {
         val loadSession = Requests()
         val request = loadSession.get(url.replace(pageUrl, mainUrl)).text
@@ -154,69 +215,36 @@ class AnimeiatProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val url = if(data.contains("-episode")) data else "$data-episode-1"
-        val doc = app.get(url).document
+        // Extract episode slug from the watch URL
+        // URL format: https://www.animeiat.tv/watch/{episode-slug}
+        val episodeSlug = data.replace("$pageUrl/watch/", "")
         
-        // Extract the video slug from the JSON data in the page
-        val scriptData = doc.select("script#__NUXT_DATA__").html()
+        // Call the new episode API endpoint
+        val episodeApiUrl = "$mainUrl/episodes/$episodeSlug"
         
-        // Look for the video slug pattern (UUID format)
-        val slugRegex = """"slug":"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"""".toRegex()
-        val slug = slugRegex.find(scriptData)?.groupValues?.get(1)
-        
-        if (slug != null) {
-            // Also try to extract the video URL from the JSON data
-            val urlRegex = """"url":"(https://[^"]+\.mp4)"""".toRegex()
-            val videoUrl = urlRegex.find(scriptData)?.groupValues?.get(1)
+        try {
+            val response = app.get(episodeApiUrl).text
+            val episodeDetail = parseJson<EpisodeDetailResponse>(response)
+            
+            // Extract the direct video URL from the response
+            val videoUrl = episodeDetail.data?.video?.url
             
             if (videoUrl != null) {
-                // Direct video URL found in JSON
                 callback.invoke(
                     newExtractorLink(
                         this.name,
                         this.name,
                         videoUrl
                     ) {
-                        this.referer = url
+                        this.referer = pageUrl
                         this.quality = Qualities.Unknown.value
                     }
                 )
                 return true
             }
-            
-            // If no direct URL, try the player page
-            val playerUrl = "$pageUrl/player/$slug"
-            val playerDoc = app.get(playerUrl).document
-            
-            // Check for video tags
-            playerDoc.select("video[src]").forEach { video ->
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        this.name,
-                        video.attr("src")
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-            
-            // Check for source tags
-            playerDoc.select("video source[src]").forEach { source ->
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        this.name,
-                        source.attr("src")
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = source.attr("size").toIntOrNull() ?: Qualities.Unknown.value
-                    }
-                )
-            }
-            
-            return true
+        } catch (e: Exception) {
+            // If API call fails, return false
+            return false
         }
         
         return false
