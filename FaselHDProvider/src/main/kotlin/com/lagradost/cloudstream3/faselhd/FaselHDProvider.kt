@@ -126,13 +126,17 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // Extract player iframe URLs
-        doc.select("li[onclick*='player_iframe.location.href']").forEach { li ->
-            val onclickAttr = li.attr("onclick")
-            val playerUrlMatch = Regex("""player_iframe\.location\.href\s*=\s*['"]([^'"]+)['"]""").find(onclickAttr)
+        // Extract player iframe URLs from onclick attributes
+        doc.select("li[onclick*='player_iframe']").forEach { li ->
+            val onclick = li.attr("onclick")
+            // Match both ' and &#39; (HTML entity for apostrophe)
+            val playerUrlMatch = Regex("""player_iframe\.location\.href\s*=\s*['"&#39;]+([^'"&#39;]+)['"&#39;]+""").find(onclick)
             
             if (playerUrlMatch != null) {
                 val playerUrl = playerUrlMatch.groupValues[1]
+                    .replace("&amp;", "&")  // Decode HTML entities
+                    .replace("&#39;", "'")
+                
                 extractVideoFromPlayer(playerUrl, data, callback)
             }
         }
@@ -140,10 +144,12 @@ class FaselHDProvider : MainAPI() {
         // Direct download links
         doc.select("div.downloadLinks a").forEach { a ->
             val url = a.absUrl("href")
-            if (url.isNotBlank()) callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
-                this.referer = mainUrl
-                quality = Qualities.Unknown.value
-            })
+            if (url.isNotBlank()) {
+                callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
+                    this.referer = mainUrl
+                    quality = Qualities.Unknown.value
+                })
+            }
         }
 
         return true
