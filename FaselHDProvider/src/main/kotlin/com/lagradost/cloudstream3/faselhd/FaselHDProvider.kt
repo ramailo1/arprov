@@ -126,19 +126,21 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // Extract player iframe URLs from onclick attributes
-        doc.select("li[onclick*='player_iframe']").forEach { li ->
-            val onclick = li.attr("onclick")
-            // Match both ' and &#39; (HTML entity for apostrophe)
-            val playerUrlMatch = Regex("""player_iframe\.location\.href\s*=\s*['"&#39;]+([^'"&#39;]+)['"&#39;]+""").find(onclick)
-            
-            if (playerUrlMatch != null) {
-                val playerUrl = playerUrlMatch.groupValues[1]
-                    .replace("&amp;", "&")  // Decode HTML entities
-                    .replace("&#39;", "'")
-                
-                extractVideoFromPlayer(playerUrl, data, callback)
-            }
+        // Find the player iframe and extract its src
+        val iframeSrc = doc.selectFirst("iframe#player_iframe")?.attr("src")
+        if (!iframeSrc.isNullOrBlank()) {
+            extractVideoFromPlayer(iframeSrc, data, callback)
+        }
+        
+        // Also try to find player URLs in the page source directly
+        // Look for video_player URLs with player_token
+        val pageHtml = doc.html()
+        val playerUrlRegex = Regex("""(https?://[^'"&#\s]+/video_player\?player_token=[^'"&#\s]+)""")
+        playerUrlRegex.findAll(pageHtml).forEach { match ->
+            val playerUrl = match.groupValues[1]
+                .replace("&amp;", "&")
+                .replace("%3D", "=")
+            extractVideoFromPlayer(playerUrl, data, callback)
         }
         
         // Direct download links
