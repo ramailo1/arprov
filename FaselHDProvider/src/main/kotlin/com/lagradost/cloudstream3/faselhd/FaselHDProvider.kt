@@ -251,6 +251,78 @@ class FaselHDProvider : MainAPI() {
                         )
                     }
                     
+                    // Method 4: Custom JS Obfuscator (K variable shuffle)
+                    // Logic: var K='...'.split("").reduce((v,g,L)=>L%2?v+g:g+v).split("z")
+                    val kVarPattern = Regex("""var\s+K\s*=\s*['"]([^'"]+)['"]""")
+                    kVarPattern.find(playerHtml)?.let { match ->
+                        val kString = match.groupValues[1]
+                        println("🧩 Found K variable (length ${kString.length})")
+                        
+                        try {
+                            // Emulate: .split("").reduce((v,g,L)=>L%2?v+g:g+v)
+                            // JS reduce (no initial): starts with index 1
+                            // index 1%2!=0 -> append. index 2%2==0 -> prepend.
+                            
+                            val charArray = kString.toCharArray()
+                            if (charArray.isNotEmpty()) {
+                                var result = StringBuilder(charArray[0].toString())
+                                
+                                for (i in 1 until charArray.size) {
+                                    val c = charArray[i]
+                                    if (i % 2 != 0) {
+                                        result.append(c)
+                                    } else {
+                                        result.insert(0, c)
+                                    }
+                                }
+                                
+                                val decodedString = result.toString()
+                                println("🧩 Decoded K string (first 100 chars): ${decodedString.take(100)}")
+                                
+                                // Split by 'z' as per JS code .split("z")
+                                val tokens = decodedString.split("z")
+                                
+                                tokens.forEach { token ->
+                                    // Sometimes the URL is URL-encoded inside the token
+                                    val urls = mutableListOf<String>()
+                                    
+                                    // Direct URL
+                                    if (token.contains("http")) urls.add(token)
+                                    
+                                    // URL decoded
+                                    try {
+                                        val decodedToken = java.net.URLDecoder.decode(token, "UTF-8")
+                                        if (decodedToken.contains("http")) urls.add(decodedToken)
+                                    } catch (e: Exception) {}
+                                    
+                                    urls.forEach { urlCandidate ->
+                                        val urlRegex = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+                                        urlRegex.findAll(urlCandidate).forEach { urlMatch ->
+                                            val videoUrl = urlMatch.groupValues[1]
+                                            println("🎥 Found URL in K token: ${videoUrl.take(100)}")
+                                            foundAny = true
+                                            
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    this.name,
+                                                    "$name - Obfuscated",
+                                                    videoUrl,
+                                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                                ) {
+                                                    this.referer = playerUrl
+                                                    this.quality = Qualities.Unknown.value
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            println("⚠️ Failed to deobfuscate K variable: ${e.message}")
+                        }
+                    }
+
+                    
                     if (!foundAny) {
                         println("⚠️ No video URLs found with any method")
                         // Save a sample of the HTML for debugging
