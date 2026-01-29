@@ -3,11 +3,7 @@ package com.lagradost.cloudstream3.faselhd
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-// Removing Android imports to prevent build/runtime issues, will use custom Base64 if needed or standard java if safe.
-// Cloudstream usually supports java.util.Base64 on supported devices (API 26+), but to be safe for lower APIs, 
-// we will use a pure Kotlin Base64 implementation or `android.util.Base64` appropriately.
-// Since `android.util.Base64` caused R8 issues, and `java.util.Base64` might crash on old Android,
-// I'll add a simple pure Kotlin decoder.
+import android.util.Base64
 
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web1296x.faselhdx.bid"
@@ -129,7 +125,6 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
         
         // Extract player URLs from onclick attributes
@@ -188,7 +183,10 @@ class FaselHDProvider : MainAPI() {
     }
 
     private fun decodeBase64Custom(input: String): String {
-        // Swap case: a-z <-> A-Z
+        // Obfuscation often swaps case: a-z <-> A-Z and sometimes 0-9
+        // Based on analysis, the alphabet starts with lowercase 'a'...'z', then 'A'...'Z'
+        // Standard Base64 is A...Z, a...z
+        // So we swap case to map back to standard Base64.
         val swapped = input.map { char ->
             when {
                 char in 'a'..'z' -> char.uppercaseChar()
@@ -198,14 +196,10 @@ class FaselHDProvider : MainAPI() {
         }.joinToString("")
         
         return try {
-            // Use Android Base64 if available, otherwise pure kotlin implementation could do,
-            // but for CloudStream android.util.Base64 is standard. 
-            // Previous build fail might be due to R8. Let's try simple android.util.Base64 again
-            // but ensure we import it correctly or use full path.
-            String(android.util.Base64.decode(swapped, android.util.Base64.DEFAULT))
+            String(Base64.decode(swapped, Base64.DEFAULT))
         } catch (e: Exception) {
             try {
-                // Fallback for non-Android environments (tests)
+                // Fallback for non-Android environments (tests) or if android.util.Base64 fails in pure JVM
                 String(java.util.Base64.getDecoder().decode(swapped))
             } catch (e2: Exception) {
                 "" 
@@ -216,95 +210,93 @@ class FaselHDProvider : MainAPI() {
     private fun extractVideoUrl(html: String): List<String> {
         val urls = mutableListOf<String>()
         
-        // Strategy 1: K-Variable De-obfuscation (Old Pattern)
+        // Pattern 1: Obfuscated Array var _0x... = [...]
         try {
-            val kVarPattern = Regex("""var\s+K\s*=\s*['"]([^'"]+)['"]""")
-            kVarPattern.find(html)?.let { match ->
-                val kString = match.groupValues[1]
-                val charArray = kString.toCharArray()
-                if (charArray.isNotEmpty()) {
-                    val result = StringBuilder(charArray[0].toString())
-                    for (i in 1 until charArray.size) {
-                        val c = charArray[i]
-                        if (i % 2 != 0) result.append(c) else result.insert(0, c)
-                    }
-                    val decodedString = result.toString()
-                    decodedString.split("z").forEach { token ->
-                        if (token.contains("http") && (token.contains(".m3u8") || token.contains(".mp4"))) {
-                            urls.add(token)
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) { }
-
-        if (urls.isNotEmpty()) return urls
-
-        // Strategy 2: Array Rotation & Concatenation (New Pattern - Obfuscator.io)
-        try {
-            // 1. Extract the master array
+            // Find the array
             val arrayRegex = Regex("""var\s+_0x\w+=\[(.*?)\];""")
             val arrayMatch = arrayRegex.find(html) ?: return emptyList()
             
             val rawArray = arrayMatch.groupValues[1]
-            // Handle multi-line arrays
+            // Removing newlines and quotes to parse the list roughly
             val cleanedArray = rawArray.replace("\n", "").replace("\r", "")
-            val arrayItems = cleanedArray.split("','").map { it.replace("'", "") }
+            
+            // Split by ',' but be careful about strings containing comma (though base64 usually doesn't)
+            val arrayItems = cleanedArray.split("','").map { 
+                it.trim().removePrefix("'").removePrefix("\"").removeSuffix("'").removeSuffix("\"") 
+            }
             
             if (arrayItems.isEmpty()) return emptyList()
 
-            // Decode and Trim items
-            val decodedItems = arrayItems.mapNotNull { 
-                val decoded = decodeBase64Custom(it).trim()
-                if (decoded.isNotEmpty() && decoded.all { c -> c.code in 32..126 }) decoded else null
-            }
-
-            // 2. Identify String Literals in the code
-            val literalPattern = Regex("""['"]([^'"]{5,})['"]""") 
-            val literals = literalPattern.findAll(html).map { it.groupValues[1].trim() }.toList()
+            // Brute-force Rotation
+            // We know the decoded content must contain "hd_btn" or "jwplayer" or "master.m3u8"
+            // The array is rotated by N positions.
             
-            val allParts = (decodedItems + literals).distinct()
+            // Optimization: Decode *all* unique items once to see if we can find the key without rotation first?
+            // No, the items are base64 encoded. If we decode them individually, they are correct strings.
+            // Rotation changes the *order* (index), not the content of individual strings.
+            // Wait, the obfuscation:
+            // _0x4382 = function(index) { return array[index - offset] }
+            // So the strings *themselves* are correct in the array, just their position is shifted.
+            // AND they are encoded with the custom Base64.
             
-            val potentialStarts = allParts.filter { it.startsWith("http") }
+            // So we can just decode ALL items and search for URL components.
+            // The order matters for reconstruction, so we need to find the rotation if we want to rely on sequence.
             
-            potentialStarts.forEach { start ->
-                var current = start
-                var foundNext = true
-                var iterations = 0
-                val usedParts = mutableSetOf<String>()
-                usedParts.add(start)
-
-                while (foundNext && iterations < 50) {
-                    if ((current.contains(".m3u8") || current.contains(".mp4")) && current.length > 20) {
-                         // Validate URL structure slightly
-                         if (!current.contains(" ")) {
-                             urls.add(current)
-                         }
-                         break
-                    }
+            val decodedItems = arrayItems.map { decodeBase64Custom(it) }
+            
+            // 1. Search for known markers to confirm successful decoding
+            val hasMarkers = decodedItems.any { it.contains("hd_btn") || it.contains("jwplayer") || it.contains("m3u8") }
+            
+            if (hasMarkers) {
+                // Collect candidates that look like URLs or URL parts
+                val potentialParts = decodedItems.filter { 
+                    it.length > 3 && (it.contains("http") || it.contains("/") || it.contains("."))
+                }
+                
+                // Aggressive reconstruction: 
+                // We don't know the exact order without simulating the rotation count and offsets.
+                // However, we can try to chain strings that look like they belong together.
+                
+                // Find start
+                val starts = potentialParts.filter { it.startsWith("http") }
+                
+                starts.forEach { start ->
+                    var current = start
+                    var foundExtensions = false
                     
-                    foundNext = false
-                    // Greedy search for the next piece
-                    for (part in allParts) {
-                        if (part == current) continue // Skip exact self copies (though distinct handles this)
-                        // Don't reuse parts? Actually parts might be reused in some obfuscators, but usually not for URL segments.
-                        // Let's allow reuse for now but rely on logic.
+                    // Simple distinct pass to avoid infinite loops if duplicates exist
+                    val pool = potentialParts.toMutableList()
+                    pool.remove(start)
+                    
+                    var appended = true
+                    while (appended) {
+                        appended = false
+                        // Find a part that fits at the end of current
+                        val candidates = pool.filter { isValidContinuation(current, it) }
                         
-                        if (isValidContinuation(current, part)) {
-                            current += part
-                            usedParts.add(part)
-                            foundNext = true
-                            break 
+                        if (candidates.isNotEmpty()) {
+                            // Best candidate? Longest?
+                            val best = candidates.first() 
+                            current += best
+                            pool.remove(best)
+                            appended = true
+                            
+                            if (current.contains(".m3u8") || current.contains(".mp4")) {
+                                foundExtensions = true
+                            }
                         }
                     }
-                    iterations++
+                    
+                    if (foundExtensions && current.startsWith("http")) {
+                        urls.add(current)
+                    }
                 }
-            }
-            
-            // Fallback: simple check
-            decodedItems.forEach { 
-                if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
-                    urls.add(it)
+                
+                // Also add single items that are full URLs
+                decodedItems.forEach {
+                    if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
+                        urls.add(it)
+                    }
                 }
             }
             
@@ -314,40 +306,27 @@ class FaselHDProvider : MainAPI() {
     }
     
     private fun isValidContinuation(prefix: String, next: String): Boolean {
-        val combined = prefix + next
+        // Don't append if next starts with http (new URL)
+        if (next.startsWith("http")) return false
         
-        // Reject invalid protocols or double protocols
-        if (combined.count { it == ':' } > 2) return false
-        if (next.contains("http")) return false // Append should not start a new URL
-        if (combined.contains(" ")) return false // URLs don't have spaces usually
+        // Don't append if it creates double extension
+        if (prefix.contains(".m3u8") && next.contains(".m3u8")) return false
         
-        // High confidence joins
-        if (prefix.endsWith("/")) return true
-        if (next.startsWith("/")) return true
+        // Heuristic: URL parts often split at slashes or dots
+        if (prefix.endsWith("/") || next.startsWith("/")) return true
+        if (prefix.endsWith(".") || next.startsWith(".")) return true
         
-        // Specific joins observed in FaselHD
-        if (prefix.endsWith("ma") && next.startsWith("ster")) return true
+        // Specific patterns for FaselHD / scdns
+        if (prefix.endsWith("master") && next.startsWith(".m3u8")) return true
+        if (prefix.endsWith("index") && next.startsWith(".m3u8")) return true
         if (prefix.endsWith("scdns") && next.startsWith(".io")) return true
-        if (prefix.endsWith("stream") && next.startsWith("v")) return true // /streamv2 or /stream/v2
-        if (prefix.endsWith("faselhdx") && next.startsWith(".bid")) return true
-        if (prefix.endsWith("web") && next.startsWith("12")) return true // web129...
         
-        // Extension joins
-        if (next.startsWith(".m3u8") || next.startsWith(".mp4")) return true
-        
-        // Alphanumeric join heuristics (riskier)
-        // e.g. "QeYlic" + "9eDo..." -> "QeYlic9eDo..."
-        // If both are alphanumeric and length > 3?
+        // General alphanumeric join check (risky but needed if split mid-word)
+        // e.g. "auth" + "Token"
         if (prefix.last().isLetterOrDigit() && next.first().isLetterOrDigit()) {
-             // Accept if it looks like a token continuations
-             // This is risky as it might merge "video" + "player" -> "videoplayer" which is fine
-             // but "100" + "px" -> "100px" which is bad if it's not part of URL.
-             // But we filtered for http start.
-             
-             // Conservative check: only if we are "inside" the URL.
-             return true
+            return true 
         }
-
+        
         return false
     }
 }
