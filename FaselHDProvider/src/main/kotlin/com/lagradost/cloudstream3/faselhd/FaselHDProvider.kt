@@ -159,14 +159,15 @@ class FaselHDProvider : MainAPI() {
                             }
                             
                             callback.invoke(
-                                ExtractorLink(
+                                newExtractorLink(
                                     this.name,
                                     this.name,
                                     videoUrl,
-                                    playerUrl,
-                                    quality,
-                                    videoUrl.contains(".m3u8")
-                                )
+                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = playerUrl
+                                    this.quality = quality
+                                }
                             )
                         }
                     }
