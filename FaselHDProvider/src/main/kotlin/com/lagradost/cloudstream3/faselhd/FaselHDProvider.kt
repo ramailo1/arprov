@@ -124,43 +124,58 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
         
-        // Find the player iframe and extract its src
-        val iframeSrc = doc.selectFirst("iframe#player_iframe")?.attr("src")
-        println("🎬 Iframe src: $iframeSrc")
-        if (!iframeSrc.isNullOrBlank()) {
-            extractVideoFromPlayer(iframeSrc, data, callback)
-        }
-        
-        // Also try to find player URLs in the page source directly
-        // Look for video_player URLs with player_token
-        val pageHtml = doc.html()
-        val playerUrlRegex = Regex("""(https?://[^'"&#\s]+/video_player\?player_token=[^'"&#\s]+)""")
-        val matches = playerUrlRegex.findAll(pageHtml).toList()
-        println("🔗 Found ${matches.size} player URLs in page HTML")
-        
-        matches.forEach { match ->
-            val playerUrl = match.groupValues[1]
-                .replace("&amp;", "&")
-                .replace("%3D", "=")
-            println("▶️ Extracting from player: ${playerUrl.take(100)}...")
-            extractVideoFromPlayer(playerUrl, data, callback)
-        }
-        
-        // Direct download links
-        doc.select("div.downloadLinks a").forEach { a ->
-            val url = a.absUrl("href")
-            if (url.isNotBlank()) {
-                println("📥 Found download link: $url")
-                callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
-                    this.referer = mainUrl
-                    quality = Qualities.Unknown.value
-                })
+        // Extract player URLs from onclick attributes
+        // The HTML contains: onclick="player_iframe.location.href = &#39;URL&#39;"
+        doc.select("li[onclick*=player_iframe]").forEach { li ->
+            val onclick = li.attr("onclick")
+            
+            // Extract URL from onclick, handling both regular quotes and HTML entities
+            val urlPattern = Regex("""(?:&#39;|['"])([^'"]+video_player[^'"]+)(?:&#39;|['"])""")
+            val match = urlPattern.find(onclick)
+            
+            if (match != null) {
+                val playerUrl = match.groupValues[1]
+                    .replace("&#39;", "'")
+                    .replace("&amp;", "&")
+                
+                // Load the player page and extract video links
+                try {
+                    val playerDoc = app.get(playerUrl, referer = data).document
+                    
+                    // Look for buttons with data-url attributes containing video links
+                    playerDoc.select("button[data-url]").forEach { button ->
+                        val videoUrl = button.attr("data-url")
+                        
+                        if (videoUrl.isNotBlank()) {
+                            // Try to determine quality from button text or URL
+                            val quality = when {
+                                button.text().contains("1080") || videoUrl.contains("1080") -> 1080
+                                button.text().contains("720") || videoUrl.contains("720") -> 720
+                                button.text().contains("480") || videoUrl.contains("480") -> 480
+                                button.text().contains("360") || videoUrl.contains("360") -> 360
+                                else -> 0
+                            }
+                            
+                            callback.invoke(
+                                ExtractorLink(
+                                    this.name,
+                                    this.name,
+                                    videoUrl,
+                                    playerUrl,
+                                    quality,
+                                    videoUrl.contains(".m3u8")
+                                )
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Silent fail, try next player URL
+                }
             }
         }
-
+        
         return true
     }
 
