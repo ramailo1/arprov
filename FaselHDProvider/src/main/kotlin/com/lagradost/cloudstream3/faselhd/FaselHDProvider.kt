@@ -93,7 +93,6 @@ class FaselHDProvider : MainAPI() {
         val tags = doc.select("div#singleList .col-xl-6").map { it.text() }
         val year = tags.find { it.contains("سنة الإنتاج") }?.substringAfter(":")?.trim()?.toIntOrNull()
         val duration = tags.find { it.contains("مدة") }?.substringAfter(":")?.trim()
-        // val rating = doc.selectFirst("span.pImdb")?.text()?.substringAfter(" ")?.toRatingInt()
         val recommendations = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
 
         // Determine type: Series have episodes/seasons
@@ -104,7 +103,6 @@ class FaselHDProvider : MainAPI() {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = desc
-                // this.rating = rating
                 this.duration = duration?.filter { it.isDigit() }?.toIntOrNull()
                 this.recommendations = recommendations
             }
@@ -123,14 +121,11 @@ class FaselHDProvider : MainAPI() {
                     this.episode = epNumber
                 })
             }
-            // Check for seasons and fetch if needed (simplification: only current page for now)
-            // If the provider supports multi-season fetching, we would iterate "div.seasonLoop a" here.
 
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = desc
-                // this.rating = rating
                 this.recommendations = recommendations
             }
         }
@@ -144,25 +139,32 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
 
-        doc.select("ul.tabs-ul li").forEach { li ->
-            val onclick = li.attr("onclick")
-            // onclick="player_iframe.location.href = '...'"
-            // Use regex to be safer about spaces and quotes
-            // Matches: href='...', href="...", href=&#39;...&#39;
-            val playerUrl = Regex("""href\s*=\s*(?:'|&#39;|")([^"']+)""").find(onclick)?.groupValues?.get(1)
+        // 1. Try to find the iframe source directly (default player)
+        val iframe = doc.selectFirst("iframe[name=player_iframe]")
+        val mainPlayerUrl = iframe?.attr("src")
 
-            if (!playerUrl.isNullOrEmpty()) {
-                if (playerUrl.contains("video_player")) {
-                   // Internal player
-                   FaselPlayer().getUrl(playerUrl, data).forEach(callback)
+        // 2. If iframe src is present, extract video via AJAX
+        if (mainPlayerUrl?.contains("player_token") == true) {
+            extractVideoFromPlayer(mainPlayerUrl, data, callback)
+        }
+
+        // 3. Also check the tabs for other servers (onclick="player_iframe.location.href = ...")
+        doc.select(".tabs-ul > li").forEach { li ->
+            val onclick = li.attr("onclick")
+            // Matches: href='...', href="...", href=&#39;...&#39;
+            val tabUrl = Regex("""href\s*=\s*(?:'|&#39;|")([^"']+)""").find(onclick)?.groupValues?.get(1)
+
+            // Avoid duplicating the default player if we already processed it
+            if (!tabUrl.isNullOrEmpty() && tabUrl != mainPlayerUrl) {
+                if (tabUrl.contains("video_player")) {
+                    extractVideoFromPlayer(tabUrl, data, callback)
                 } else {
-                   // External or other
-                   loadExtractor(playerUrl, data, subtitleCallback, callback)
+                    loadExtractor(tabUrl, data, subtitleCallback, callback)
                 }
             }
         }
 
-        // Add support for download links which often contain the direct T7MEEL or other source
+        // 4. Download links (T7MEEL etc)
         doc.select("div.downloadLinks a").forEach { link ->
             val href = link.attr("href")
             if (href.isNotEmpty()) {
@@ -172,101 +174,53 @@ class FaselHDProvider : MainAPI() {
         return true
     }
 
-    class FaselPlayer : ExtractorApi() {
-        override val name = "FaselHD"
-        override val mainUrl = "https://web1296x.faselhdx.bid"
-        override val requiresReferer = true
+    private suspend fun extractVideoFromPlayer(
+        playerUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            // Extract token from URL
+            val token = Regex("""player_token=([^&]+)""").find(playerUrl)?.groupValues?.get(1) ?: return
 
-        override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
-            val pageReferer = referer
-            val doc = app.get(url, referer = pageReferer).document
-            val links = mutableListOf<ExtractorLink>()
-            
-            // 1. Try to find sources using simple regex (if obfuscation is weak or contains clear text)
-            // Look for .mp4 or .m3u8 urls in the whole html
-            val html = doc.html()
-            
-            val validExtensions = listOf(".mp4", ".m3u8")
-            // Simple regex to find URLs ending with extension
-            // This is a "hail mary" regex
-            val urlRegex = Regex("""https?://[^\s"']+\.(mp4|m3u8)""")
-            
-            urlRegex.findAll(html).forEach { match ->
-                 val link = match.value
-                 val isM3u8 = link.contains(".m3u8")
-                 links.add(
-                     newExtractorLink(
-                         name,
-                         "$name ${if(isM3u8) "HLS" else "MP4"}",
-                         link,
-                         if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                     ) {
-                         this.referer = pageReferer ?: mainUrl
-                         this.quality = Qualities.Unknown.value
-                     }
-                 )
-            }
-            
-            // 2. Try to find "file": "..." pattern common in JWPlayer
-            // Broaden the search to catch variations like "file":"..." or "file" : "..."
-            // and don't strictly require "hlshtml" if the file pattern is clear
-            
-            // Priority 1: Specific FaselHD pattern (Greedy match until specific suffix)
-            // Matches: "file":"HTTP_LINK","hlshtml"
-            val greedyRegex = Regex(""""file"\s*:\s*"(.+?)"\s*,\s*"hlshtml"""")
-            greedyRegex.find(html)?.groupValues?.get(1)?.replace("\\", "")?.let { link ->
-                val isM3u8 = link.contains(".m3u8")
-                 links.add(
-                     newExtractorLink(
-                         name,
-                         "$name HLS",
-                         link,
-                         if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                     ) {
-                         this.referer = pageReferer ?: mainUrl
-                         this.quality = Qualities.Unknown.value
-                     }
-                 )
+            // Load player page content
+            val playerHtml = app.get(playerUrl, referer = referer).text
+
+            // Extract AJAX endpoint from JS
+            // url : '...'
+            val ajaxUrl = Regex("""url\s*:\s*["']([^"']+)["']""").find(playerHtml)?.groupValues?.get(1) ?: return
+
+            // Use the absolute URL if the extracted one is relative
+            val absoluteAjaxUrl = if (ajaxUrl.startsWith("http")) ajaxUrl else {
+                val base = playerUrl.substringBefore("/video_player")
+                "$base/$ajaxUrl"
             }
 
-            // Priority 2: Generic JWPlayer file pattern
-            Regex("""file["']?\s*:\s*["']([^"']+)["']""").findAll(html).forEach { match ->
-                val link = match.groupValues[1].replace("\\", "")
-                if (link.startsWith("http") && links.none { it.url == link }) {
-                     val isM3u8 = link.contains(".m3u8")
-                     links.add(
-                     newExtractorLink(
-                         name,
-                         "$name JW",
-                         link,
-                         if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                     ) {
-                         this.referer = pageReferer ?: mainUrl
-                         this.quality = Qualities.Unknown.value
-                     }
-                     )
-                }
-            }
+            // POST the token
+            val response = app.post(
+                absoluteAjaxUrl,
+                data = mapOf("token" to token),
+                referer = playerUrl,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+            ).text
 
-            // Priority 3: Look for any http/https link ending in .m3u8 inside quotes
-            Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").findAll(html).forEach { match ->
-                 val link = match.groupValues[1].replace("\\", "")
-                 if (links.none { it.url == link }) {
-                     links.add(
-                     newExtractorLink(
-                         name,
-                         "$name Raw",
-                         link,
-                         ExtractorLinkType.M3U8
-                     ) {
-                         this.referer = pageReferer ?: mainUrl
-                         this.quality = Qualities.Unknown.value
-                     }
-                     )
-                 }
+            // Extract M3U8 links
+            Regex("""https?://[^"']+\.m3u8""").findAll(response).forEach { match ->
+                val link = match.value
+                callback(
+                    newExtractorLink(
+                        this.name,
+                        "${this.name} HLS",
+                        link,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        quality = Qualities.Unknown.value
+                    }
+                )
             }
-
-            return links.distinctBy { it.url }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }
