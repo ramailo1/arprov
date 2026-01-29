@@ -30,10 +30,7 @@ class FaselHDProvider : MainAPI() {
         "$mainUrl/anime-movies" to "Anime Movies"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page"
         val doc = app.get(url).document
         val list = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
@@ -133,7 +130,7 @@ class FaselHDProvider : MainAPI() {
         // 1️⃣ iframe player
         doc.selectFirst("iframe[name=player_iframe]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { handlePlayer(it) }
 
-        // 2️⃣ tabs (some episodes/qualities may be under tabs)
+        // 2️⃣ tabs (episodes / qualities under tabs)
         doc.select(".tabs-ul > li").forEach { li ->
             val onclick = li.attr("onclick")
             val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""").find(onclick)?.groupValues?.get(1)
@@ -155,45 +152,44 @@ class FaselHDProvider : MainAPI() {
     }
 
     private suspend fun extractVideoFromPlayer(
-    playerUrl: String,
-    referer: String,
-    callback: (ExtractorLink) -> Unit
-) {
-    val playerHtml = app.get(
-        playerUrl,
-        referer = referer,
-        headers = mapOf("User-Agent" to USER_AGENT)
-    ).text
+        playerUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val playerHtml = app.get(
+            playerUrl,
+            referer = referer,
+            headers = mapOf("User-Agent" to USER_AGENT)
+        ).text
 
-    val handledLinks = mutableSetOf<String>()
+        val handledLinks = mutableSetOf<String>()
 
-    // 1️⃣ Look for JS sources array (common in new FaselHD)
-    val regexSources = Regex("""sources\s*:\s*\[\s*\{[^\}]*file\s*:\s*['"]([^'"]+\.m3u8)['"]""")
-    regexSources.findAll(playerHtml).forEach {
-        val url = it.groupValues[1]
-        if (handledLinks.add(url)) {
-            callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
-                this.referer = mainUrl
-                quality = Qualities.Unknown.value
-            })
+        // 1️⃣ JS sources array (sources:[{file:"..."}])
+        val regexSources = Regex("""sources\s*:\s*\[\s*\{[^\}]*file\s*:\s*['"]([^'"]+\.m3u8)['"]""")
+        regexSources.findAll(playerHtml).forEach {
+            val url = it.groupValues[1]
+            if (handledLinks.add(url)) {
+                callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
+                    this.referer = mainUrl
+                    quality = Qualities.Unknown.value
+                })
+            }
+        }
+
+        // 2️⃣ <source src="..."> tags
+        val regexSourceTag = Regex("""<source[^>]+src=['"]([^'"]+\.m3u8)['"]""")
+        regexSourceTag.findAll(playerHtml).forEach {
+            val url = it.groupValues[1]
+            if (handledLinks.add(url)) {
+                callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
+                    this.referer = mainUrl
+                    quality = Qualities.Unknown.value
+                })
+            }
+        }
+
+        if (handledLinks.isEmpty()) {
+            println("⚠️ No HLS links found in iframe: $playerUrl")
         }
     }
-
-    // 2️⃣ Look for <source src="...m3u8"> tags
-    val regexSourceTag = Regex("""<source[^>]+src=['"]([^'"]+\.m3u8)['"]""")
-    regexSourceTag.findAll(playerHtml).forEach {
-        val url = it.groupValues[1]
-        if (handledLinks.add(url)) {
-            callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
-                this.referer = mainUrl
-                quality = Qualities.Unknown.value
-            })
-        }
-    }
-
-    if (handledLinks.isEmpty()) {
-        println("⚠️ No HLS links found in iframe: $playerUrl")
-    }
-}
-
 }
