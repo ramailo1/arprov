@@ -191,17 +191,21 @@ class FaselHDProvider : MainAPI() {
             ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
             ?: return
 
-        val playerHtml = app.get(playerUrl, referer = referer).text
+        val playerHtml = app.get(
+            playerUrl,
+            referer = referer,
+            headers = mapOf("User-Agent" to USER_AGENT)
+        ).text
 
         val ajaxUrl = Regex(
             """url\s*:\s*['"]([^'"]+)['"]""",
             RegexOption.DOT_MATCHES_ALL
-        ).find(playerHtml)?.groupValues?.get(1) ?: return
+        ).find(playerHtml)?.groupValues?.get(1)?.trim() ?: return
 
         val absoluteAjaxUrl = when {
             ajaxUrl.startsWith("http") -> ajaxUrl
-            ajaxUrl.startsWith("/") -> mainUrl + ajaxUrl
-            else -> "$mainUrl/$ajaxUrl"
+            ajaxUrl.startsWith("/") -> mainUrl.trimEnd('/') + ajaxUrl
+            else -> mainUrl.trimEnd('/') + "/" + ajaxUrl
         }
 
         val response = app.post(
@@ -211,11 +215,12 @@ class FaselHDProvider : MainAPI() {
             headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
                 "Origin" to mainUrl,
-                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"
+                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+                "User-Agent" to USER_AGENT
             )
         ).text
 
-        Regex("""https?://[^"']+\.m3u8""")
+        Regex("""https?://[^\s"']+\.m3u8""")
             .findAll(response)
             .forEach {
                 callback(
