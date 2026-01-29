@@ -148,7 +148,8 @@ class FaselHDProvider : MainAPI() {
             val onclick = li.attr("onclick")
             // onclick="player_iframe.location.href = '...'"
             // Use regex to be safer about spaces and quotes
-            val playerUrl = Regex("""href\s*=\s*['"]([^'"]+)['"]""").find(onclick)?.groupValues?.get(1)
+            // Matches: href='...', href="...", href=&#39;...&#39;
+            val playerUrl = Regex("""href\s*=\s*(?:'|&#39;|")([^"']+)""").find(onclick)?.groupValues?.get(1)
 
             if (!playerUrl.isNullOrEmpty()) {
                 if (playerUrl.contains("video_player")) {
@@ -158,6 +159,14 @@ class FaselHDProvider : MainAPI() {
                    // External or other
                    loadExtractor(playerUrl, data, subtitleCallback, callback)
                 }
+            }
+        }
+
+        // Add support for download links which often contain the direct T7MEEL or other source
+        doc.select("div.downloadLinks a").forEach { link ->
+            val href = link.attr("href")
+            if (href.isNotEmpty()) {
+                loadExtractor(href, data, subtitleCallback, callback)
             }
         }
         return true
