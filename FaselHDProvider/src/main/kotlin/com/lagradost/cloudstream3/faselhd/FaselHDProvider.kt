@@ -227,57 +227,44 @@ class FaselHDProvider : MainAPI() {
             
             if (arrayItems.isEmpty()) return emptyList()
 
-            // Brute-force Rotation
-            // We know the decoded content must contain "hd_btn" or "jwplayer" or "master.m3u8"
-            // The array is rotated by N positions.
-            
-            // Optimization: Decode *all* unique items once to see if we can find the key without rotation first?
-            // No, the items are base64 encoded. If we decode them individually, they are correct strings.
-            // Rotation changes the *order* (index), not the content of individual strings.
-            // Wait, the obfuscation:
-            // _0x4382 = function(index) { return array[index - offset] }
-            // So the strings *themselves* are correct in the array, just their position is shifted.
-            // AND they are encoded with the custom Base64.
-            
-            // So we can just decode ALL items and search for URL components.
-            // The order matters for reconstruction, so we need to find the rotation if we want to rely on sequence.
-            
             val decodedItems = arrayItems.map { decodeBase64Custom(it) }
             
             // 1. Search for known markers to confirm successful decoding
             val hasMarkers = decodedItems.any { it.contains("hd_btn") || it.contains("jwplayer") || it.contains("m3u8") }
             
             if (hasMarkers) {
-                // Collect candidates that look like URLs or URL parts
+                // Collect candidates: URLs, paths, OR alphanumeric tokens (parts of ID/Token)
                 val potentialParts = decodedItems.filter { 
-                    it.length > 3 && (it.contains("http") || it.contains("/") || it.contains("."))
+                    it.length > 1 && (it.contains("http") || it.contains("/") || it.contains(".") || it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' })
                 }
                 
-                // Aggressive reconstruction: 
-                // We don't know the exact order without simulating the rotation count and offsets.
-                // However, we can try to chain strings that look like they belong together.
-                
-                // Find start
+                // Aggressive reconstruction
                 val starts = potentialParts.filter { it.startsWith("http") }
                 
                 starts.forEach { start ->
                     var current = start
+                    val currentParts = mutableListOf(start)
                     var foundExtensions = false
                     
-                    // Simple distinct pass to avoid infinite loops if duplicates exist
                     val pool = potentialParts.toMutableList()
                     pool.remove(start)
                     
                     var appended = true
-                    while (appended) {
+                    var iterations = 0
+                    while (appended && iterations < 100) {
                         appended = false
                         // Find a part that fits at the end of current
+                        // Prioritize parts that "look right" (e.g. start with / if current ends with domain)
                         val candidates = pool.filter { isValidContinuation(current, it) }
                         
                         if (candidates.isNotEmpty()) {
-                            // Best candidate? Longest?
-                            val best = candidates.first() 
+                            // Heuristic: Prefer "master.m3u8" or parts that complete a known pattern
+                            val best = candidates.find { it.contains("m3u8") } 
+                                ?: candidates.find { it.startsWith("/") }
+                                ?: candidates.first()
+                                
                             current += best
+                            currentParts.add(best)
                             pool.remove(best)
                             appended = true
                             
@@ -285,6 +272,7 @@ class FaselHDProvider : MainAPI() {
                                 foundExtensions = true
                             }
                         }
+                        iterations++
                     }
                     
                     if (foundExtensions && current.startsWith("http")) {
@@ -292,7 +280,7 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
                 
-                // Also add single items that are full URLs
+                // Fallback: Check for single complete URLs
                 decodedItems.forEach {
                     if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
                         urls.add(it)
@@ -312,6 +300,9 @@ class FaselHDProvider : MainAPI() {
         // Don't append if it creates double extension
         if (prefix.contains(".m3u8") && next.contains(".m3u8")) return false
         
+        // Safety: Don't append very short alphanumeric garbage unless prefix ends with '/'
+        if (next.length < 3 && !prefix.endsWith("/")) return false
+
         // Heuristic: URL parts often split at slashes or dots
         if (prefix.endsWith("/") || next.startsWith("/")) return true
         if (prefix.endsWith(".") || next.startsWith(".")) return true
@@ -320,10 +311,16 @@ class FaselHDProvider : MainAPI() {
         if (prefix.endsWith("master") && next.startsWith(".m3u8")) return true
         if (prefix.endsWith("index") && next.startsWith(".m3u8")) return true
         if (prefix.endsWith("scdns") && next.startsWith(".io")) return true
+        if (prefix.endsWith("faselhdx") && next.startsWith(".bid")) return true
         
-        // General alphanumeric join check (risky but needed if split mid-word)
-        // e.g. "auth" + "Token"
-        if (prefix.last().isLetterOrDigit() && next.first().isLetterOrDigit()) {
+        // Alphanumeric Token Joins
+        // e.g. .../v2/ [TokenPart1] [TokenPart2] /...
+        // If prefix ends with '/', next can be anything (token start)
+        // If prefix is alphanumeric (token part), next can be alphanumeric (token continuation)
+        val prefixLast = prefix.last()
+        val nextFirst = next.first()
+        
+        if (prefixLast.isLetterOrDigit() && nextFirst.isLetterOrDigit()) {
             return true 
         }
         
