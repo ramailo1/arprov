@@ -137,40 +137,39 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val doc = app.get(data).document
+        val handled = HashSet<String>()
 
-        // 1. Try to find the iframe source directly (default player)
-        val iframe = doc.selectFirst("iframe[name=player_iframe]")
-        val mainPlayerUrl = iframe?.attr("src")
-
-        // 2. If iframe src is present, extract video via AJAX
-        if (mainPlayerUrl?.contains("player_token") == true) {
-            extractVideoFromPlayer(mainPlayerUrl, data, callback)
+        suspend fun handlePlayer(url: String) {
+            if (handled.add(url)) {
+                extractVideoFromPlayer(url, data, callback)
+            }
         }
 
-        // 3. Also check the tabs for other servers (onclick="player_iframe.location.href = ...")
+        // 1️⃣ iframe (default server)
+        doc.selectFirst("iframe[name=player_iframe]")
+            ?.attr("src")
+            ?.let { handlePlayer(it) }
+
+        // 2️⃣ other servers (tabs)
         doc.select(".tabs-ul > li").forEach { li ->
             val onclick = li.attr("onclick")
-            // Matches: href='...', href="...", href=&#39;...&#39;
-            val tabUrl = Regex("""href\s*=\s*(?:'|&#39;|")([^"']+)""").find(onclick)?.groupValues?.get(1)
+            val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""")
+                .find(onclick)
+                ?.groupValues
+                ?.get(1)
 
-            // Avoid duplicating the default player if we already processed it
-            if (!tabUrl.isNullOrEmpty() && tabUrl != mainPlayerUrl) {
-                if (tabUrl.contains("video_player")) {
-                    extractVideoFromPlayer(tabUrl, data, callback)
-                } else {
-                    loadExtractor(tabUrl, data, subtitleCallback, callback)
-                }
+            if (!tabUrl.isNullOrEmpty()) {
+                handlePlayer(tabUrl)
             }
         }
 
-        // 4. Download links (T7MEEL etc)
-        doc.select("div.downloadLinks a").forEach { link ->
-            val href = link.attr("href")
-            if (href.isNotEmpty()) {
-                loadExtractor(href, data, subtitleCallback, callback)
-            }
+        // 3️⃣ downloads
+        doc.select("div.downloadLinks a").forEach {
+            loadExtractor(it.attr("href"), data, subtitleCallback, callback)
         }
+
         return true
     }
 
@@ -179,39 +178,41 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            // Extract token from URL
-            val token = Regex("""player_token=([^&]+)""").find(playerUrl)?.groupValues?.get(1) ?: return
+        val token = Regex("""player_token=([^&]+)""")
+            .find(playerUrl)
+            ?.groupValues
+            ?.get(1)
+            ?: return
 
-            // Load player page content
-            val playerHtml = app.get(playerUrl, referer = referer).text
+        val playerHtml = app.get(playerUrl, referer = referer).text
 
-            // Extract AJAX endpoint from JS
-            // url : '...'
-            val ajaxUrl = Regex("""url\s*:\s*["']([^"']+)["']""").find(playerHtml)?.groupValues?.get(1) ?: return
+        val ajaxUrl = Regex(
+            """url\s*:\s*['"]([^'"]+)['"]""",
+            RegexOption.DOT_MATCHES_ALL
+        ).find(playerHtml)?.groupValues?.get(1) ?: return
 
-            // Use the absolute URL if the extracted one is relative
-            val absoluteAjaxUrl = if (ajaxUrl.startsWith("http")) ajaxUrl else {
-                val base = playerUrl.substringBefore("/video_player")
-                "$base/$ajaxUrl"
-            }
+        val absoluteAjaxUrl =
+            if (ajaxUrl.startsWith("http")) ajaxUrl
+            else mainUrl + ajaxUrl
 
-            // POST the token
-            val response = app.post(
-                absoluteAjaxUrl,
-                data = mapOf("token" to token),
-                referer = playerUrl,
-                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-            ).text
+        val response = app.post(
+            absoluteAjaxUrl,
+            data = mapOf("token" to token),
+            referer = playerUrl,
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Origin" to mainUrl
+            )
+        ).text
 
-            // Extract M3U8 links
-            Regex("""https?://[^"']+\.m3u8""").findAll(response).forEach { match ->
-                val link = match.value
+        Regex("""https?://[^"']+\.m3u8""")
+            .findAll(response)
+            .forEach {
                 callback(
                     newExtractorLink(
-                        this.name,
-                        "${this.name} HLS",
-                        link,
+                        name,
+                        "$name HLS",
+                        it.value,
                         ExtractorLinkType.M3U8
                     ) {
                         this.referer = mainUrl
@@ -219,8 +220,5 @@ class FaselHDProvider : MainAPI() {
                     }
                 )
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 }
