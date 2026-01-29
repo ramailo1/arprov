@@ -155,33 +155,45 @@ class FaselHDProvider : MainAPI() {
     }
 
     private suspend fun extractVideoFromPlayer(
-        playerUrl: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        // Fetch the iframe HTML
-        val playerHtml = app.get(
-            playerUrl,
-            referer = referer,
-            headers = mapOf("User-Agent" to USER_AGENT)
-        ).text
+    playerUrl: String,
+    referer: String,
+    callback: (ExtractorLink) -> Unit
+) {
+    val playerHtml = app.get(
+        playerUrl,
+        referer = referer,
+        headers = mapOf("User-Agent" to USER_AGENT)
+    ).text
 
-        // Regex to extract HLS links from JS variables or JSON in the iframe
-        val hlsLinks = Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8)["']""")
-            .findAll(playerHtml)
-            .map { it.groupValues[1] }
-            .toList()
+    val handledLinks = mutableSetOf<String>()
 
-        if (hlsLinks.isEmpty()) {
-            return
-        }
-
-        // Return all found HLS links
-        hlsLinks.forEach { url ->
+    // 1️⃣ Look for JS sources array (common in new FaselHD)
+    val regexSources = Regex("""sources\s*:\s*\[\s*\{[^\}]*file\s*:\s*['"]([^'"]+\.m3u8)['"]""")
+    regexSources.findAll(playerHtml).forEach {
+        val url = it.groupValues[1]
+        if (handledLinks.add(url)) {
             callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
                 this.referer = mainUrl
                 quality = Qualities.Unknown.value
             })
         }
     }
+
+    // 2️⃣ Look for <source src="...m3u8"> tags
+    val regexSourceTag = Regex("""<source[^>]+src=['"]([^'"]+\.m3u8)['"]""")
+    regexSourceTag.findAll(playerHtml).forEach {
+        val url = it.groupValues[1]
+        if (handledLinks.add(url)) {
+            callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
+                this.referer = mainUrl
+                quality = Qualities.Unknown.value
+            })
+        }
+    }
+
+    if (handledLinks.isEmpty()) {
+        println("⚠️ No HLS links found in iframe: $playerUrl")
+    }
+}
+
 }
