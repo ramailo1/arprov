@@ -130,7 +130,7 @@ class FaselHDProvider : MainAPI() {
         // 1️⃣ iframe player
         doc.selectFirst("iframe[name=player_iframe]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { handlePlayer(it) }
 
-        // 2️⃣ tabs (episodes / qualities under tabs)
+        // 2️⃣ tabs (some episodes/qualities may be under tabs)
         doc.select(".tabs-ul > li").forEach { li ->
             val onclick = li.attr("onclick")
             val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""").find(onclick)?.groupValues?.get(1)
@@ -164,7 +164,7 @@ class FaselHDProvider : MainAPI() {
 
         val handledLinks = mutableSetOf<String>()
 
-        // 1️⃣ JS sources array (sources:[{file:"..."}])
+        // 1️⃣ JS sources array
         val regexSources = Regex("""sources\s*:\s*\[\s*\{[^\}]*file\s*:\s*['"]([^'"]+\.m3u8)['"]""")
         regexSources.findAll(playerHtml).forEach {
             val url = it.groupValues[1]
@@ -186,6 +186,21 @@ class FaselHDProvider : MainAPI() {
                     quality = Qualities.Unknown.value
                 })
             }
+        }
+
+        // 3️⃣ Base64 encoded links
+        val regexBase64 = Regex("""atob\(['"]([^'"]+)['"]\)""")
+        regexBase64.findAll(playerHtml).forEach {
+            try {
+                val encoded = it.groupValues[1]
+                val decoded = String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
+                if (decoded.endsWith(".m3u8") && handledLinks.add(decoded)) {
+                    callback(newExtractorLink(name, "$name HLS", decoded, ExtractorLinkType.M3U8) {
+                        this.referer = mainUrl
+                        quality = Qualities.Unknown.value
+                    })
+                }
+            } catch (_: Exception) {}
         }
 
         if (handledLinks.isEmpty()) {
