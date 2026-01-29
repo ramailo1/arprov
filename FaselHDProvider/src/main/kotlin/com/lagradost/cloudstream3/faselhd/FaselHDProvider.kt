@@ -165,7 +165,7 @@ class FaselHDProvider : MainAPI() {
                 val fullTabUrl = if (tabUrl.startsWith("http"))
                     tabUrl
                 else
-                    mainUrl + tabUrl
+                    mainUrl.trimEnd('/') + "/" + tabUrl.trimStart('/')
 
                 handlePlayer(fullTabUrl)
             }
