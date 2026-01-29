@@ -3,7 +3,7 @@ package com.lagradost.cloudstream3.faselhd
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import android.util.Base64
+
 
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web1296x.faselhdx.bid"
@@ -126,204 +126,67 @@ class FaselHDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        
-        // Extract player URLs from onclick attributes
-        val playerElements = doc.select("li[onclick*=player_iframe]")
-       
-        playerElements.forEach { li ->
-            val onclick = li.attr("onclick")
-            val urlPattern = Regex("""(?:&#39;|['"])([^'"]+video_player[^'"]+)(?:&#39;|['"])""")
-            val match = urlPattern.find(onclick)
-            
-            if (match != null) {
-                val playerUrl = match.groupValues[1]
-                    .replace("&#39;", "'")
-                    .replace("&amp;", "&")
-                
-                try {
-                    val playerDoc = app.get(playerUrl, referer = data).document
-                    val playerHtml = playerDoc.html()
-                    
-                    val videoUrls = extractVideoUrl(playerHtml)
-                    if (videoUrls.isNotEmpty()) {
-                        videoUrls.forEach { videoUrl -> 
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    "$name - Main",
-                                    videoUrl,
-                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = playerUrl
-                                }
-                            )
-                        }
-                    } else {
-                         // Fallback to searching for standard URLs
-                         val standardPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
-                         standardPattern.findAll(playerHtml).forEach { m ->
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    "$name - Direct",
-                                    m.groupValues[1],
-                                    ExtractorLinkType.M3U8
-                                )
-                            )
-                         }
-                    }
 
-                } catch (e: Exception) {
-                    e.printStackTrace()
+        // Extract the player iframe URL
+        val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
+        val playerUrl = playerIframe?.absUrl("src")
+
+        if (!playerUrl.isNullOrEmpty()) {
+            try {
+                // Fetch the player page
+                val playerDoc = app.get(playerUrl, referer = data).document
+                
+                // Extract M3U8 links from quality buttons
+                val qualityButtons = playerDoc.select("button.hd_btn")
+                qualityButtons.forEach { button ->
+                    val videoUrl = button.attr("data-url")
+                    val qualityText = button.text()
+                    
+                    if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                this.name,
+                                "$name - $qualityText",
+                                videoUrl,
+                                if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = playerUrl
+                                this.quality = when {
+                                    qualityText.contains("1080") -> 1080
+                                    qualityText.contains("720") -> 720
+                                    qualityText.contains("480") -> 480
+                                    qualityText.contains("360") -> 360
+                                    else -> Qualities.Unknown.value
+                                }
+                            }
+                        )
+                    }
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
-        
+
+        // Also extract download links from main page
+        doc.select("a[href*=\"t7meel\"]").forEach { link ->
+            val dlUrl = link.absUrl("href")
+            if (dlUrl.startsWith("http")) {
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        "$name - Download",
+                        dlUrl,
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = data
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+
         return true
     }
 
-    private fun decodeBase64Custom(input: String): String {
-        // Obfuscation often swaps case: a-z <-> A-Z and sometimes 0-9
-        // Based on analysis, the alphabet starts with lowercase 'a'...'z', then 'A'...'Z'
-        // Standard Base64 is A...Z, a...z
-        // So we swap case to map back to standard Base64.
-        val swapped = input.map { char ->
-            when {
-                char in 'a'..'z' -> char.uppercaseChar()
-                char in 'A'..'Z' -> char.lowercaseChar()
-                else -> char
-            }
-        }.joinToString("")
-        
-        return try {
-            String(Base64.decode(swapped, Base64.DEFAULT))
-        } catch (e: Exception) {
-            try {
-                // Fallback for non-Android environments (tests) or if android.util.Base64 fails in pure JVM
-                String(java.util.Base64.getDecoder().decode(swapped))
-            } catch (e2: Exception) {
-                "" 
-            }
-        }
-    }
 
-    private fun extractVideoUrl(html: String): List<String> {
-        val urls = mutableListOf<String>()
-        
-        // Pattern 1: Obfuscated Array var _0x... = [...]
-        try {
-            // Find the array
-            val arrayRegex = Regex("""var\s+_0x\w+=\[(.*?)\];""")
-            val arrayMatch = arrayRegex.find(html) ?: return emptyList()
-            
-            val rawArray = arrayMatch.groupValues[1]
-            // Removing newlines and quotes to parse the list roughly
-            val cleanedArray = rawArray.replace("\n", "").replace("\r", "")
-            
-            // Split by ',' but be careful about strings containing comma (though base64 usually doesn't)
-            val arrayItems = cleanedArray.split("','").map { 
-                it.trim().removePrefix("'").removePrefix("\"").removeSuffix("'").removeSuffix("\"") 
-            }
-            
-            if (arrayItems.isEmpty()) return emptyList()
-
-            val decodedItems = arrayItems.map { decodeBase64Custom(it) }
-            
-            // 1. Search for known markers to confirm successful decoding
-            val hasMarkers = decodedItems.any { it.contains("hd_btn") || it.contains("jwplayer") || it.contains("m3u8") }
-            
-            if (hasMarkers) {
-                // Collect candidates: URLs, paths, OR alphanumeric tokens (parts of ID/Token)
-                val potentialParts = decodedItems.filter { 
-                    it.length > 1 && (it.contains("http") || it.contains("/") || it.contains(".") || it.all { c -> c.isLetterOrDigit() || c == '_' || c == '-' })
-                }
-                
-                // Aggressive reconstruction
-                val starts = potentialParts.filter { it.startsWith("http") }
-                
-                starts.forEach { start ->
-                    var current = start
-                    val currentParts = mutableListOf(start)
-                    var foundExtensions = false
-                    
-                    val pool = potentialParts.toMutableList()
-                    pool.remove(start)
-                    
-                    var appended = true
-                    var iterations = 0
-                    while (appended && iterations < 100) {
-                        appended = false
-                        // Find a part that fits at the end of current
-                        // Prioritize parts that "look right" (e.g. start with / if current ends with domain)
-                        val candidates = pool.filter { isValidContinuation(current, it) }
-                        
-                        if (candidates.isNotEmpty()) {
-                            // Heuristic: Prefer "master.m3u8" or parts that complete a known pattern
-                            val best = candidates.find { it.contains("m3u8") } 
-                                ?: candidates.find { it.startsWith("/") }
-                                ?: candidates.first()
-                                
-                            current += best
-                            currentParts.add(best)
-                            pool.remove(best)
-                            appended = true
-                            
-                            if (current.contains(".m3u8") || current.contains(".mp4")) {
-                                foundExtensions = true
-                            }
-                        }
-                        iterations++
-                    }
-                    
-                    if (foundExtensions && current.startsWith("http")) {
-                        urls.add(current)
-                    }
-                }
-                
-                // Fallback: Check for single complete URLs
-                decodedItems.forEach {
-                    if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
-                        urls.add(it)
-                    }
-                }
-            }
-            
-        } catch (e: Exception) { }
-        
-        return urls.distinct()
-    }
-    
-    private fun isValidContinuation(prefix: String, next: String): Boolean {
-        // Don't append if next starts with http (new URL)
-        if (next.startsWith("http")) return false
-        
-        // Don't append if it creates double extension
-        if (prefix.contains(".m3u8") && next.contains(".m3u8")) return false
-        
-        // Safety: Don't append very short alphanumeric garbage unless prefix ends with '/'
-        if (next.length < 3 && !prefix.endsWith("/")) return false
-
-        // Heuristic: URL parts often split at slashes or dots
-        if (prefix.endsWith("/") || next.startsWith("/")) return true
-        if (prefix.endsWith(".") || next.startsWith(".")) return true
-        
-        // Specific patterns for FaselHD / scdns
-        if (prefix.endsWith("master") && next.startsWith(".m3u8")) return true
-        if (prefix.endsWith("index") && next.startsWith(".m3u8")) return true
-        if (prefix.endsWith("scdns") && next.startsWith(".io")) return true
-        if (prefix.endsWith("faselhdx") && next.startsWith(".bid")) return true
-        
-        // Alphanumeric Token Joins
-        // e.g. .../v2/ [TokenPart1] [TokenPart2] /...
-        // If prefix ends with '/', next can be anything (token start)
-        // If prefix is alphanumeric (token part), next can be alphanumeric (token continuation)
-        val prefixLast = prefix.last()
-        val nextFirst = next.first()
-        
-        if (prefixLast.isLetterOrDigit() && nextFirst.isLetterOrDigit()) {
-            return true 
-        }
-        
-        return false
-    }
 }
