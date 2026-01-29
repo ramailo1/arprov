@@ -130,10 +130,10 @@ class FaselHDProvider : MainAPI() {
             if (handled.add(url)) extractVideoFromPlayer(url, data, callback)
         }
 
-        // iframe player
+        // 1️⃣ iframe player
         doc.selectFirst("iframe[name=player_iframe]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { handlePlayer(it) }
 
-        // tabs
+        // 2️⃣ tabs (some episodes/qualities may be under tabs)
         doc.select(".tabs-ul > li").forEach { li ->
             val onclick = li.attr("onclick")
             val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""").find(onclick)?.groupValues?.get(1)
@@ -142,9 +142,13 @@ class FaselHDProvider : MainAPI() {
             }
         }
 
-        // download links
-        doc.select("div.downloadLinks a").forEach {
-            loadExtractor(it.attr("href"), data, subtitleCallback, callback)
+        // 3️⃣ direct download links
+        doc.select("div.downloadLinks a").forEach { a ->
+            val url = a.absUrl("href")
+            if (url.isNotBlank()) callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
+                this.referer = mainUrl
+                quality = Qualities.Unknown.value
+            })
         }
 
         return true
