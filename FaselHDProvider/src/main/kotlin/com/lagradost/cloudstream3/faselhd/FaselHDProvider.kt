@@ -124,12 +124,17 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
         
         // Extract player URLs from onclick attributes
         // The HTML contains: onclick="player_iframe.location.href = &#39;URL&#39;"
-        doc.select("li[onclick*=player_iframe]").forEach { li ->
+        val playerElements = doc.select("li[onclick*=player_iframe]")
+        println("📋 Found ${playerElements.size} player elements")
+        
+        playerElements.forEach { li ->
             val onclick = li.attr("onclick")
+            println("🔗 onclick: ${onclick.take(150)}")
             
             // Extract URL from onclick, handling both regular quotes and HTML entities
             val urlPattern = Regex("""(?:&#39;|['"])([^'"]+video_player[^'"]+)(?:&#39;|['"])""")
@@ -140,13 +145,40 @@ class FaselHDProvider : MainAPI() {
                     .replace("&#39;", "'")
                     .replace("&amp;", "&")
                 
+                println("🎬 Player URL: ${playerUrl.take(100)}")
+                
                 // Load the player page and extract video links
                 try {
                     val playerDoc = app.get(playerUrl, referer = data).document
+                    val playerHtml = playerDoc.html()
+                    println("📄 Player HTML length: ${playerHtml.length}")
                     
                     // Look for buttons with data-url attributes containing video links
-                    playerDoc.select("button[data-url]").forEach { button ->
+                    val buttons = playerDoc.select("button[data-url]")
+                    println("🔘 Found ${buttons.size} buttons with data-url")
+                    
+                    if (buttons.isEmpty()) {
+                        // Debug: show what buttons exist
+                        val allButtons = playerDoc.select("button")
+                        println("⚠️ Total buttons found: ${allButtons.size}")
+                        allButtons.take(3).forEach { btn ->
+                            println("  Button: ${btn.html().take(100)}")
+                        }
+                        
+                        // Try to find data-url in the HTML directly
+                        if (playerHtml.contains("data-url")) {
+                            println("✅ HTML contains 'data-url'")
+                            val dataUrlMatches = Regex("""data-url=["']([^"']+)["']""").findAll(playerHtml)
+                            println("📊 Found ${dataUrlMatches.count()} data-url matches in raw HTML")
+                        } else {
+                            println("❌ HTML does NOT contain 'data-url'")
+                            println("📝 First 1000 chars: ${playerHtml.take(1000)}")
+                        }
+                    }
+                    
+                    buttons.forEach { button ->
                         val videoUrl = button.attr("data-url")
+                        println("🎥 Video URL: ${videoUrl.take(100)}")
                         
                         if (videoUrl.isNotBlank()) {
                             // Try to determine quality from button text or URL
@@ -157,6 +189,8 @@ class FaselHDProvider : MainAPI() {
                                 button.text().contains("360") || videoUrl.contains("360") -> 360
                                 else -> 0
                             }
+                            
+                            println("✅ Adding link: quality=$quality, url=${videoUrl.take(80)}")
                             
                             callback.invoke(
                                 newExtractorLink(
@@ -172,8 +206,11 @@ class FaselHDProvider : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    // Silent fail, try next player URL
+                    println("❌ Error loading player: ${e.message}")
+                    e.printStackTrace()
                 }
+            } else {
+                println("❌ No match found in onclick")
             }
         }
         
