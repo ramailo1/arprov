@@ -253,74 +253,46 @@ class FaselHDProvider : MainAPI() {
             
             if (arrayItems.isEmpty()) return emptyList()
 
+            // Decode and Trim items
             val decodedItems = arrayItems.mapNotNull { 
-                val decoded = decodeBase64Custom(it)
-                if (decoded.isNotEmpty()) decoded else null
+                val decoded = decodeBase64Custom(it).trim()
+                if (decoded.isNotEmpty() && decoded.all { c -> c.code in 32..126 }) decoded else null
             }
 
-            // 2. Identify String Literals in the code to use as Anchors
-            // format: 'ster.c.scdns.io' or "ster.c.scdns.io"
-            val literalPattern = Regex("""['"]([^'"]{5,})['"]""") // Min 5 chars to avoid noise
-            val literals = literalPattern.findAll(html).map { it.groupValues[1] }.toList()
+            // 2. Identify String Literals in the code
+            val literalPattern = Regex("""['"]([^'"]{5,})['"]""") 
+            val literals = literalPattern.findAll(html).map { it.groupValues[1].trim() }.toList()
             
-            // 3. Brute-force reconstruction
-            // We look for a "Start" chunk (http) and an "End" chunk (m3u8/mp4)
-            // But they are separated.
-            // Try to find a valid URL by concatenating ANY two decoded items or Literal + Decoded Item
-            // Since the offset is constant, if we find match unique pieces we can solve it.
-            
-            // Heuristic A: Look for "http" in decoded items, and "m3u8" in decoded items.
-            // The middle parts might be literals.
-            
-            // Heuristic B: Scan for known FaselHD domains in literals or decoded items
-            val allParts = decodedItems + literals
-            
-            // If we have a part ending in 'ma' and a part starting with 'ster', we can join them.
-            // This is O(N^2) which is fine for N=500.
+            val allParts = (decodedItems + literals).distinct()
             
             val potentialStarts = allParts.filter { it.startsWith("http") }
             
             potentialStarts.forEach { start ->
-                // Try to build a chain. 
-                // Current string: start
-                // Find matching next part.
                 var current = start
                 var foundNext = true
                 var iterations = 0
-                
-                while (foundNext && iterations < 20) {
-                    // Check if current is a valid URL by itself
-                    if (current.contains(".m3u8") || current.contains(".mp4")) {
-                        urls.add(current)
-                        break
+                val usedParts = mutableSetOf<String>()
+                usedParts.add(start)
+
+                while (foundNext && iterations < 50) {
+                    if ((current.contains(".m3u8") || current.contains(".mp4")) && current.length > 20) {
+                         // Validate URL structure slightly
+                         if (!current.contains(" ")) {
+                             urls.add(current)
+                         }
+                         break
                     }
                     
                     foundNext = false
-                    // Look for a piece that continues 'current' 
-                    // Matches at least 3 chars of overlap? No, pieces are usually adjacent.
-                    // Just purely concatenation?
-                    
-                    // Actually, the pieces are concatenated. 
-                    // "https://ma" + "ster.c.scdns.io" -> "https://master.c.scdns.io"
-                    // Overlap is 'ma' + 'ster' = 'master'. No overlap character-wise usually.
-                    // But semantically:
-                    
-                    // Let's look for parts that complete words.
-                    // 'stream' 'master' 'index' 'fasel'
-                    
-                    // Brute force: Try to append ANY other part. If the result contains a common keyword?
+                    // Greedy search for the next piece
                     for (part in allParts) {
-                        if (part == current) continue // Skip self
+                        if (part == current) continue // Skip exact self copies (though distinct handles this)
+                        // Don't reuse parts? Actually parts might be reused in some obfuscators, but usually not for URL segments.
+                        // Let's allow reuse for now but rely on logic.
                         
-                        val combined = current + part
-                        
-                        // Heuristic: Does the join point look nice?
-                        // e.g. "https://ma" + "ster" -> "https://master" (Good)
-                        // "https://ma" + "http" -> "https://mahttp" (Bad)
-                        
-                        // We need a validator.
                         if (isValidContinuation(current, part)) {
-                            current = combined
+                            current += part
+                            usedParts.add(part)
                             foundNext = true
                             break 
                         }
@@ -329,7 +301,7 @@ class FaselHDProvider : MainAPI() {
                 }
             }
             
-            // Fallback: If we just find a single string that is the URL (some encoders do this)
+            // Fallback: simple check
             decodedItems.forEach { 
                 if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
                     urls.add(it)
@@ -344,22 +316,38 @@ class FaselHDProvider : MainAPI() {
     private fun isValidContinuation(prefix: String, next: String): Boolean {
         val combined = prefix + next
         
-        // Reject invalid protocols
+        // Reject invalid protocols or double protocols
         if (combined.count { it == ':' } > 2) return false
+        if (next.contains("http")) return false // Append should not start a new URL
+        if (combined.contains(" ")) return false // URLs don't have spaces usually
         
-        // Common patterns in FaselHD URLs
+        // High confidence joins
+        if (prefix.endsWith("/")) return true
+        if (next.startsWith("/")) return true
+        
+        // Specific joins observed in FaselHD
         if (prefix.endsWith("ma") && next.startsWith("ster")) return true
         if (prefix.endsWith("scdns") && next.startsWith(".io")) return true
-        if (prefix.endsWith("stream") && next.startsWith("/v")) return true
-        if (prefix.endsWith("/v") && next.firstOrNull()?.isDigit() == true) return true
-        if (prefix.endsWith("/") && next.startsWith("web")) return true
+        if (prefix.endsWith("stream") && next.startsWith("v")) return true // /streamv2 or /stream/v2
+        if (prefix.endsWith("faselhdx") && next.startsWith(".bid")) return true
+        if (prefix.endsWith("web") && next.startsWith("12")) return true // web129...
         
-        // If we are at the end, checks
-        if (next.contains(".m3u8") || next.contains(".mp4")) return true
+        // Extension joins
+        if (next.startsWith(".m3u8") || next.startsWith(".mp4")) return true
         
-        // General sanity check: don't join if it creates "httphttp"
-        if (next.startsWith("http")) return false
-        
+        // Alphanumeric join heuristics (riskier)
+        // e.g. "QeYlic" + "9eDo..." -> "QeYlic9eDo..."
+        // If both are alphanumeric and length > 3?
+        if (prefix.last().isLetterOrDigit() && next.first().isLetterOrDigit()) {
+             // Accept if it looks like a token continuations
+             // This is risky as it might merge "video" + "player" -> "videoplayer" which is fine
+             // but "100" + "px" -> "100px" which is bad if it's not part of URL.
+             // But we filtered for http start.
+             
+             // Conservative check: only if we are "inside" the URL.
+             return true
+        }
+
         return false
     }
 }
