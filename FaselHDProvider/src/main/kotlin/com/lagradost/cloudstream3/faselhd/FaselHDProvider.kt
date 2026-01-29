@@ -149,7 +149,8 @@ class FaselHDProvider : MainAPI() {
 
         // 1️⃣ iframe (default server)
         doc.selectFirst("iframe[name=player_iframe]")
-            ?.attr("src")
+            ?.absUrl("src")
+            ?.takeIf { it.isNotBlank() }
             ?.let { handlePlayer(it) }
 
         // 2️⃣ other servers (tabs)
@@ -161,7 +162,12 @@ class FaselHDProvider : MainAPI() {
                 ?.get(1)
 
             if (!tabUrl.isNullOrEmpty()) {
-                handlePlayer(tabUrl)
+                val fullTabUrl = if (tabUrl.startsWith("http"))
+                    tabUrl
+                else
+                    mainUrl + tabUrl
+
+                handlePlayer(fullTabUrl)
             }
         }
 
@@ -182,6 +188,7 @@ class FaselHDProvider : MainAPI() {
             .find(playerUrl)
             ?.groupValues
             ?.get(1)
+            ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
             ?: return
 
         val playerHtml = app.get(playerUrl, referer = referer).text
@@ -191,17 +198,20 @@ class FaselHDProvider : MainAPI() {
             RegexOption.DOT_MATCHES_ALL
         ).find(playerHtml)?.groupValues?.get(1) ?: return
 
-        val absoluteAjaxUrl =
-            if (ajaxUrl.startsWith("http")) ajaxUrl
-            else mainUrl + ajaxUrl
+        val absoluteAjaxUrl = when {
+            ajaxUrl.startsWith("http") -> ajaxUrl
+            ajaxUrl.startsWith("/") -> mainUrl + ajaxUrl
+            else -> "$mainUrl/$ajaxUrl"
+        }
 
         val response = app.post(
             absoluteAjaxUrl,
             data = mapOf("token" to token),
-            referer = playerUrl,
+            referer = playerUrl.substringBefore("?"),
             headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
-                "Origin" to mainUrl
+                "Origin" to mainUrl,
+                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"
             )
         ).text
 
