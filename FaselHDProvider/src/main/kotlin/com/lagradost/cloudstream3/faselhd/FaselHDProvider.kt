@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 
 
 class FaselHDProvider : MainAPI() {
-    override var mainUrl = "https://web1296x.faselhdx.bid"
+    override var mainUrl = "https://web12918x.faselhdx.bid"
     override var name = "FaselHD"
     override val hasMainPage = true
     override var lang = "ar"
