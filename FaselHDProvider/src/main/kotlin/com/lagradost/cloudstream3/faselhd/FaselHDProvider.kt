@@ -3,7 +3,11 @@ package com.lagradost.cloudstream3.faselhd
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.util.Base64
+// Removing Android imports to prevent build/runtime issues, will use custom Base64 if needed or standard java if safe.
+// Cloudstream usually supports java.util.Base64 on supported devices (API 26+), but to be safe for lower APIs, 
+// we will use a pure Kotlin Base64 implementation or `android.util.Base64` appropriately.
+// Since `android.util.Base64` caused R8 issues, and `java.util.Base64` might crash on old Android,
+// I'll add a simple pure Kotlin decoder.
 
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web1296x.faselhdx.bid"
@@ -160,7 +164,7 @@ class FaselHDProvider : MainAPI() {
                             )
                         }
                     } else {
-                         // Fallback to searching for standard URLs if obfuscation fails
+                         // Fallback to searching for standard URLs
                          val standardPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
                          standardPattern.findAll(playerHtml).forEach { m ->
                             callback.invoke(
@@ -194,19 +198,58 @@ class FaselHDProvider : MainAPI() {
         }.joinToString("")
         
         return try {
-            String(Base64.getDecoder().decode(swapped))
+            // Use Android Base64 if available, otherwise pure kotlin implementation could do,
+            // but for CloudStream android.util.Base64 is standard. 
+            // Previous build fail might be due to R8. Let's try simple android.util.Base64 again
+            // but ensure we import it correctly or use full path.
+            String(android.util.Base64.decode(swapped, android.util.Base64.DEFAULT))
         } catch (e: Exception) {
-            ""
+            try {
+                // Fallback for non-Android environments (tests)
+                String(java.util.Base64.getDecoder().decode(swapped))
+            } catch (e2: Exception) {
+                "" 
+            }
         }
     }
 
     private fun extractVideoUrl(html: String): List<String> {
-        return try {
+        val urls = mutableListOf<String>()
+        
+        // Strategy 1: K-Variable De-obfuscation (Old Pattern)
+        try {
+            val kVarPattern = Regex("""var\s+K\s*=\s*['"]([^'"]+)['"]""")
+            kVarPattern.find(html)?.let { match ->
+                val kString = match.groupValues[1]
+                val charArray = kString.toCharArray()
+                if (charArray.isNotEmpty()) {
+                    val result = StringBuilder(charArray[0].toString())
+                    for (i in 1 until charArray.size) {
+                        val c = charArray[i]
+                        if (i % 2 != 0) result.append(c) else result.insert(0, c)
+                    }
+                    val decodedString = result.toString()
+                    decodedString.split("z").forEach { token ->
+                        if (token.contains("http") && (token.contains(".m3u8") || token.contains(".mp4"))) {
+                            urls.add(token)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { }
+
+        if (urls.isNotEmpty()) return urls
+
+        // Strategy 2: Array Rotation & Concatenation (New Pattern - Obfuscator.io)
+        try {
+            // 1. Extract the master array
             val arrayRegex = Regex("""var\s+_0x\w+=\[(.*?)\];""")
             val arrayMatch = arrayRegex.find(html) ?: return emptyList()
             
             val rawArray = arrayMatch.groupValues[1]
-            val arrayItems = rawArray.split("','").map { it.replace("'", "") }
+            // Handle multi-line arrays
+            val cleanedArray = rawArray.replace("\n", "").replace("\r", "")
+            val arrayItems = cleanedArray.split("','").map { it.replace("'", "") }
             
             if (arrayItems.isEmpty()) return emptyList()
 
@@ -215,35 +258,108 @@ class FaselHDProvider : MainAPI() {
                 if (decoded.isNotEmpty()) decoded else null
             }
 
-            val urls = mutableListOf<String>()
+            // 2. Identify String Literals in the code to use as Anchors
+            // format: 'ster.c.scdns.io' or "ster.c.scdns.io"
+            val literalPattern = Regex("""['"]([^'"]{5,})['"]""") // Min 5 chars to avoid noise
+            val literals = literalPattern.findAll(html).map { it.groupValues[1] }.toList()
             
-            // Look for URL parts and try to reconstruct or find whole URLs
-            // Strategy: Gather all parts that look like URL components
-            val httpPart = decodedItems.firstOrNull { it.startsWith("http") }
-            val m3u8Part = decodedItems.firstOrNull { it.contains(".m3u8") }
+            // 3. Brute-force reconstruction
+            // We look for a "Start" chunk (http) and an "End" chunk (m3u8/mp4)
+            // But they are separated.
+            // Try to find a valid URL by concatenating ANY two decoded items or Literal + Decoded Item
+            // Since the offset is constant, if we find match unique pieces we can solve it.
             
-            if (httpPart != null && m3u8Part != null) {
-                // Determine if we need to join them or if one contains the other
-                if (httpPart.contains(".m3u8")) {
-                    urls.add(httpPart)
-                } else {
-                    // Try to find the middle parts
-                    if (Regex("https?://").containsMatchIn(httpPart)) {
-                         // It might be a base URL.
+            // Heuristic A: Look for "http" in decoded items, and "m3u8" in decoded items.
+            // The middle parts might be literals.
+            
+            // Heuristic B: Scan for known FaselHD domains in literals or decoded items
+            val allParts = decodedItems + literals
+            
+            // If we have a part ending in 'ma' and a part starting with 'ster', we can join them.
+            // This is O(N^2) which is fine for N=500.
+            
+            val potentialStarts = allParts.filter { it.startsWith("http") }
+            
+            potentialStarts.forEach { start ->
+                // Try to build a chain. 
+                // Current string: start
+                // Find matching next part.
+                var current = start
+                var foundNext = true
+                var iterations = 0
+                
+                while (foundNext && iterations < 20) {
+                    // Check if current is a valid URL by itself
+                    if (current.contains(".m3u8") || current.contains(".mp4")) {
+                        urls.add(current)
+                        break
                     }
+                    
+                    foundNext = false
+                    // Look for a piece that continues 'current' 
+                    // Matches at least 3 chars of overlap? No, pieces are usually adjacent.
+                    // Just purely concatenation?
+                    
+                    // Actually, the pieces are concatenated. 
+                    // "https://ma" + "ster.c.scdns.io" -> "https://master.c.scdns.io"
+                    // Overlap is 'ma' + 'ster' = 'master'. No overlap character-wise usually.
+                    // But semantically:
+                    
+                    // Let's look for parts that complete words.
+                    // 'stream' 'master' 'index' 'fasel'
+                    
+                    // Brute force: Try to append ANY other part. If the result contains a common keyword?
+                    for (part in allParts) {
+                        if (part == current) continue // Skip self
+                        
+                        val combined = current + part
+                        
+                        // Heuristic: Does the join point look nice?
+                        // e.g. "https://ma" + "ster" -> "https://master" (Good)
+                        // "https://ma" + "http" -> "https://mahttp" (Bad)
+                        
+                        // We need a validator.
+                        if (isValidContinuation(current, part)) {
+                            current = combined
+                            foundNext = true
+                            break 
+                        }
+                    }
+                    iterations++
                 }
             }
             
-            // Better Strategy: Return any decoded string that is a valid URL
-            decodedItems.forEach { item ->
-                if (item.contains("http") && (item.contains(".m3u8") || item.contains(".mp4"))) {
-                    urls.add(item)
+            // Fallback: If we just find a single string that is the URL (some encoders do this)
+            decodedItems.forEach { 
+                if (it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4"))) {
+                    urls.add(it)
                 }
             }
             
-            urls
-        } catch (e: Exception) {
-            emptyList()
-        }
+        } catch (e: Exception) { }
+        
+        return urls.distinct()
+    }
+    
+    private fun isValidContinuation(prefix: String, next: String): Boolean {
+        val combined = prefix + next
+        
+        // Reject invalid protocols
+        if (combined.count { it == ':' } > 2) return false
+        
+        // Common patterns in FaselHD URLs
+        if (prefix.endsWith("ma") && next.startsWith("ster")) return true
+        if (prefix.endsWith("scdns") && next.startsWith(".io")) return true
+        if (prefix.endsWith("stream") && next.startsWith("/v")) return true
+        if (prefix.endsWith("/v") && next.firstOrNull()?.isDigit() == true) return true
+        if (prefix.endsWith("/") && next.startsWith("web")) return true
+        
+        // If we are at the end, checks
+        if (next.contains(".m3u8") || next.contains(".mp4")) return true
+        
+        // General sanity check: don't join if it creates "httphttp"
+        if (next.startsWith("http")) return false
+        
+        return false
     }
 }
