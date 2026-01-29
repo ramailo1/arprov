@@ -3,6 +3,7 @@ package com.lagradost.cloudstream3.faselhd
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.util.Base64
 
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web1296x.faselhdx.bid"
@@ -124,35 +125,14 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("🔍 FaselHD loadLinks called for: $data")
+        // println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
-        val pageHtml = doc.html()
-        
-        println("📄 Page HTML length: ${pageHtml.length}")
-        println("📝 First 2000 chars of HTML: ${pageHtml.take(2000)}")
         
         // Extract player URLs from onclick attributes
-        // The HTML contains: onclick="player_iframe.location.href = &#39;URL&#39;"
         val playerElements = doc.select("li[onclick*=player_iframe]")
-        println("📋 Found ${playerElements.size} player elements with selector: li[onclick*=player_iframe]")
-        
-        // Try alternative selectors
-        val allLiWithOnclick = doc.select("li[onclick]")
-        println("📋 Found ${allLiWithOnclick.size} <li> elements with onclick")
-        
-        val allLi = doc.select("li")
-        println("📋 Found ${allLi.size} total <li> elements")
-        
-        // Show first few li elements
-        allLi.take(5).forEach { li ->
-            println("  <li> sample: ${li.html().take(200)}")
-        }
-        
+       
         playerElements.forEach { li ->
             val onclick = li.attr("onclick")
-            println("🔗 onclick: ${onclick.take(150)}")
-            
-            // Extract URL from onclick, handling both regular quotes and HTML entities
             val urlPattern = Regex("""(?:&#39;|['"])([^'"]+video_player[^'"]+)(?:&#39;|['"])""")
             val match = urlPattern.find(onclick)
             
@@ -161,183 +141,109 @@ class FaselHDProvider : MainAPI() {
                     .replace("&#39;", "'")
                     .replace("&amp;", "&")
                 
-                println("🎬 Player URL: ${playerUrl.take(100)}")
-                
-                // Load the player page and extract video links
                 try {
                     val playerDoc = app.get(playerUrl, referer = data).document
                     val playerHtml = playerDoc.html()
-                    println("📄 Player HTML length: ${playerHtml.length}")
                     
-                    var foundAny = false
-                    
-                    // Try multiple extraction methods since the URLs are obfuscated
-                    
-                    // Method 1: Look for Base64 encoded data that might contain URLs
-                    val base64Pattern = Regex("""atob\s*\(\s*['"]([A-Za-z0-9+/=]{100,})['"]""")
-                    base64Pattern.findAll(playerHtml).forEach { match ->
-                        try {
-                            val base64Data = match.groupValues[1]
-                            val decoded = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT))
-                            println("🔓 Decoded Base64 (first 200 chars): ${decoded.take(200)}")
-                            
-                            // Look for URLs in decoded data
-                            val urlPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
-                            urlPattern.findAll(decoded).forEach { urlMatch ->
-                                val videoUrl = urlMatch.groupValues[1]
-                                println("🎥 Found URL in Base64: ${videoUrl.take(100)}")
-                                foundAny = true
-                                
-                                callback.invoke(
-                                    newExtractorLink(
-                                        this.name,
-                                        "$name - Decoded",
-                                        videoUrl,
-                                        if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.referer = playerUrl
-                                        this.quality = Qualities.Unknown.value
-                                    }
+                    val videoUrls = extractVideoUrl(playerHtml)
+                    if (videoUrls.isNotEmpty()) {
+                        videoUrls.forEach { videoUrl -> 
+                            callback.invoke(
+                                newExtractorLink(
+                                    this.name,
+                                    "$name - Main",
+                                    videoUrl,
+                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = playerUrl
+                                }
+                            )
+                        }
+                    } else {
+                         // Fallback to searching for standard URLs if obfuscation fails
+                         val standardPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+                         standardPattern.findAll(playerHtml).forEach { m ->
+                            callback.invoke(
+                                newExtractorLink(
+                                    this.name,
+                                    "$name - Direct",
+                                    m.groupValues[1],
+                                    ExtractorLinkType.M3U8
                                 )
-                            }
-                        } catch (e: Exception) {
-                            println("⚠️ Failed to decode Base64: ${e.message}")
-                        }
-                    }
-                    
-                    // Method 2: Look for file: or sources: patterns in JWPlayer setup
-                    val filePattern = Regex("""(?:file|source|src)\s*:\s*['"]([^'"]+\.(?:m3u8|mp4)[^'"]*)['"]""", RegexOption.IGNORE_CASE)
-                    filePattern.findAll(playerHtml).forEach { match ->
-                        val videoUrl = match.groupValues[1]
-                        println("🎥 Found file pattern: ${videoUrl.take(100)}")
-                        foundAny = true
-                        
-                        val fullUrl = if (videoUrl.startsWith("http")) {
-                            videoUrl
-                        } else {
-                            "https:$videoUrl"
-                        }
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                this.name,
-                                "$name - File",
-                                fullUrl,
-                                if (fullUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = playerUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                    
-                    // Method 3: Standard URL patterns (might be in plain text)
-                    val standardPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
-                    standardPattern.findAll(playerHtml).forEach { match ->
-                        val videoUrl = match.groupValues[1]
-                        println("🎥 Found standard URL: ${videoUrl.take(100)}")
-                        foundAny = true
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                this.name,
-                                "$name - Direct",
-                                videoUrl,
-                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = playerUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                    
-                    // Method 4: Custom JS Obfuscator (K variable shuffle)
-                    // Logic: var K='...'.split("").reduce((v,g,L)=>L%2?v+g:g+v).split("z")
-                    val kVarPattern = Regex("""var\s+K\s*=\s*['"]([^'"]+)['"]""")
-                    kVarPattern.find(playerHtml)?.let { match ->
-                        val kString = match.groupValues[1]
-                        println("🧩 Found K variable (length ${kString.length})")
-                        
-                        try {
-                            // Emulate: .split("").reduce((v,g,L)=>L%2?v+g:g+v)
-                            // JS reduce (no initial): starts with index 1
-                            // index 1%2!=0 -> append. index 2%2==0 -> prepend.
-                            
-                            val charArray = kString.toCharArray()
-                            if (charArray.isNotEmpty()) {
-                                var result = StringBuilder(charArray[0].toString())
-                                
-                                for (i in 1 until charArray.size) {
-                                    val c = charArray[i]
-                                    if (i % 2 != 0) {
-                                        result.append(c)
-                                    } else {
-                                        result.insert(0, c)
-                                    }
-                                }
-                                
-                                val decodedString = result.toString()
-                                println("🧩 Decoded K string (first 100 chars): ${decodedString.take(100)}")
-                                
-                                // Split by 'z' as per JS code .split("z")
-                                val tokens = decodedString.split("z")
-                                
-                                tokens.forEach { token ->
-                                    // Sometimes the URL is URL-encoded inside the token
-                                    val urls = mutableListOf<String>()
-                                    
-                                    // Direct URL
-                                    if (token.contains("http")) urls.add(token)
-                                    
-                                    // URL decoded
-                                    try {
-                                        val decodedToken = java.net.URLDecoder.decode(token, "UTF-8")
-                                        if (decodedToken.contains("http")) urls.add(decodedToken)
-                                    } catch (e: Exception) {}
-                                    
-                                    urls.forEach { urlCandidate ->
-                                        val urlRegex = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
-                                        urlRegex.findAll(urlCandidate).forEach { urlMatch ->
-                                            val videoUrl = urlMatch.groupValues[1]
-                                            println("🎥 Found URL in K token: ${videoUrl.take(100)}")
-                                            foundAny = true
-                                            
-                                            callback.invoke(
-                                                newExtractorLink(
-                                                    this.name,
-                                                    "$name - Obfuscated",
-                                                    videoUrl,
-                                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                                ) {
-                                                    this.referer = playerUrl
-                                                    this.quality = Qualities.Unknown.value
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("⚠️ Failed to deobfuscate K variable: ${e.message}")
-                        }
+                            )
+                         }
                     }
 
-                    
-                    if (!foundAny) {
-                        println("⚠️ No video URLs found with any method")
-                        // Save a sample of the HTML for debugging
-                        println("📝 HTML sample (first 500 chars): ${playerHtml.take(500)}")
-                        println("📝 HTML sample (chars 1000-1500): ${playerHtml.substring(1000.coerceAtMost(playerHtml.length), 1500.coerceAtMost(playerHtml.length))}")
-                    }
                 } catch (e: Exception) {
-                    println("❌ Error loading player: ${e.message}")
                     e.printStackTrace()
                 }
-            } else {
-                println("❌ No match found in onclick")
             }
         }
         
         return true
+    }
+
+    private fun decodeBase64Custom(input: String): String {
+        // Swap case: a-z <-> A-Z
+        val swapped = input.map { char ->
+            when {
+                char in 'a'..'z' -> char.uppercaseChar()
+                char in 'A'..'Z' -> char.lowercaseChar()
+                else -> char
+            }
+        }.joinToString("")
+        
+        return try {
+            String(Base64.getDecoder().decode(swapped))
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private fun extractVideoUrl(html: String): List<String> {
+        return try {
+            val arrayRegex = Regex("""var\s+_0x\w+=\[(.*?)\];""")
+            val arrayMatch = arrayRegex.find(html) ?: return emptyList()
+            
+            val rawArray = arrayMatch.groupValues[1]
+            val arrayItems = rawArray.split("','").map { it.replace("'", "") }
+            
+            if (arrayItems.isEmpty()) return emptyList()
+
+            val decodedItems = arrayItems.mapNotNull { 
+                val decoded = decodeBase64Custom(it)
+                if (decoded.isNotEmpty()) decoded else null
+            }
+
+            val urls = mutableListOf<String>()
+            
+            // Look for URL parts and try to reconstruct or find whole URLs
+            // Strategy: Gather all parts that look like URL components
+            val httpPart = decodedItems.firstOrNull { it.startsWith("http") }
+            val m3u8Part = decodedItems.firstOrNull { it.contains(".m3u8") }
+            
+            if (httpPart != null && m3u8Part != null) {
+                // Determine if we need to join them or if one contains the other
+                if (httpPart.contains(".m3u8")) {
+                    urls.add(httpPart)
+                } else {
+                    // Try to find the middle parts
+                    if (Regex("https?://").containsMatchIn(httpPart)) {
+                         // It might be a base URL.
+                    }
+                }
+            }
+            
+            // Better Strategy: Return any decoded string that is a valid URL
+            decodedItems.forEach { item ->
+                if (item.contains("http") && (item.contains(".m3u8") || item.contains(".mp4"))) {
+                    urls.add(item)
+                }
+            }
+            
+            urls
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 }
