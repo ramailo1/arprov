@@ -124,10 +124,12 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
         
         // Find the player iframe and extract its src
         val iframeSrc = doc.selectFirst("iframe#player_iframe")?.attr("src")
+        println("🎬 Iframe src: $iframeSrc")
         if (!iframeSrc.isNullOrBlank()) {
             extractVideoFromPlayer(iframeSrc, data, callback)
         }
@@ -136,10 +138,14 @@ class FaselHDProvider : MainAPI() {
         // Look for video_player URLs with player_token
         val pageHtml = doc.html()
         val playerUrlRegex = Regex("""(https?://[^'"&#\s]+/video_player\?player_token=[^'"&#\s]+)""")
-        playerUrlRegex.findAll(pageHtml).forEach { match ->
+        val matches = playerUrlRegex.findAll(pageHtml).toList()
+        println("🔗 Found ${matches.size} player URLs in page HTML")
+        
+        matches.forEach { match ->
             val playerUrl = match.groupValues[1]
                 .replace("&amp;", "&")
                 .replace("%3D", "=")
+            println("▶️ Extracting from player: ${playerUrl.take(100)}...")
             extractVideoFromPlayer(playerUrl, data, callback)
         }
         
@@ -147,6 +153,7 @@ class FaselHDProvider : MainAPI() {
         doc.select("div.downloadLinks a").forEach { a ->
             val url = a.absUrl("href")
             if (url.isNotBlank()) {
+                println("📥 Found download link: $url")
                 callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
                     this.referer = mainUrl
                     quality = Qualities.Unknown.value
@@ -162,17 +169,23 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
+        println("🎥 Fetching player page: ${playerUrl.take(100)}...")
         val playerHtml = app.get(
             playerUrl,
             referer = referer,
             headers = mapOf("User-Agent" to USER_AGENT)
         ).text
 
+        println("📄 Player HTML length: ${playerHtml.length}")
+
         // Extract m3u8 URLs from data-url attributes in buttons
         val dataUrlRegex = Regex("""data-url=["']([^"']+\.m3u8)["']""")
         val qualityRegex = Regex(""">(\d+p|auto)</button>""")
         
-        dataUrlRegex.findAll(playerHtml).forEach { match ->
+        val videoMatches = dataUrlRegex.findAll(playerHtml).toList()
+        println("🎞️ Found ${videoMatches.size} video URLs in player HTML")
+        
+        videoMatches.forEach { match ->
             val m3u8Url = match.groupValues[1]
             
             // Try to find quality label near this URL
@@ -182,6 +195,8 @@ class FaselHDProvider : MainAPI() {
             
             val qualityMatch = qualityRegex.find(context)
             val qualityLabel = qualityMatch?.groupValues?.get(1) ?: "Unknown"
+            
+            println("✅ Adding video link: $qualityLabel - ${m3u8Url.take(80)}...")
             
             callback(newExtractorLink(
                 name,
@@ -199,6 +214,11 @@ class FaselHDProvider : MainAPI() {
                     else -> Qualities.Unknown.value
                 }
             })
+        }
+        
+        if (videoMatches.isEmpty()) {
+            println("⚠️ No video URLs found in player HTML!")
+            println("📝 First 500 chars of player HTML: ${playerHtml.take(500)}")
         }
     }
 }
