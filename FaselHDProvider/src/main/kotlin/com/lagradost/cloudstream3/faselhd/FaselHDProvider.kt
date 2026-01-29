@@ -47,9 +47,12 @@ class FaselHDProvider : MainAPI() {
         val title = titleDiv?.text() ?: return null
         val href = this.selectFirst("a")?.attr("href") ?: return null
         
-        // Improve image extraction: check typical lazy load attributes
-        val img = this.selectFirst("div.imgdiv-class img") ?: this.selectFirst("div.postInner img")
-        val posterUrl = img?.let { 
+        // Improve image extraction: check typical lazy load attributes and other potential classes
+        val img = this.selectFirst("div.imgdiv-class img") 
+            ?: this.selectFirst("div.postInner img") 
+            ?: this.selectFirst("img") // Fallback to any img in the div
+        
+        var posterUrl = img?.let { 
              it.attr("data-src").ifEmpty { 
                  it.attr("data-original").ifEmpty {
                       it.attr("data-image").ifEmpty {
@@ -58,6 +61,12 @@ class FaselHDProvider : MainAPI() {
                  }
              }
         }
+        
+        // Ensure protocol
+        if (posterUrl != null && posterUrl.startsWith("//")) {
+            posterUrl = "https:$posterUrl"
+        }
+
         val quality = this.selectFirst("span.quality")?.text()
 
         return newMovieSearchResponse(title, href, TvType.Movie) {
@@ -138,9 +147,10 @@ class FaselHDProvider : MainAPI() {
         doc.select("ul.tabs-ul li").forEach { li ->
             val onclick = li.attr("onclick")
             // onclick="player_iframe.location.href = '...'"
-            val playerUrl = onclick.substringAfter("href = '").substringBefore("'")
+            // Use regex to be safer about spaces and quotes
+            val playerUrl = Regex("""href\s*=\s*['"]([^'"]+)['"]""").find(onclick)?.groupValues?.get(1)
 
-            if (playerUrl.isNotEmpty()) {
+            if (!playerUrl.isNullOrEmpty()) {
                 if (playerUrl.contains("video_player")) {
                    // Internal player
                    FaselPlayer().getUrl(playerUrl, data).forEach(callback)
@@ -192,9 +202,10 @@ class FaselHDProvider : MainAPI() {
             // Broaden the search to catch variations like "file":"..." or "file" : "..."
             // and don't strictly require "hlshtml" if the file pattern is clear
             
-            // Priority 1: Specific FaselHD pattern
-            val fileRegex = Regex(""""file"\s*:\s*"([^"]+)"\s*,\s*"hlshtml"""")
-            fileRegex.find(html)?.groupValues?.get(1)?.replace("\\", "")?.let { link ->
+            // Priority 1: Specific FaselHD pattern (Greedy match until specific suffix)
+            // Matches: "file":"HTTP_LINK","hlshtml"
+            val greedyRegex = Regex(""""file"\s*:\s*"(.+?)"\s*,\s*"hlshtml"""")
+            greedyRegex.find(html)?.groupValues?.get(1)?.replace("\\", "")?.let { link ->
                 val isM3u8 = link.contains(".m3u8")
                  links.add(
                      newExtractorLink(
@@ -226,6 +237,24 @@ class FaselHDProvider : MainAPI() {
                      }
                      )
                 }
+            }
+
+            // Priority 3: Look for any http/https link ending in .m3u8 inside quotes
+            Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").findAll(html).forEach { match ->
+                 val link = match.groupValues[1].replace("\\", "")
+                 if (links.none { it.url == link }) {
+                     links.add(
+                     newExtractorLink(
+                         name,
+                         "$name Raw",
+                         link,
+                         ExtractorLinkType.M3U8
+                     ) {
+                         this.referer = pageReferer ?: mainUrl
+                         this.quality = Qualities.Unknown.value
+                     }
+                     )
+                 }
             }
 
             return links.distinctBy { it.url }
