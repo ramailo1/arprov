@@ -155,37 +155,26 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
-        val playerHtml = app.get(playerUrl, referer = referer, headers = mapOf("User-Agent" to USER_AGENT)).text
+        // Fetch the iframe HTML
+        val playerHtml = app.get(
+            playerUrl,
+            referer = referer,
+            headers = mapOf("User-Agent" to USER_AGENT)
+        ).text
 
-        // Get token (URL, HTML, data-token)
-        val token = Regex("""player_token=([^&]+)""").find(playerUrl)?.groupValues?.get(1)
-            ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-            ?: Regex("""player_token=([^&]+)""").find(playerHtml)?.groupValues?.get(1)
-            ?: playerHtml.substringAfter("""data-token=""" , "").substringBefore("\"")
-            ?: return
+        // Regex to extract HLS links from JS variables or JSON in the iframe
+        val hlsLinks = Regex("""["']file["']\s*:\s*["']([^"']+\.m3u8)["']""")
+            .findAll(playerHtml)
+            .map { it.groupValues[1] }
+            .toList()
 
-        // Extract ajax URL
-        val ajaxUrl = Regex("""url\s*:\s*['"]([^'"]+)['"]""", RegexOption.DOT_MATCHES_ALL)
-            .find(playerHtml)?.groupValues?.get(1)?.trim()?.replace("\\/", "/")
-            ?: return
+        if (hlsLinks.isEmpty()) {
+            return
+        }
 
-        val absoluteAjaxUrl = if (ajaxUrl.startsWith("http")) ajaxUrl else mainUrl.trimEnd('/') + "/" + ajaxUrl.trimStart('/')
-
-        val response = app.post(
-            absoluteAjaxUrl,
-            data = mapOf("token" to token),
-            referer = playerUrl,  // full URL for referer
-            headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Origin" to mainUrl,
-                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
-                "User-Agent" to USER_AGENT
-            )
-        ).text.replace("\\/", "/")
-
-        // Find all HLS links
-        Regex("""https?://[^\s"']+\.m3u8""").findAll(response).forEach {
-            callback(newExtractorLink(name, "$name HLS", it.value, ExtractorLinkType.M3U8) {
+        // Return all found HLS links
+        hlsLinks.forEach { url ->
+            callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
                 this.referer = mainUrl
                 quality = Qualities.Unknown.value
             })
