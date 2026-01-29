@@ -36,33 +36,28 @@ class FaselHDProvider : MainAPI() {
     ): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}/page/$page"
         val doc = app.get(url).document
-        val list = doc.select("div.postDiv").mapNotNull {
-            it.toSearchResult()
-        }
+        val list = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, list)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleDiv = this.selectFirst("div.postInner > div.h1")
-        val title = titleDiv?.text() ?: return null
+        val title = this.selectFirst("div.postInner > div.h1")?.text() ?: return null
         val href = this.selectFirst("a")?.attr("href") ?: return null
-        
-        // Improve image extraction: check typical lazy load attributes and other potential classes
-        val img = this.selectFirst("div.imgdiv-class img") 
-            ?: this.selectFirst("div.postInner img") 
-            ?: this.selectFirst("img") // Fallback to any img in the div
-        
-        var posterUrl = img?.let { 
-             it.attr("data-src").ifEmpty { 
-                 it.attr("data-original").ifEmpty {
-                      it.attr("data-image").ifEmpty {
-                          it.attr("src") 
-                      }
-                 }
-             }
+
+        val img = this.selectFirst("div.imgdiv-class img")
+            ?: this.selectFirst("div.postInner img")
+            ?: this.selectFirst("img")
+
+        var posterUrl = img?.let {
+            it.attr("data-src").ifEmpty {
+                it.attr("data-original").ifEmpty {
+                    it.attr("data-image").ifEmpty {
+                        it.attr("data-srcset").ifEmpty { it.attr("src") }
+                    }
+                }
+            }
         }
-        
-        // Ensure protocol
+
         if (posterUrl != null && posterUrl.startsWith("//")) {
             posterUrl = "https:$posterUrl"
         }
@@ -77,15 +72,12 @@ class FaselHDProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val doc = app.get("$mainUrl/?s=$query").document
-        return doc.select("div.postDiv").mapNotNull {
-            it.toSearchResult()
-        }
+        return doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
-        // Basic Info
         val title = doc.selectFirst("div.title")?.text() ?: doc.selectFirst("title")?.text() ?: ""
         val poster = doc.selectFirst("div.posterImg img")?.attr("src")
         val desc = doc.selectFirst("div.singleDesc p")?.text()
@@ -95,11 +87,10 @@ class FaselHDProvider : MainAPI() {
         val duration = tags.find { it.contains("مدة") }?.substringAfter(":")?.trim()
         val recommendations = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
 
-        // Determine type: Series have episodes/seasons
         val isSeries = doc.select("div.epAll").isNotEmpty() || doc.select("div.seasonLoop").isNotEmpty()
 
-        if (!isSeries) {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+        return if (!isSeries) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = desc
@@ -108,21 +99,16 @@ class FaselHDProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            
-            // Current page episodes
             doc.select("div#epAll a").forEach { ep ->
                 val epTitle = ep.text()
                 val epUrl = ep.attr("href")
-                // Try to extract number from "الحلقة 1" -> 1
-                val epNumber = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
-                
+                val epNumber = Regex("""الحلقة\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
                 episodes.add(newEpisode(epUrl) {
                     this.name = epTitle
                     this.episode = epNumber
                 })
             }
-
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = desc
@@ -137,44 +123,22 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val doc = app.get(data).document
         val handled = HashSet<String>()
 
         suspend fun handlePlayer(url: String) {
-            if (handled.add(url)) {
-                extractVideoFromPlayer(url, data, callback)
-            }
+            if (handled.add(url)) extractVideoFromPlayer(url, data, callback)
         }
 
-        // 1️⃣ iframe (default server)
-        doc.selectFirst("iframe[name=player_iframe]")
-            ?.absUrl("src")
-            ?.takeIf { it.isNotBlank() }
-            ?.let { handlePlayer(it) }
+        doc.selectFirst("iframe[name=player_iframe]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { handlePlayer(it) }
 
-        // 2️⃣ other servers (tabs)
         doc.select(".tabs-ul > li").forEach { li ->
             val onclick = li.attr("onclick")
-            val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""")
-                .find(onclick)
-                ?.groupValues
-                ?.get(1)
-
-            if (!tabUrl.isNullOrEmpty()) {
-                val fullTabUrl = if (tabUrl.startsWith("http"))
-                    tabUrl
-                else
-                    mainUrl.trimEnd('/') + "/" + tabUrl.trimStart('/')
-
-                handlePlayer(fullTabUrl)
-            }
+            val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""").find(onclick)?.groupValues?.get(1)
+            if (!tabUrl.isNullOrEmpty()) handlePlayer(if (tabUrl.startsWith("http")) tabUrl else mainUrl.trimEnd('/') + "/" + tabUrl.trimStart('/'))
         }
 
-        // 3️⃣ downloads
-        doc.select("div.downloadLinks a").forEach {
-            loadExtractor(it.attr("href"), data, subtitleCallback, callback)
-        }
+        doc.select("div.downloadLinks a").forEach { loadExtractor(it.attr("href"), data, subtitleCallback, callback) }
 
         return true
     }
@@ -184,29 +148,17 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
-        val token = Regex("""player_token=([^&]+)""")
-            .find(playerUrl)
-            ?.groupValues
-            ?.get(1)
+        val playerHtml = app.get(playerUrl, referer = referer, headers = mapOf("User-Agent" to USER_AGENT)).text
+
+        val token = Regex("""player_token=([^&]+)""").find(playerUrl)?.groupValues?.get(1)
             ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            ?: Regex("""player_token=([^&]+)""").find(playerHtml)?.groupValues?.get(1)
             ?: return
 
-        val playerHtml = app.get(
-            playerUrl,
-            referer = referer,
-            headers = mapOf("User-Agent" to USER_AGENT)
-        ).text
+        val ajaxUrl = Regex("""url\s*:\s*['"]([^'"]+)['"]""", RegexOption.DOT_MATCHES_ALL)
+            .find(playerHtml)?.groupValues?.get(1)?.trim()?.replace("\\/", "/") ?: return
 
-        val ajaxUrl = Regex(
-            """url\s*:\s*['"]([^'"]+)['"]""",
-            RegexOption.DOT_MATCHES_ALL
-        ).find(playerHtml)?.groupValues?.get(1)?.trim() ?: return
-
-        val absoluteAjaxUrl = when {
-            ajaxUrl.startsWith("http") -> ajaxUrl
-            ajaxUrl.startsWith("/") -> mainUrl.trimEnd('/') + ajaxUrl
-            else -> mainUrl.trimEnd('/') + "/" + ajaxUrl
-        }
+        val absoluteAjaxUrl = if (ajaxUrl.startsWith("http")) ajaxUrl else mainUrl.trimEnd('/') + "/" + ajaxUrl.trimStart('/')
 
         val response = app.post(
             absoluteAjaxUrl,
@@ -218,22 +170,13 @@ class FaselHDProvider : MainAPI() {
                 "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
                 "User-Agent" to USER_AGENT
             )
-        ).text
+        ).text.replace("\\/", "/")
 
-        Regex("""https?://[^\s"']+\.m3u8""")
-            .findAll(response)
-            .forEach {
-                callback(
-                    newExtractorLink(
-                        name,
-                        "$name HLS",
-                        it.value,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        quality = Qualities.Unknown.value
-                    }
-                )
-            }
+        Regex("""https?://[^\s"']+\.m3u8""").findAll(response).forEach {
+            callback(newExtractorLink(name, "$name HLS", it.value, ExtractorLinkType.M3U8) {
+                this.referer = mainUrl
+                quality = Qualities.Unknown.value
+            })
+        }
     }
 }
