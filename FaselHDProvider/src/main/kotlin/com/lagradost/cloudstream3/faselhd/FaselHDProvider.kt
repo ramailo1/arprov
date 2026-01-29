@@ -126,11 +126,27 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         println("🔍 FaselHD loadLinks called for: $data")
         val doc = app.get(data).document
+        val pageHtml = doc.html()
+        
+        println("📄 Page HTML length: ${pageHtml.length}")
+        println("📝 First 2000 chars of HTML: ${pageHtml.take(2000)}")
         
         // Extract player URLs from onclick attributes
         // The HTML contains: onclick="player_iframe.location.href = &#39;URL&#39;"
         val playerElements = doc.select("li[onclick*=player_iframe]")
-        println("📋 Found ${playerElements.size} player elements")
+        println("📋 Found ${playerElements.size} player elements with selector: li[onclick*=player_iframe]")
+        
+        // Try alternative selectors
+        val allLiWithOnclick = doc.select("li[onclick]")
+        println("📋 Found ${allLiWithOnclick.size} <li> elements with onclick")
+        
+        val allLi = doc.select("li")
+        println("📋 Found ${allLi.size} total <li> elements")
+        
+        // Show first few li elements
+        allLi.take(5).forEach { li ->
+            println("  <li> sample: ${li.html().take(200)}")
+        }
         
         playerElements.forEach { li ->
             val onclick = li.attr("onclick")
