@@ -17,6 +17,10 @@ class FaselHDProvider : MainAPI() {
         TvType.AsianDrama
     )
 
+    companion object {
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
     override val mainPage = mainPageOf(
         "$mainUrl/most_recent" to "Recently Added",
         "$mainUrl/series" to "Series",
@@ -121,25 +125,19 @@ class FaselHDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        val handled = HashSet<String>()
-
-        suspend fun handlePlayer(url: String) {
-            if (handled.add(url)) extractVideoFromPlayer(url, data, callback)
-        }
-
-        // 1️⃣ iframe player
-        doc.selectFirst("iframe[name=player_iframe]")?.absUrl("src")?.takeIf { it.isNotBlank() }?.let { handlePlayer(it) }
-
-        // 2️⃣ tabs (some episodes/qualities may be under tabs)
-        doc.select(".tabs-ul > li").forEach { li ->
-            val onclick = li.attr("onclick")
-            val tabUrl = Regex("""location\.href\s*=\s*['"]([^'"]+)""").find(onclick)?.groupValues?.get(1)
-            if (!tabUrl.isNullOrEmpty()) {
-                handlePlayer(if (tabUrl.startsWith("http")) tabUrl else mainUrl.trimEnd('/') + "/" + tabUrl.trimStart('/'))
+        
+        // Extract player iframe URLs
+        doc.select("li[onclick*='player_iframe.location.href']").forEach { li ->
+            val onclickAttr = li.attr("onclick")
+            val playerUrlMatch = Regex("""player_iframe\.location\.href\s*=\s*['"]([^'"]+)['"]""").find(onclickAttr)
+            
+            if (playerUrlMatch != null) {
+                val playerUrl = playerUrlMatch.groupValues[1]
+                extractVideoFromPlayer(playerUrl, data, callback)
             }
         }
-
-        // 3️⃣ direct download links
+        
+        // Direct download links
         doc.select("div.downloadLinks a").forEach { a ->
             val url = a.absUrl("href")
             if (url.isNotBlank()) callback(newExtractorLink(name, "Download", url, ExtractorLinkType.VIDEO) {
@@ -162,49 +160,37 @@ class FaselHDProvider : MainAPI() {
             headers = mapOf("User-Agent" to USER_AGENT)
         ).text
 
-        val handledLinks = mutableSetOf<String>()
-
-        // 1️⃣ JS sources array
-        val regexSources = Regex("""sources\s*:\s*\[\s*\{[^\}]*file\s*:\s*['"]([^'"]+\.m3u8)['"]""")
-        regexSources.findAll(playerHtml).forEach {
-            val url = it.groupValues[1]
-            if (handledLinks.add(url)) {
-                callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
-                    this.referer = mainUrl
-                    quality = Qualities.Unknown.value
-                })
-            }
-        }
-
-        // 2️⃣ <source src="..."> tags
-        val regexSourceTag = Regex("""<source[^>]+src=['"]([^'"]+\.m3u8)['"]""")
-        regexSourceTag.findAll(playerHtml).forEach {
-            val url = it.groupValues[1]
-            if (handledLinks.add(url)) {
-                callback(newExtractorLink(name, "$name HLS", url, ExtractorLinkType.M3U8) {
-                    this.referer = mainUrl
-                    quality = Qualities.Unknown.value
-                })
-            }
-        }
-
-        // 3️⃣ Base64 encoded links
-        val regexBase64 = Regex("""atob\(['"]([^'"]+)['"]\)""")
-        regexBase64.findAll(playerHtml).forEach {
-            try {
-                val encoded = it.groupValues[1]
-                val decoded = String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
-                if (decoded.endsWith(".m3u8") && handledLinks.add(decoded)) {
-                    callback(newExtractorLink(name, "$name HLS", decoded, ExtractorLinkType.M3U8) {
-                        this.referer = mainUrl
-                        quality = Qualities.Unknown.value
-                    })
+        // Extract m3u8 URLs from data-url attributes in buttons
+        val dataUrlRegex = Regex("""data-url=["']([^"']+\.m3u8)["']""")
+        val qualityRegex = Regex(""">(\d+p|auto)</button>""")
+        
+        dataUrlRegex.findAll(playerHtml).forEach { match ->
+            val m3u8Url = match.groupValues[1]
+            
+            // Try to find quality label near this URL
+            val contextStart = maxOf(0, match.range.first - 200)
+            val contextEnd = minOf(playerHtml.length, match.range.last + 200)
+            val context = playerHtml.substring(contextStart, contextEnd)
+            
+            val qualityMatch = qualityRegex.find(context)
+            val qualityLabel = qualityMatch?.groupValues?.get(1) ?: "Unknown"
+            
+            callback(newExtractorLink(
+                name,
+                "$name - $qualityLabel",
+                m3u8Url,
+                ExtractorLinkType.M3U8
+            ) {
+                this.referer = mainUrl
+                quality = when (qualityLabel) {
+                    "1080p" -> Qualities.P1080.value
+                    "720p" -> Qualities.P720.value
+                    "480p" -> Qualities.P480.value
+                    "360p" -> Qualities.P360.value
+                    "auto" -> Qualities.Unknown.value
+                    else -> Qualities.Unknown.value
                 }
-            } catch (_: Exception) {}
-        }
-
-        if (handledLinks.isEmpty()) {
-            println("⚠️ No HLS links found in iframe: $playerUrl")
+            })
         }
     }
 }
