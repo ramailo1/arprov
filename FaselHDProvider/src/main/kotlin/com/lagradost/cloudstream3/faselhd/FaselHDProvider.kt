@@ -18,16 +18,16 @@ class FaselHDProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies" to "Movies",
+        "$mainUrl/most_recent" to "Recently Added",
         "$mainUrl/series" to "Series",
+        "$mainUrl/movies" to "Movies",
+        "$mainUrl/asian-series" to "Asian Series",
+        "$mainUrl/anime" to "Anime",
+        "$mainUrl/tvshows" to "TV Shows",
         "$mainUrl/dubbed-movies" to "Dubbed Movies",
         "$mainUrl/hindi" to "Hindi",
         "$mainUrl/asian-movies" to "Asian Movies",
-        "$mainUrl/anime-movies" to "Anime Movies",
-        "$mainUrl/tvshows" to "TV Shows",
-        "$mainUrl/anime" to "Anime",
-        "$mainUrl/asian-series" to "Asian Series",
-        "$mainUrl/most_recent" to "Recently Added"
+        "$mainUrl/anime-movies" to "Anime Movies"
     )
 
     override suspend fun getMainPage(
@@ -46,8 +46,17 @@ class FaselHDProvider : MainAPI() {
         val titleDiv = this.selectFirst("div.postInner > div.h1")
         val title = titleDiv?.text() ?: return null
         val href = this.selectFirst("a")?.attr("href") ?: return null
-        val posterUrl = this.selectFirst("div.imgdiv-class img")?.let { img ->
-            img.attr("data-src").ifEmpty { img.attr("src") }
+        
+        // Improve image extraction: check typical lazy load attributes
+        val img = this.selectFirst("div.imgdiv-class img") ?: this.selectFirst("div.postInner img")
+        val posterUrl = img?.let { 
+             it.attr("data-src").ifEmpty { 
+                 it.attr("data-original").ifEmpty {
+                      it.attr("data-image").ifEmpty {
+                          it.attr("src") 
+                      }
+                 }
+             }
         }
         val quality = this.selectFirst("span.quality")?.text()
 
@@ -180,7 +189,10 @@ class FaselHDProvider : MainAPI() {
             }
             
             // 2. Try to find "file": "..." pattern common in JWPlayer
-            // Specific pattern from python analysis: "file":"...","hlshtml"
+            // Broaden the search to catch variations like "file":"..." or "file" : "..."
+            // and don't strictly require "hlshtml" if the file pattern is clear
+            
+            // Priority 1: Specific FaselHD pattern
             val fileRegex = Regex(""""file"\s*:\s*"([^"]+)"\s*,\s*"hlshtml"""")
             fileRegex.find(html)?.groupValues?.get(1)?.replace("\\", "")?.let { link ->
                 val isM3u8 = link.contains(".m3u8")
@@ -197,8 +209,9 @@ class FaselHDProvider : MainAPI() {
                  )
             }
 
-            Regex("""file["']?:\s*["']([^"']+)["']""").findAll(html).forEach { match ->
-                val link = match.groupValues[1]
+            // Priority 2: Generic JWPlayer file pattern
+            Regex("""file["']?\s*:\s*["']([^"']+)["']""").findAll(html).forEach { match ->
+                val link = match.groupValues[1].replace("\\", "")
                 if (link.startsWith("http") && links.none { it.url == link }) {
                      val isM3u8 = link.contains(".m3u8")
                      links.add(
