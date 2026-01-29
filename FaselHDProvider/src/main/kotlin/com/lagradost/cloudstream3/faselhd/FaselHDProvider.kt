@@ -169,27 +169,61 @@ class FaselHDProvider : MainAPI() {
                     val playerHtml = playerDoc.html()
                     println("📄 Player HTML length: ${playerHtml.length}")
                     
-                    // Look for m3u8 and mp4 URLs directly in the HTML/JavaScript
-                    // The player pages contain obfuscated JS with embedded video URLs
-                    val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
-                    val mp4Regex = Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)""")
-                    
-                    val m3u8Matches = m3u8Regex.findAll(playerHtml)
-                    val mp4Matches = mp4Regex.findAll(playerHtml)
-                    
                     var foundAny = false
                     
-                    m3u8Matches.forEach { match ->
+                    // Try multiple extraction methods since the URLs are obfuscated
+                    
+                    // Method 1: Look for Base64 encoded data that might contain URLs
+                    val base64Pattern = Regex("""atob\s*\(\s*['"]([A-Za-z0-9+/=]{100,})['"]""")
+                    base64Pattern.findAll(playerHtml).forEach { match ->
+                        try {
+                            val base64Data = match.groupValues[1]
+                            val decoded = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT))
+                            println("🔓 Decoded Base64 (first 200 chars): ${decoded.take(200)}")
+                            
+                            // Look for URLs in decoded data
+                            val urlPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+                            urlPattern.findAll(decoded).forEach { urlMatch ->
+                                val videoUrl = urlMatch.groupValues[1]
+                                println("🎥 Found URL in Base64: ${videoUrl.take(100)}")
+                                foundAny = true
+                                
+                                callback.invoke(
+                                    newExtractorLink(
+                                        this.name,
+                                        "$name - Decoded",
+                                        videoUrl,
+                                        if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = playerUrl
+                                        this.quality = Qualities.Unknown.value
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {
+                            println("⚠️ Failed to decode Base64: ${e.message}")
+                        }
+                    }
+                    
+                    // Method 2: Look for file: or sources: patterns in JWPlayer setup
+                    val filePattern = Regex("""(?:file|source|src)\s*:\s*['"]([^'"]+\.(?:m3u8|mp4)[^'"]*)['"]""", RegexOption.IGNORE_CASE)
+                    filePattern.findAll(playerHtml).forEach { match ->
                         val videoUrl = match.groupValues[1]
-                        println("🎥 Found m3u8 URL: ${videoUrl.take(100)}")
+                        println("🎥 Found file pattern: ${videoUrl.take(100)}")
                         foundAny = true
+                        
+                        val fullUrl = if (videoUrl.startsWith("http")) {
+                            videoUrl
+                        } else {
+                            "https:$videoUrl"
+                        }
                         
                         callback.invoke(
                             newExtractorLink(
                                 this.name,
-                                "$name - M3U8",
-                                videoUrl,
-                                ExtractorLinkType.M3U8
+                                "$name - File",
+                                fullUrl,
+                                if (fullUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = playerUrl
                                 this.quality = Qualities.Unknown.value
@@ -197,17 +231,19 @@ class FaselHDProvider : MainAPI() {
                         )
                     }
                     
-                    mp4Matches.forEach { match ->
+                    // Method 3: Standard URL patterns (might be in plain text)
+                    val standardPattern = Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+                    standardPattern.findAll(playerHtml).forEach { match ->
                         val videoUrl = match.groupValues[1]
-                        println("🎥 Found mp4 URL: ${videoUrl.take(100)}")
+                        println("🎥 Found standard URL: ${videoUrl.take(100)}")
                         foundAny = true
                         
                         callback.invoke(
                             newExtractorLink(
                                 this.name,
-                                "$name - MP4",
+                                "$name - Direct",
                                 videoUrl,
-                                ExtractorLinkType.VIDEO
+                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = playerUrl
                                 this.quality = Qualities.Unknown.value
@@ -216,7 +252,10 @@ class FaselHDProvider : MainAPI() {
                     }
                     
                     if (!foundAny) {
-                        println("⚠️ No video URLs found in player page")
+                        println("⚠️ No video URLs found with any method")
+                        // Save a sample of the HTML for debugging
+                        println("📝 HTML sample (first 500 chars): ${playerHtml.take(500)}")
+                        println("📝 HTML sample (chars 1000-1500): ${playerHtml.substring(1000.coerceAtMost(playerHtml.length), 1500.coerceAtMost(playerHtml.length))}")
                     }
                 } catch (e: Exception) {
                     println("❌ Error loading player: ${e.message}")
