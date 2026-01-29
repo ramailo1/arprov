@@ -169,57 +169,54 @@ class FaselHDProvider : MainAPI() {
                     val playerHtml = playerDoc.html()
                     println("📄 Player HTML length: ${playerHtml.length}")
                     
-                    // Look for buttons with data-url attributes containing video links
-                    val buttons = playerDoc.select("button[data-url]")
-                    println("🔘 Found ${buttons.size} buttons with data-url")
+                    // Look for m3u8 and mp4 URLs directly in the HTML/JavaScript
+                    // The player pages contain obfuscated JS with embedded video URLs
+                    val m3u8Regex = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""")
+                    val mp4Regex = Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)""")
                     
-                    if (buttons.isEmpty()) {
-                        // Debug: show what buttons exist
-                        val allButtons = playerDoc.select("button")
-                        println("⚠️ Total buttons found: ${allButtons.size}")
-                        allButtons.take(3).forEach { btn ->
-                            println("  Button: ${btn.html().take(100)}")
-                        }
+                    val m3u8Matches = m3u8Regex.findAll(playerHtml)
+                    val mp4Matches = mp4Regex.findAll(playerHtml)
+                    
+                    var foundAny = false
+                    
+                    m3u8Matches.forEach { match ->
+                        val videoUrl = match.groupValues[1]
+                        println("🎥 Found m3u8 URL: ${videoUrl.take(100)}")
+                        foundAny = true
                         
-                        // Try to find data-url in the HTML directly
-                        if (playerHtml.contains("data-url")) {
-                            println("✅ HTML contains 'data-url'")
-                            val dataUrlMatches = Regex("""data-url=["']([^"']+)["']""").findAll(playerHtml)
-                            println("📊 Found ${dataUrlMatches.count()} data-url matches in raw HTML")
-                        } else {
-                            println("❌ HTML does NOT contain 'data-url'")
-                            println("📝 First 1000 chars: ${playerHtml.take(1000)}")
-                        }
+                        callback.invoke(
+                            newExtractorLink(
+                                this.name,
+                                "$name - M3U8",
+                                videoUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = playerUrl
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
                     }
                     
-                    buttons.forEach { button ->
-                        val videoUrl = button.attr("data-url")
-                        println("🎥 Video URL: ${videoUrl.take(100)}")
+                    mp4Matches.forEach { match ->
+                        val videoUrl = match.groupValues[1]
+                        println("🎥 Found mp4 URL: ${videoUrl.take(100)}")
+                        foundAny = true
                         
-                        if (videoUrl.isNotBlank()) {
-                            // Try to determine quality from button text or URL
-                            val quality = when {
-                                button.text().contains("1080") || videoUrl.contains("1080") -> 1080
-                                button.text().contains("720") || videoUrl.contains("720") -> 720
-                                button.text().contains("480") || videoUrl.contains("480") -> 480
-                                button.text().contains("360") || videoUrl.contains("360") -> 360
-                                else -> 0
+                        callback.invoke(
+                            newExtractorLink(
+                                this.name,
+                                "$name - MP4",
+                                videoUrl,
+                                ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = playerUrl
+                                this.quality = Qualities.Unknown.value
                             }
-                            
-                            println("✅ Adding link: quality=$quality, url=${videoUrl.take(80)}")
-                            
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    this.name,
-                                    videoUrl,
-                                    if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = playerUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
+                        )
+                    }
+                    
+                    if (!foundAny) {
+                        println("⚠️ No video URLs found in player page")
                     }
                 } catch (e: Exception) {
                     println("❌ Error loading player: ${e.message}")
