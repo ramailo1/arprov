@@ -128,51 +128,37 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
 
-        // Extract quality buttons from main page first (overlaying the player)
-        val mainPageQualityButtons = doc.select("button.hd_btn")
-        if (mainPageQualityButtons.isNotEmpty()) {
-            mainPageQualityButtons.forEach { button ->
-                val videoUrl = button.attr("data-url")
-                val qualityText = button.text()
-
-                if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "$name - $qualityText",
-                            videoUrl,
-                            if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = getQualityInt(qualityText)
-                        }
-                    )
-                }
-            }
-        }
-
-        // Fallback: Extract the player iframe URL if no links found or as additional attempt
+        // Extract the player iframe URL
         val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
         val playerUrl = playerIframe?.absUrl("src")
 
         if (!playerUrl.isNullOrEmpty()) {
             try {
-                // Fetch the player page
-                val playerDoc = app.get(playerUrl, referer = data).document
+                // Fetch the raw HTML response from the iframe
+                val playerResponse = app.get(playerUrl, referer = data).text
                 
-                // Extract M3U8 links from quality buttons inside iframe
-                val qualityButtons = playerDoc.select("button.hd_btn")
-                qualityButtons.forEach { button ->
-                    val videoUrl = button.attr("data-url")
-                    val qualityText = button.text()
+                // Use regex to extract all m3u8 URLs from scdns.io domain
+                // These URLs are present in the raw HTML but obfuscated/concatenated
+                val m3u8Pattern = Regex("""https?://[^\s"'<>]*scdns\.io[^\s"'<>]*\.m3u8""")
+                val qualityPattern = Regex("""(\d+p)""")
+                
+                val foundUrls = mutableSetOf<String>() // Deduplicate URLs
+                
+                m3u8Pattern.findAll(playerResponse).forEach { match ->
+                    val videoUrl = match.value
                     
-                    if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
+                    // Only process if we haven't seen this URL before
+                    if (foundUrls.add(videoUrl)) {
+                        // Extract quality from URL (e.g., "1080p", "720p")
+                        val qualityMatch = qualityPattern.find(videoUrl)
+                        val qualityText = qualityMatch?.value ?: "Auto"
+                        
                         callback.invoke(
                             newExtractorLink(
                                 this.name,
-                                "$name - $qualityText (Iframe)",
+                                "$name - $qualityText",
                                 videoUrl,
-                                if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ExtractorLinkType.M3U8
                             ) {
                                 this.referer = playerUrl
                                 this.quality = getQualityInt(qualityText)
@@ -184,7 +170,6 @@ class FaselHDProvider : MainAPI() {
                 e.printStackTrace()
             }
         }
-
 
         return true
     }
