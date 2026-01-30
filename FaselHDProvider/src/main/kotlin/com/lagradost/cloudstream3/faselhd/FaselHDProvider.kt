@@ -143,7 +143,7 @@ class FaselHDProvider : MainAPI() {
                             if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             this.referer = data
-                            this.quality = getQualityFromString(qualityText)
+                            this.quality = getQualityInt(qualityText)
                         }
                     )
                 }
@@ -174,7 +174,7 @@ class FaselHDProvider : MainAPI() {
                                 if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = playerUrl
-                                this.quality = getQualityFromString(qualityText)
+                                this.quality = getQualityInt(qualityText)
                             }
                         )
                     }
@@ -205,5 +205,13 @@ class FaselHDProvider : MainAPI() {
         return true
     }
 
-
+    private fun getQualityInt(quality: String): Int {
+        return when {
+            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
+            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
+            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
+            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
+            else -> Qualities.Unknown.value
+        }
+    }
 }
