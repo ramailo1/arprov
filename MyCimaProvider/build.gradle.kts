@@ -1,7 +1,8 @@
 version = 10
 
 cloudstream {
-    authors = listOf( "yamad" )
+    authors = listOf( "ramailo1" )
+    description = "MyCima Provider - (In Progress)"
 
 	language = "ar"
 	

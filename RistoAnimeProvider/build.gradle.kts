@@ -6,8 +6,8 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     iconUrl = "https://www.google.com/s2/favicons?domain=ristoanime.org&sz=%size%"
-    authors = listOf("yamad")
-    description = "RistoAnime - Arabic anime streaming provider"
+    authors = listOf("ramailo1")
+    description = "RistoAnime Provider - (In Progress)"
 }
 android {
     namespace = "com.lagradost.cloudstream3.ristoanime"

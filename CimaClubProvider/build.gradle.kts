@@ -16,7 +16,8 @@ cloudstream {
     iconUrl = "https://www.google.com/s2/favicons?domain=cimaclub.us&sz=%size%"
     
     // The authors of this extension
-    authors = listOf("yamad")
+    authors = listOf("ramailo1")
+    description = "CimaClub Provider - (In Progress)"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimaclub"

@@ -2,6 +2,7 @@ version = 4
 
 cloudstream {
     authors = listOf( "Blatzar" )
+    description = "Akwam Provider - Clean, Organized, and High-Performance"
 	
     language = "ar"
 	

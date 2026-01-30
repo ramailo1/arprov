@@ -1,8 +1,8 @@
 version = 10
 
 cloudstream {
-    authors = listOf("yamad")
-    description = "FaselHD Provider for Cloudstream"
+    authors = listOf("ramailo1")
+    description = "FaselHD Provider - Clean, Organized, and High-Performance"
     language = "ar"
     status = 3
     tvTypes = listOf("TvSeries", "Movie", "Anime")

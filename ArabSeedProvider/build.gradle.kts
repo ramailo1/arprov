@@ -1,7 +1,8 @@
 version = 10
 
 cloudstream {
-    authors = listOf( "yamad" )
+    authors = listOf( "ramailo1" )
+    description = "ArabSeed Provider - Clean, Organized, and High-Performance"
 
     language = "ar"
 	
