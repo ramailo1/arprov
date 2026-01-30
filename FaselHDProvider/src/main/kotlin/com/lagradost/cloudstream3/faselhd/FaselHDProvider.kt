@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 
 
 class FaselHDProvider : MainAPI() {
-    override var mainUrl = "https://web12918x.faselhdx.bid"
+    override var mainUrl = "https://web13012x.faselhdx.bid"
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
@@ -139,12 +139,17 @@ class FaselHDProvider : MainAPI() {
                 
                 // Use regex to extract all m3u8 URLs from scdns.io domain
                 // These URLs are present in the raw HTML but obfuscated/concatenated
-                val m3u8Pattern = Regex("""https?://[^\s"'<>]*scdns\.io[^\s"'<>]*\.m3u8""")
+                // De-obfuscate: Remove string concatenation artifacts "'+'"
+                val cleanedResponse = playerResponse.replace(Regex("""['"]\s*\+\s*['"]"""), "")
+
+                // Use regex to extract all m3u8 URLs from scdns.io domain
+                // These URLs are present in the raw HTML but obfuscated/concatenated
+                val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io|s\.io)[^\s"']*\.m3u8""")
                 val qualityPattern = Regex("""(\d+p)""")
                 
                 val foundUrls = mutableSetOf<String>() // Deduplicate URLs
                 
-                m3u8Pattern.findAll(playerResponse).forEach { match ->
+                m3u8Pattern.findAll(cleanedResponse).forEach { match ->
                     val videoUrl = match.value
                     
                     // Only process if we haven't seen this URL before
