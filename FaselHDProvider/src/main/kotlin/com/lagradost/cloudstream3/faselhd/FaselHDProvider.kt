@@ -8,6 +8,7 @@ import org.jsoup.nodes.Element
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web12918x.faselhdx.bid"
     override var name = "FaselHD"
+    override val usesWebView = true
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
@@ -183,15 +184,48 @@ class FaselHDProvider : MainAPI() {
                 e.printStackTrace()
             }
         }
+        
+        // Regex Fallback for Iframe (if button scraping failed)
+        // Check if we found any links yet, if not, try regex on the player page content
+        val playerIframeFallback = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
+        val playerUrlFallback = playerIframeFallback?.absUrl("src")
+        
+        if (!playerUrlFallback.isNullOrEmpty()) {
+             try {
+                val playerResponse = app.get(playerUrlFallback, referer = data).text
+                val sources = Regex("""file\s*:\s*"(.*?)"""").findAll(playerResponse)
+                
+                sources.forEach { match ->
+                    val videoUrl = match.groupValues[1]
+                    if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
+                         callback.invoke(
+                            newExtractorLink(
+                                this.name,
+                                "$name - Auto (Regex)",
+                                videoUrl,
+                                if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = playerUrlFallback
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+                }
+             } catch (e: Exception) {
+                 e.printStackTrace()
+             }
+        }
 
-        // Also extract download links from main page
-        doc.select("a[href*=\"t7meel\"]").forEach { link ->
+
+        // Also extract download links from main page (.downloadLinks container)
+        doc.select(".downloadLinks a, a[href*=\"t7meel\"]").forEach { link ->
             val dlUrl = link.absUrl("href")
+            val linkText = link.text()
             if (dlUrl.startsWith("http")) {
-                callback.invoke(
+                 callback.invoke(
                     newExtractorLink(
                         this.name,
-                        "$name - Download",
+                        "$name - Download ($linkText)",
                         dlUrl,
                         ExtractorLinkType.VIDEO
                     ) {
