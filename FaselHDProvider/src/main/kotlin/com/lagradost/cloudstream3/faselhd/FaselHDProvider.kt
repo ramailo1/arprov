@@ -185,31 +185,77 @@ class FaselHDProvider : MainAPI() {
             }
         }
         
-        // Regex Fallback for Iframe (if button scraping failed)
-        // Check if we found any links yet, if not, try regex on the player page content
+        // Regex Fallback for Iframe (extract from document.write scripts and JWPlayer config)
         val playerIframeFallback = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
         val playerUrlFallback = playerIframeFallback?.absUrl("src")
         
         if (!playerUrlFallback.isNullOrEmpty()) {
              try {
                 val playerResponse = app.get(playerUrlFallback, referer = data).text
-                val sources = Regex("""file\s*:\s*"(.*?)"""").findAll(playerResponse)
                 
-                sources.forEach { match ->
+                // Pattern 1: Extract URLs from data-url attributes in document.write button scripts
+                // Example: document.write('<button class="hd_btn" data-url="https://...">1080p</button>')
+                val dataUrlPattern = Regex("""data-url=["']([^"']+)["']""")
+                val dataUrlMatches = dataUrlPattern.findAll(playerResponse)
+                
+                // Pattern 2: Extract quality labels from button text
+                // Example: >1080p< or >720p<
+                val qualityPattern = Regex(""">(\d+p?)<""")
+                
+                // Pattern 3: JWPlayer config pattern (existing)
+                val filePattern = Regex("""file\s*:\s*["']([^"']+)["']""")
+                val fileMatches = filePattern.findAll(playerResponse)
+                
+                // Combine all matches
+                val allMatches = mutableListOf<Pair<String, String?>>() // Pair<URL, Quality?>
+                
+                // Extract from data-url attributes
+                dataUrlMatches.forEach { match ->
                     val videoUrl = match.groupValues[1]
-                    if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
-                         callback.invoke(
-                            newExtractorLink(
-                                this.name,
-                                "$name - Auto (Regex)",
-                                videoUrl,
-                                if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = playerUrlFallback
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
+                    if (videoUrl.startsWith("http")) {
+                        // Try to find quality label near this URL
+                        val contextStart = maxOf(0, match.range.first - 100)
+                        val contextEnd = minOf(playerResponse.length, match.range.last + 100)
+                        val context = playerResponse.substring(contextStart, contextEnd)
+                        val qualityMatch = qualityPattern.find(context)
+                        val quality = qualityMatch?.groupValues?.get(1)
+                        allMatches.add(videoUrl to quality)
                     }
+                }
+                
+                // Extract from file: pattern
+                fileMatches.forEach { match ->
+                    val videoUrl = match.groupValues[1]
+                    if (videoUrl.startsWith("http")) {
+                        allMatches.add(videoUrl to null)
+                    }
+                }
+                
+                // Deduplicate and create extractor links
+                allMatches.distinctBy { it.first }.forEach { (videoUrl, qualityLabel) ->
+                    val quality = if (qualityLabel != null) {
+                        getQualityInt(qualityLabel)
+                    } else {
+                        Qualities.Unknown.value
+                    }
+                    
+                    val linkName = if (qualityLabel != null) {
+                        "$name - $qualityLabel"
+                    } else {
+                        "$name - Auto"
+                    }
+                    
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            linkName,
+                            videoUrl,
+                            if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = playerUrlFallback
+                            this.quality = quality
+                        }
+                    )
                 }
              } catch (e: Exception) {
                  e.printStackTrace()
