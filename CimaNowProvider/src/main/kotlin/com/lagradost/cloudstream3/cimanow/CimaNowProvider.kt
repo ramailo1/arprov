@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
-    override var name = "CimaNow"
+    override var name = "CimaNow (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)

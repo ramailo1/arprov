@@ -18,7 +18,7 @@ class MyCimaProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://mycima.rip"
     private val alternativeUrl = "https://wecima.click"
-    override var name = "MyCima"
+    override var name = "MyCima (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)

@@ -9,7 +9,7 @@ import org.jsoup.nodes.Element
 
 class ShahidMBCProvider : MainAPI() {
     override var mainUrl = "https://shahid.mbc.net"
-    override var name = "ShahidMBC"
+    override var name = "ShahidMBC (In Progress)"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true

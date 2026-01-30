@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 class TopCinemaProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://topcima.online"
-    override var name = "TopCinema"
+    override var name = "TopCinema (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)

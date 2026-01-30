@@ -1,8 +1,8 @@
-version = 7
+version = 10
 
 cloudstream {
     description = "Egybest is broken"
-    authors = listOf( "ImZaw" )
+    authors = listOf( "yamad" )
 
 	language = "ar"
 	

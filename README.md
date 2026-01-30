@@ -66,35 +66,32 @@ New plugins or those undergoing maintenance/updates.
 
 | Provider | Status | Progress |
 | :--- | :--- | :--- |
-| **RistoAnime** | 🛠️ WebView Enabled | `Soon` |
-| **Shahid4u** | 🛠️ URL Updated | `Soon` |
-| **Shed4u** | 🛠️ URL Updated | `Soon` |
-| **Cima4u Actor** | 🛠️ Refactoring | `Soon` |
-| **Cima4u Shop** | 🛠️ Extractors Fix | `Soon` |
-| **EgyDead** | 🔍 Testing | `Soon` |
-| **GateAnime** | 🏗️ Initial Build | `Soon` |
+| **RistoAnime** | 🛠️ In Progress | `Soon` |
+| **Shahid4u** | 🛠️ In Progress | `Soon` |
+| **Shed4u** | 🛠️ In Progress | `Soon` |
+| **Cima4u Actor** | 🛠️ In Progress | `Soon` |
+| **Cima4u Shop** | 🛠️ In Progress | `Soon` |
+| **EgyDead** | 🛠️ In Progress | `Soon` |
+| **GateAnime** | 🛠️ In Progress | `Soon` |
+| **Cima4u** | 🛠️ In Progress | `Paused` |
+| **CimaClub** | 🛠️ In Progress | `Paused` |
+| **CimaNow** | 🛠️ In Progress | `Paused` |
+| **CimaLeek** | 🛠️ In Progress | `Paused` |
+| **FajerShow** | 🛠️ In Progress | `Paused` |
+| **MyCima** | 🛠️ In Progress | `Paused` |
+| **ShahidMBC** | 🛠️ In Progress | `Paused` |
+| **TopCinema** | 🛠️ In Progress | `Paused` |
+| **EgyBest** | 🛠️ In Progress | `Paused` |
 
 ### ⚠️ Cloudflare Blocked / Issues
 Plugins that are currently facing persistent Cloudflare protection issues (Black Screen / Turnstile Loop).
 
 | Provider | Status | Note |
 | :--- | :--- | :--- |
-| **AnimeBlkom** | 🛑 Blocked | Persistent Turnstile Loop (Mobile/Webview) |
+| **AnimeBlkom** | 🛑 Blocked | Cloudflare Protection (Mobile/Webview) |
 
-### ❌ Down (Currently Broken)
-These plugins are currently non-functional due to site changes or API issues.
-
-| Provider | Known Issue | Status |
-| :--- | :--- | :--- |
-| **Cima4u** | 🛑 Broken Logic | ⏸️ Paused |
-| **CimaClub** | 🛑 Broken Logic | ⏸️ Paused |
-| **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
-| **CimaLeek** | 🛑 Broken Logic | ⏸️ Paused |
-| **FajerShow** | 🛑 Broken Logic | ⏸️ Paused |
-| **MyCima** | 🛑 Broken Logic | ⏸️ Paused |
-| **ShahidMBC** | 🛑 Broken Logic | ⏸️ Paused |
-| **TopCinema** | 🛑 Broken Logic | ⏸️ Paused |
-| **EgyBest** | Domain Change / JS Captcha | ⏸️ Paused |
+### ❌ Down / Maintenance
+Plugins that are currently non-functional or under maintenance. Use "In Progress" versions for status updates.
 
 ---
 

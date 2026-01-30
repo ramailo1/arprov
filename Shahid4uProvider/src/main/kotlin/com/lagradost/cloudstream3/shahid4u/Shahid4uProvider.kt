@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://shahid4.you"
-    override var name = "Shahid4u"
+    override var name = "Shahid4u (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
 	private  val cfKiller = CloudflareKiller()

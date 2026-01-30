@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 
 class Cima4uShopProvider : MainAPI() {
     override var mainUrl = "https://cfu.cam"
-    override var name = "Cima4uShop"
+    override var name = "Cima4uShop (In Progress)"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true

@@ -12,7 +12,7 @@ import okhttp3.Request
 
 class CimaClubProvider : MainAPI() {
     override var mainUrl = "https://ciimaclub.us"
-    override var name = "CimaClub"
+    override var name = "CimaClub (In Progress)"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true

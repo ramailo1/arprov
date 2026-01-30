@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 class RistoAnimeProvider : MainAPI() {
     override var mainUrl = "https://ristoanime.org"
-    override var name = "RistoAnime"
+    override var name = "RistoAnime (In Progress)"
     override val hasMainPage = true
     override var lang = "ar"
     override val usesWebView = true

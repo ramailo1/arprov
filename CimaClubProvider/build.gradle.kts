@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 1
+version = 10
 
 // Dependencies are needed for cloudstream to be able to fetch this extension
 cloudstream {
@@ -16,7 +16,7 @@ cloudstream {
     iconUrl = "https://www.google.com/s2/favicons?domain=cimaclub.us&sz=%size%"
     
     // The authors of this extension
-    authors = listOf("AntiBotDev")
+    authors = listOf("yamad")
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimaclub"

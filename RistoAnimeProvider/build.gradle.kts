@@ -1,12 +1,12 @@
 // use an integer for version numbers
-version = 1
+version = 10
 
 cloudstream {
     language = "ar"
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     iconUrl = "https://www.google.com/s2/favicons?domain=ristoanime.org&sz=%size%"
-    authors = listOf("AntiBotDev")
+    authors = listOf("yamad")
     description = "RistoAnime - Arabic anime streaming provider"
 }
 android {

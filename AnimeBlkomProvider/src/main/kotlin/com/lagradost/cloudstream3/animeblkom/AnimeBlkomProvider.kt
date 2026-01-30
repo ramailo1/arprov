@@ -9,7 +9,7 @@ import org.jsoup.nodes.Document
 
 class AnimeBlkomProvider : MainAPI() {
 
-    override var name = "AnimeBlkom (Broken)"
+    override var name = "AnimeBlkom (Blocked)"
     override var lang = "ar"
     override val hasMainPage = true
     override val hasDownloadSupport = true

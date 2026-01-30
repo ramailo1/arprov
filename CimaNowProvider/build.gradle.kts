@@ -1,7 +1,7 @@
-version = 1
+version = 10
 
 cloudstream {
-    authors = listOf( "ImZaw" )
+    authors = listOf( "yamad" )
 
 	language = "ar"
 	

@@ -9,7 +9,7 @@ import org.jsoup.nodes.Element
 
 class Cima4uActorProvider : MainAPI() {
     override var mainUrl = "https://cima4u.forum"
-    override var name = "Cima4uActor"
+    override var name = "Cima4uActor (In Progress)"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true

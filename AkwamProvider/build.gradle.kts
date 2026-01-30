@@ -9,7 +9,7 @@ cloudstream {
 
     tvTypes = listOf( "TvSeries" , "Movie" , "Anime" , "Cartoon" )
 
-    iconUrl = "https://www.google.com/s2/favicons?domain=akwam.to&sz=%size%"
+    iconUrl = "https://ak.sv/favicon.ico"
 }
 
 android {

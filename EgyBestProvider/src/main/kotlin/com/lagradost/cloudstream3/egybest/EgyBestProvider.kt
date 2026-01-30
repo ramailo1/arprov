@@ -42,7 +42,7 @@ fun String.runJS(variableName: String): String {
 class EgyBestProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://egibest.net"
-    override var name = "EgyBest"
+    override var name = "EgyBest (In Progress)"
 	var pssid = ""
     override val usesWebView = false
     override val hasMainPage = true

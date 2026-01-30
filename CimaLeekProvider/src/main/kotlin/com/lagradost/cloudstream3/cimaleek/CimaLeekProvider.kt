@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimalek.art"
-    override var name = "CimaLeek"
+    override var name = "CimaLeek (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
