@@ -1,12 +1,15 @@
 package com.lagradost.cloudstream3.faselhd
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
+import kotlinx.coroutines.delay
 
 
 class FaselHDProvider : MainAPI() {
-    override var mainUrl = "https://web13012x.faselhdx.bid"
+    override var mainUrl = "https://web13018x.faselhdx.bid"
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
@@ -20,8 +23,14 @@ class FaselHDProvider : MainAPI() {
     )
 
     companion object {
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     }
+
+    private val defaultHeaders = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
+    )
 
     override val mainPage = mainPageOf(
         "$mainUrl/most_recent" to "Recently Added",
@@ -38,7 +47,7 @@ class FaselHDProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page"
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = defaultHeaders).document
         val list = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, list)
     }
@@ -74,12 +83,12 @@ class FaselHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=$query").document
+        val doc = app.get("$mainUrl/?s=$query", headers = defaultHeaders).document
         return doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = defaultHeaders).document
 
         val title = doc.selectFirst("div.title")?.text() ?: doc.selectFirst("title")?.text() ?: ""
         val poster = doc.selectFirst("div.posterImg img")?.attr("src")
@@ -126,7 +135,7 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        val doc = app.get(data, headers = defaultHeaders).document
 
         // Extract the player iframe URL
         val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
@@ -134,27 +143,117 @@ class FaselHDProvider : MainAPI() {
 
         if (!playerUrl.isNullOrEmpty()) {
             try {
-                // Fetch the raw HTML response from the iframe
-                val playerResponse = app.get(playerUrl, referer = data).text
+                // Method 1: Use WebViewResolver to intercept m3u8 network requests
+                // The player uses obfuscated JS to generate video URLs, so we need WebView
+                val extractedUrls = mutableSetOf<String>()
                 
-                // Use regex to extract all m3u8 URLs from scdns.io domain
-                // These URLs are present in the raw HTML but obfuscated/concatenated
-                // De-obfuscate: Remove string concatenation artifacts "'+'"
-                val cleanedResponse = playerResponse.replace(Regex("""['"]\s*\+\s*['"]"""), "")
-
-                // Use regex to extract all m3u8 URLs from scdns.io domain
-                // These URLs are present in the raw HTML but obfuscated/concatenated
-                val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io|s\.io)[^\s"']*\.m3u8""")
-                val qualityPattern = Regex("""(\d+p)""")
+                // Script to extract data-url attributes from quality buttons after JS executes
+                val extractionScript = """
+                    (function() {
+                        var urls = [];
+                        var buttons = document.querySelectorAll('.hd_btn[data-url]');
+                        buttons.forEach(function(btn) {
+                            var url = btn.getAttribute('data-url');
+                            var quality = btn.innerText.trim();
+                            if (url) urls.push(quality + '|||' + url);
+                        });
+                        // Also check for videoSrc global variable
+                        if (window.videoSrc) urls.push('Auto|||' + window.videoSrc);
+                        return JSON.stringify(urls);
+                    })()
+                """.trimIndent()
                 
-                val foundUrls = mutableSetOf<String>() // Deduplicate URLs
+                // Create WebViewResolver that intercepts m3u8 URLs AND extracts from DOM
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""\.m3u8"""),
+                    additionalUrls = listOf(
+                        Regex("""scdns\.io.*\.m3u8"""),
+                        Regex("""master\.m3u8"""),
+                        Regex("""playlist\.m3u8""")
+                    ),
+                    userAgent = USER_AGENT,
+                    script = extractionScript,
+                    scriptCallback = { result ->
+                        // Parse the JSON array of "quality|||url" strings
+                        try {
+                            val cleaned = result.trim('"').replace("\\\"", "\"")
+                            if (cleaned.startsWith("[")) {
+                                val urlList = cleaned.removeSurrounding("[", "]")
+                                    .split("\",\"")
+                                    .map { it.trim('"') }
+                                    .filter { it.contains("|||") }
+                                
+                                urlList.forEach { entry ->
+                                    val parts = entry.split("|||")
+                                    if (parts.size == 2) {
+                                        extractedUrls.add(entry)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    },
+                    timeout = 15000L
+                )
                 
-                m3u8Pattern.findAll(cleanedResponse).forEach { match ->
-                    val videoUrl = match.value
+                // Resolve using WebView
+                val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
+                    requestCreator("GET", playerUrl, headers = defaultHeaders + mapOf("Referer" to data))
+                )
+                
+                // Process intercepted m3u8 URLs from network requests
+                val allRequests = listOfNotNull(mainRequest) + additionalRequests
+                allRequests.forEach { request ->
+                    val videoUrl = request.url.toString()
+                    if (videoUrl.contains(".m3u8") && extractedUrls.none { it.endsWith(videoUrl) }) {
+                        val qualityText = when {
+                            videoUrl.contains("1080") -> "1080p"
+                            videoUrl.contains("720") -> "720p"
+                            videoUrl.contains("480") -> "480p"
+                            videoUrl.contains("360") -> "360p"
+                            videoUrl.contains("master") -> "Auto"
+                            else -> "Unknown"
+                        }
+                        extractedUrls.add("$qualityText|||$videoUrl")
+                    }
+                }
+                
+                // Give WebView script time to execute
+                delay(500)
+                
+                // Emit all extracted URLs as ExtractorLinks
+                extractedUrls.forEach { entry ->
+                    val parts = entry.split("|||")
+                    if (parts.size == 2) {
+                        val qualityText = parts[0]
+                        val videoUrl = parts[1]
+                        
+                        if (videoUrl.contains(".m3u8")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    this.name,
+                                    "$name - $qualityText",
+                                    videoUrl,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = playerUrl
+                                    this.quality = getQualityInt(qualityText)
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                // Method 2: Fallback - try regex extraction from raw HTML (in case WebView fails)
+                if (extractedUrls.isEmpty()) {
+                    val playerResponse = app.get(playerUrl, referer = data, headers = defaultHeaders).text
+                    val cleanedResponse = playerResponse.replace(Regex("""['\"]\s*\+\s*['"]"""), "")
+                    val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io)[^\s"']*\.m3u8""")
+                    val qualityPattern = Regex("""(\d+p)""")
                     
-                    // Only process if we haven't seen this URL before
-                    if (foundUrls.add(videoUrl)) {
-                        // Extract quality from URL (e.g., "1080p", "720p")
+                    m3u8Pattern.findAll(cleanedResponse).forEach { match ->
+                        val videoUrl = match.value
                         val qualityMatch = qualityPattern.find(videoUrl)
                         val qualityText = qualityMatch?.value ?: "Auto"
                         
