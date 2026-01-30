@@ -127,7 +127,30 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
 
-        // Extract the player iframe URL
+        // Extract quality buttons from main page first (overlaying the player)
+        val mainPageQualityButtons = doc.select("button.hd_btn")
+        if (mainPageQualityButtons.isNotEmpty()) {
+            mainPageQualityButtons.forEach { button ->
+                val videoUrl = button.attr("data-url")
+                val qualityText = button.text()
+
+                if (videoUrl.isNotEmpty() && videoUrl.startsWith("http")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            "$name - $qualityText",
+                            videoUrl,
+                            if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = data
+                            this.quality = getQualityFromString(qualityText)
+                        }
+                    )
+                }
+            }
+        }
+
+        // Fallback: Extract the player iframe URL if no links found or as additional attempt
         val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
         val playerUrl = playerIframe?.absUrl("src")
 
@@ -136,7 +159,7 @@ class FaselHDProvider : MainAPI() {
                 // Fetch the player page
                 val playerDoc = app.get(playerUrl, referer = data).document
                 
-                // Extract M3U8 links from quality buttons
+                // Extract M3U8 links from quality buttons inside iframe
                 val qualityButtons = playerDoc.select("button.hd_btn")
                 qualityButtons.forEach { button ->
                     val videoUrl = button.attr("data-url")
@@ -146,18 +169,12 @@ class FaselHDProvider : MainAPI() {
                         callback.invoke(
                             newExtractorLink(
                                 this.name,
-                                "$name - $qualityText",
+                                "$name - $qualityText (Iframe)",
                                 videoUrl,
                                 if (videoUrl.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.referer = playerUrl
-                                this.quality = when {
-                                    qualityText.contains("1080") -> 1080
-                                    qualityText.contains("720") -> 720
-                                    qualityText.contains("480") -> 480
-                                    qualityText.contains("360") -> 360
-                                    else -> Qualities.Unknown.value
-                                }
+                                this.quality = getQualityFromString(qualityText)
                             }
                         )
                     }
