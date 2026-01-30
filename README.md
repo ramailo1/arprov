@@ -59,6 +59,7 @@ These plugins are fully operational and regularly maintained.
 | **Anime4up Pack** | Anime | Arabic |
 | **MovizLands** | Movies & Series | Arabic |
 | **Animeiat** | Anime | Arabic |
+| **FaselHD** | Movies & Series | Arabic |
 
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
@@ -90,7 +91,6 @@ These plugins are currently non-functional due to site changes or API issues.
 | **CimaNow** | 🛑 Broken Logic | ⏸️ Paused |
 | **CimaLeek** | 🛑 Broken Logic | ⏸️ Paused |
 | **FajerShow** | 🛑 Broken Logic | ⏸️ Paused |
-| **FaselHD** | 🛑 Broken Logic | ⏸️ Paused |
 | **MyCima** | 🛑 Broken Logic | ⏸️ Paused |
 | **ShahidMBC** | 🛑 Broken Logic | ⏸️ Paused |
 | **TopCinema** | 🛑 Broken Logic | ⏸️ Paused |

@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
 import kotlinx.coroutines.delay
+import com.lagradost.cloudstream3.CommonActivity.showToast
+import android.widget.Toast
 
 
 class FaselHDProvider : MainAPI() {
@@ -33,16 +35,16 @@ class FaselHDProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/most_recent" to "Recently Added",
-        "$mainUrl/series" to "Series",
-        "$mainUrl/movies" to "Movies",
-        "$mainUrl/asian-series" to "Asian Series",
-        "$mainUrl/anime" to "Anime",
-        "$mainUrl/tvshows" to "TV Shows",
-        "$mainUrl/dubbed-movies" to "Dubbed Movies",
-        "$mainUrl/hindi" to "Hindi",
-        "$mainUrl/asian-movies" to "Asian Movies",
-        "$mainUrl/anime-movies" to "Anime Movies"
+        "$mainUrl/most_recent" to "المضاف حديثاَ",
+        "$mainUrl/series" to "مسلسلات",
+        "$mainUrl/movies" to "أفلام",
+        "$mainUrl/asian-series" to "مسلسلات آسيوية",
+        "$mainUrl/anime" to "الأنمي",
+        "$mainUrl/tvshows" to "البرامج التلفزيونية",
+        "$mainUrl/dubbed-movies" to "أفلام مدبلجة",
+        "$mainUrl/hindi" to "أفلام هندية",
+        "$mainUrl/asian-movies" to "أفلام آسيوية",
+        "$mainUrl/anime-movies" to "أفلام أنمي",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -142,6 +144,7 @@ class FaselHDProvider : MainAPI() {
         val playerUrl = playerIframe?.absUrl("src")
 
         if (!playerUrl.isNullOrEmpty()) {
+            showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
             try {
                 // Method 1: Use WebViewResolver to intercept m3u8 network requests
                 // The player uses obfuscated JS to generate video URLs, so we need WebView
