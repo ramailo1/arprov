@@ -32,7 +32,7 @@ open class Anime4upProvider : MainAPI() {
                 homeList.add(HomePageList("أخر الحلقات المضافة", episodesList, isHorizontalImages = true))
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            // e.printStackTrace()
         }
 
         // 2. Fetch Anime Movies from /anime-type/movie-3/
@@ -45,7 +45,7 @@ open class Anime4upProvider : MainAPI() {
                 homeList.add(HomePageList("أفلام الأنمي", moviesList, isHorizontalImages = false))
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            // e.printStackTrace()
         }
 
         return newHomePageResponse(homeList, hasNext = false)

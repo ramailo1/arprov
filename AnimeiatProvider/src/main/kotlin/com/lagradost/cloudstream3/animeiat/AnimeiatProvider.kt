@@ -75,7 +75,7 @@ class AnimeiatProvider : MainAPI() {
     private suspend fun fetchText(url: String): String? = try {
         app.get(url).text
     } catch (e: Exception) {
-        e.printStackTrace()
+        // e.printStackTrace()
         null
     }
 
@@ -211,7 +211,7 @@ class AnimeiatProvider : MainAPI() {
             }
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            // e.printStackTrace()
         }
 
         return false

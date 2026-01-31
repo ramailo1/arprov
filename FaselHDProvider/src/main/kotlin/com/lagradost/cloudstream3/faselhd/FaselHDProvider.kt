@@ -194,7 +194,7 @@ class FaselHDProvider : MainAPI() {
                                 }
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            // e.printStackTrace()
                         }
                     },
                     timeout = 15000L
@@ -274,7 +274,7 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // e.printStackTrace()
             }
         }
 
