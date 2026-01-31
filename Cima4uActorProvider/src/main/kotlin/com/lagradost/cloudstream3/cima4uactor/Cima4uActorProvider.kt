@@ -56,37 +56,24 @@ class Cima4uActorProvider : MainAPI() {
 
     private fun extractPosterUrl(element: Element): String? {
         val cssUrlRegex = Regex("""url\(['"]?([^'")]+)['"]?\)""")
-        val styleSelectors = listOf("style", "data-lazy-style", "data-style")
-        
-        // Try element itself first, then common child background containers
-        val elementsToSearch = listOf(element) + element.select(".BG--GridItem, .Img--Poster--Single-begin, .Thumb--GridItem")
-        
-        for (el in elementsToSearch) {
-            for (attr in styleSelectors) {
-                el.attr(attr).takeIf { it.contains("url") }?.let { style ->
-                    cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.trim()?.let {
-                        if (it.isNotBlank()) return fixUrl(it)
-                    }
+        val attrs = listOf("style", "data-lazy-style", "data-style", "data-bg", "data-bgset")
+        val elems = listOf(element) + element.select(".BG--GridItem, .Img--Poster--Single-begin, .Thumb--GridItem, span, a")
+
+        for (el in elems) {
+            for (attr in attrs) {
+                el.attr(attr).takeIf { it.isNotBlank() }?.let { value ->
+                    cssUrlRegex.find(value)?.groupValues?.getOrNull(1)?.trim()?.let { return fixUrl(it) }
+                    if (value.startsWith("http")) return fixUrl(value)
+                    if (value.startsWith("//")) return fixUrl("https:$value")
                 }
             }
-            // Explicitly check for custom CSS variables commonly used by this site theme
-            val styleAttr = el.attr("style")
-            if (styleAttr.isNotBlank()) {
-                val match = cssUrlRegex.find(styleAttr)
-                if (match != null) {
-                    match.groupValues.getOrNull(1)?.trim()?.let {
-                        if (it.isNotBlank()) return fixUrl(it)
-                    }
+            el.selectFirst("img[data-src], img[data-lazy-src], img[src], img[data-srcset]")?.let {
+                val url = it.attr("data-src").ifBlank { 
+                    it.attr("data-lazy-src").ifBlank { it.attr("src").ifBlank { it.attr("data-srcset") } } 
                 }
+                if (url.isNotBlank()) return fixUrl(url)
             }
         }
-        
-        // Fallback to img tags
-        element.selectFirst("img[data-src], img[data-lazy-src], img[src]")?.let { 
-            val url = it.attr("data-src").ifBlank { it.attr("data-lazy-src").ifBlank { it.attr("src") } }
-            if (url.isNotBlank()) return fixUrl(url)
-        }
-        
         return null
     }
 
@@ -102,11 +89,23 @@ class Cima4uActorProvider : MainAPI() {
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: return null
         
-        // STRICT SCOPED POSTER EXTRACTION (Final kill for "Red Oaks" repetition)
-        // Only look in the main post container, avoiding sidebar/AsideContext entirely
-        val posterUrl = document.selectFirst(".Img--Poster--Single-begin img")?.attr("src")
-            ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }
-            ?: document.selectFirst(".SingleDetails a[style*='url']")?.let { extractPosterUrl(it) }
+        // BALANCED POSTER EXTRACTION (Fix for black posters + Red Oaks protection)
+        var source = "None"
+        val posterUrl = 
+            // 1. Primary UI Container (Preferred)
+            document.selectFirst(".Img--Poster--Single-begin img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { source = "img-src"; fixUrl(it) }
+            ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }?.also { source = "Img--Poster" }
+            ?: document.selectFirst(".SingleDetails a[style*='url']")?.let { extractPosterUrl(it) }?.also { source = "SingleDetails" }
+            
+            // 2. SAFE Metadata Fallback (Last resort, with sharp poison checks)
+            ?: document.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf {
+                it.isNotBlank() && !it.contains("logo") && !it.contains("default") && it.contains("/")
+            }?.let { source = "og:image"; fixUrl(it) }
+            ?: document.selectFirst("meta[name=twitter:image]")?.attr("content")?.takeIf {
+                it.isNotBlank() && !it.contains("logo") && !it.contains("default")
+            }?.let { source = "twitter:image"; fixUrl(it) }
+
+        println("DEBUG: Poster Source = $source, URL = $posterUrl")
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
