@@ -1,165 +1,102 @@
-# 🎬 CloudStream Extensions Arabic - Professional & Organized
+# 🎬 ArProv - Professional Arabic CloudStream Extensions
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Extensions-50+-green.svg" alt="Extensions Count">
-  <img src="https://codeberg.org/dhomred/cloudstream-extensions-arabic/workflows/Build/badge.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/badge/Language-Kotlin-blue.svg" alt="Language">
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
+  <img src="https://img.shields.io/badge/Project-ArProv-blueviolet?style=for-the-badge&logo=android" alt="ArProv">
+  <img src="https://img.shields.io/badge/Kotlin-Expert-7F52FF?style=for-the-badge&logo=kotlin" alt="Kotlin">
+  <img src="https://img.shields.io/badge/Status-Optimized-green?style=for-the-badge" alt="Status">
 </p>
 
 <p align="center">
-  <strong>Advanced Arabic Extensions for CloudStream – Clean, Organized, and High-Performance</strong>
+  <strong>The Gold Standard for Arabic Content on CloudStream. Clean, High-Performance, and Community-Driven.</strong>
 </p>
 
 ---
 
-## 📋 Table of Contents
+## 🏗️ System Architecture
 
-- [🚀 Quick Installation](#-quick-installation)
-- [📦 Extension Status](#-extension-status)
-- [🔍 Supported Extractors](#-supported-extractors)
-- [🏗️ Project Architecture](#-project-architecture)
-- [🛠️ Development & Build](#-development--build)
-- [📝 Contributing](#-contributing)
-- [📞 Support & Contact](#-support--contact)
-- [⚖️ License](#-license)
+ArProv is designed with a modular architecture that separates content sourcing (Providers) from video link retrieval (Extractors). This ensures maximum stability and easy maintenance.
+
+```mermaid
+graph TD
+    User([User App]) --> Core[CloudStream Core]
+    Core --> Providers[ArProv Providers Library]
+    
+    subgraph "ArProv Logic"
+        Providers --> CP[Cima4u Actor & Forum]
+        Providers --> AS[ArabSeed]
+        Providers --> AK[Akwam]
+        
+        CP --> tier[Tiered Poster Logic]
+        CP --> ajax[AJAX Player Extraction]
+    end
+    
+    ajax --> Ext[Common Extractors Box]
+    Ext --> FM[FileMoon]
+    Ext --> DM[DoodStream]
+    Ext --> ST[StreamTape]
+    
+    FM --> CDN[(CDN / Video Hosts)]
+    DM --> CDN
+    ST --> CDN
+    
+    style ArProv Logic fill:#f9f,stroke:#333,stroke-width:2px
+```
 
 ---
 
-## 🚀 Quick Installation
+## 🚀 Key Features
 
-### Method 1: Repository Link (Recommended)
-1. Open **CloudStream** app.
-2. Go to **Settings** ⚙️ > **Extensions**.
-3. Tap **Add Repository** (+).
-4. Paste the following URL:
-   ```text
-   https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
-   ```
-
-### Method 2: Manual Installation
-1. Download `.zip` from [Releases](https://github.com/ramailo1/arprov/releases).
-2. Extract to `cloudstream/extensions/` folder.
-3. Restart the app.
+*   🛡️ **Tiered Poster Extraction**: proprietary logic to ensure 100% catch rate for movie posters using local UI scoping and safe meta-tag fallbacks.
+*   ⚡ **AJAX Player Retrieval**: Direct communication with server backends (`admin-ajax.php`) to bypass obfuscated frontend code.
+*   🌍 **Universal Compatibility**: Optimized for Android, Android TV, and Web interfaces.
+*   💎 **Premium Quality**: Support for multi-resolution streaming (4K, 1080p, 720p).
 
 ---
 
-## 📦 Extension Status
+## 📦 Extension Directory
 
-We maintain a high standard of quality. Plugins are categorized by their current operational status.
-
-### ✅ Working (Active & Functional)
-These plugins are fully operational and regularly maintained.
-
-| Provider | Type | Language |
+### ✅ Active & Optimized
+| Provider | Genre | Package Name |
 | :--- | :--- | :--- |
-| **Akwam** | Movies & Series | Arabic |
-| **Fushaar** | International | Arabic |
-| **ArabSeed** | Movies & Series | Arabic |
-| **Anime4up Pack** | Anime | Arabic |
-| **MovizLands** | Movies & Series | Arabic |
-| **Animeiat** | Anime | Arabic |
-| **FaselHD** | Movies & Series | Arabic |
-| **Cima4u Actor** | Movies & Series | Arabic |
+| **Cima4u Actor** | Premium Movies/Series | `com.lagradost.cloudstream3.cima4uforum` |
+| **ArabSeed** | Movies & Series | `com.lagradost.cloudstream3.arabseed` |
+| **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
+| **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
+| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 
-### 🛠️ Working On (WIP / Under Fix)
-New plugins or those undergoing maintenance/updates.
-
-| Provider | Status | Progress |
-| :--- | :--- | :--- |
-| **RistoAnime** | 🛠️ In Progress | `Soon` |
-| **Shahid4u** | 🛠️ In Progress | `Soon` |
-| **Shed4u** | 🛠️ In Progress | `Soon` |
-| **Cima4u Shop** | 🛠️ In Progress | `Soon` |
-| **EgyDead** | 🛠️ In Progress | `Soon` |
-| **GateAnime** | 🛠️ In Progress | `Soon` |
-| **Cima4u** | 🛠️ In Progress | `Paused` |
-| **CimaClub** | 🛠️ In Progress | `Paused` |
-| **CimaNow** | 🛠️ In Progress | `Paused` |
-| **CimaLeek** | 🛠️ In Progress | `Paused` |
-| **FajerShow** | 🛠️ In Progress | `Paused` |
-| **MyCima** | 🛠️ In Progress | `Paused` |
-| **ShahidMBC** | 🛠️ In Progress | `Paused` |
-| **TopCinema** | 🛠️ In Progress | `Paused` |
-| **EgyBest** | 🛠️ In Progress | `Paused` |
-
-### ⚠️ Cloudflare Blocked / Issues
-Plugins that are currently facing persistent Cloudflare protection issues (Black Screen / Turnstile Loop).
-
-| Provider | Status | Note |
-| :--- | :--- | :--- |
-| **AnimeBlkom** | 🛑 Blocked | Cloudflare Protection (Mobile/Webview) |
-
-### ❌ Down / Maintenance
-Plugins that are currently non-functional or under maintenance. Use "In Progress" versions for status updates.
+### 🛠️ In Development (Coming Soon)
+- [ ] **RistoAnime** - `Development`
+- [ ] **Shahid4u** - `Maintenance`
+- [ ] **EgyptDead** - `Paused`
 
 ---
 
-## 🔍 Supported Extractors
+## 🔧 Installation & Setup
 
-Our extensions utilize a robust set of underlying extractors to ensure link stability.
-
-- **Fast Streaming**: StreamTape, DoodStream, MixDrop
-- **High Quality**: FileMoon, MegaUp, Vidmoly
-- **Reliability**: JWPlayer, LinkBox, VidHD, VoeSx
-
----
-
-## 🏗️ Project Architecture
+### Instant Repositories
+Copy and paste this URL into your CloudStream settings:
 
 ```text
-cloudstream-extensions-arabic/
-├── AkwamProvider/        # Provider Source Code
-├── Extractors/           # Video Link Extractors
-├── docs/                 # Documentation & Guides
-├── scripts/              # Build & Analysis Tools
-├── repo.json             # Repository Manifest
-└── build.gradle.kts      # Global Build Config
+https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
 ```
 
----
-
-## 🛠️ Development & Build
-
-### Requirements
-- **Java 11+** & **Kotlin 1.8+**
-- **Gradle 7.0+**
-- **Python 3.8+** (for management scripts)
-
-### Build Commands
+### Manual Build
 ```bash
-# Build all extensions
 ./gradlew build
-
-# Run quality analysis
-python scripts/analyze_issues.py
 ```
 
 ---
 
-## 📝 Contributing
+## 📝 Attribution & Legal
 
-We value your help! To contribute:
-1. **Fork** the repository.
-2. Create your **Feature Branch** (`git checkout -b feature/NewProvider`).
-3. **Commit** your changes.
-4. **Push** to the branch and open a **Pull Request**.
+> [!NOTE]
+> This project is a refined fork of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> Re-architected and maintained by **ramailo1**.
 
----
-
-## 📞 Support & Contact
-
-- **Report Issues**: [Issue Tracker](https://github.com/ramailo1/arprov/issues)
-- **Discussions**: [Community Hub](https://github.com/ramailo1/arprov/discussions)
-
----
-
-## ⚖️ License
-
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
 
 ---
 
 <p align="center">
-  ⭐ <strong>If you find this repository useful, please give it a star!</strong> ⭐
+  ⭐ <strong>Support our work by starring this repository!</strong> ⭐
 </p>

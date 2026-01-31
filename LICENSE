@@ -25,3 +25,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+---
+### 🛠️ Modifications and Improvements
+This version of the project includes several critical enhancements over the original fork:
+- **Optimized Architecture**: Cleaner, more modular code structure for better maintainability.
+- **Advanced Poster Engine**: Implemented Tiered Poster Extraction logic for reliable metadata display.
+- **Robust Link Extraction**: Integrated AJAX-based player retrieval to bypass frontend obfuscation.
+- **Provider Stability**: Major logic refinements for Cima4u, ArabSeed, and FaselHD providers.
+- **Modern Documentation**: Visual architecture representation and professional-grade repository management.
+---
