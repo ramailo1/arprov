@@ -96,19 +96,17 @@ class Cima4uActorProvider : MainAPI() {
     }
 
     @Suppress("DEPRECATION")
-    override suspend fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse? {
         val fixedUrl = fixUrl(url)
         val document = app.get(fixedUrl, headers = headers).document
         
-        val title = document.selectFirst("h1")?.text()?.trim() ?: ""
+        val title = document.selectFirst("h1")?.text()?.trim() ?: return null
         
         // STRICT SCOPED POSTER EXTRACTION (Final kill for "Red Oaks" repetition)
         // Only look in the main post container, avoiding sidebar/AsideContext entirely
         val posterUrl = document.selectFirst(".Img--Poster--Single-begin img")?.attr("src")
             ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }
             ?: document.selectFirst(".SingleDetails a[style*='url']")?.let { extractPosterUrl(it) }
-            // Final fallback: metadata, but ONLY if localized UI extraction fails and NOT as a global scan
-            ?: document.select("meta[property=og:image], meta[name=twitter:image]").firstOrNull()?.attr("content")
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
