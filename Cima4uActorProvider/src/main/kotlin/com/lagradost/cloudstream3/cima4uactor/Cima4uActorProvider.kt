@@ -101,10 +101,20 @@ class Cima4uActorProvider : MainAPI() {
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
-        // Use specifically targeted selectors to avoid header logos/sliders
-        val posterUrl = document.selectFirst(".Img--Poster--Single-begin, .Poster--Single-begin, aside.Poster a, .SingleDetails a")?.let { 
-            extractPosterUrl(it) 
-        } ?: extractPosterUrl(document.selectFirst("article, main, #AsideContext") ?: document)
+        // TRIPLE-LAYER POSTER EXTRACTION (Final fix for "Red Oaks" repetition)
+        // Layer 1: Meta Tags (Most reliable as UI uses external CSS)
+        val posterUrl = document.select("meta[property=og:image], meta[name=twitter:image]").firstOrNull()?.attr("content")
+            // Layer 2: Targeted UI (User-suggested sidebar context)
+            ?: document.selectFirst("#AsideContext")?.let { aside ->
+                aside.select("a").firstOrNull { link ->
+                    link.attr("style").contains("url") || 
+                    link.selectFirst("[class*='Poster'], [class*='Img']")?.attr("style")?.contains("url") == true
+                }?.let { extractPosterUrl(it) }
+            }
+            // Layer 3: Scoped Fallback (Main content only)
+            ?: document.selectFirst(".Img--Poster--Single-begin, .Poster--Single-begin, .SingleDetails a")?.let { 
+                extractPosterUrl(it) 
+            } ?: extractPosterUrl(document.selectFirst("article, main") ?: document)
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
