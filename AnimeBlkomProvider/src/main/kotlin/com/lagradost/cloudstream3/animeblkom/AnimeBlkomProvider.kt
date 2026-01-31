@@ -142,7 +142,7 @@ class AnimeBlkomProvider : MainAPI() {
         val doc = getDoc(data)
 
         // Direct downloads
-        doc.select("#download a.btn").forEach {
+        for (it in doc.select("#download a.btn")) {
             val link = it.absUrl("href")
             val quality = it.text().filter(Char::isDigit).toIntOrNull() ?: Qualities.Unknown.value
             if (link.isNotBlank()) {
@@ -156,7 +156,7 @@ class AnimeBlkomProvider : MainAPI() {
         }
 
         // Streaming servers
-        doc.select(".servers a[data-src]").forEach {
+        for (it in doc.select(".servers a[data-src]")) {
             val link = it.attr("data-src")
             if (link.isNotBlank()) {
                 loadExtractor(link, data, subtitleCallback, callback)

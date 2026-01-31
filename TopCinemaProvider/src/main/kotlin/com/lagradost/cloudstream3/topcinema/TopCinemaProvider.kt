@@ -135,7 +135,7 @@ class TopCinemaProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            doc.select(".episodes-list li, .episode-item").forEach { episode ->
+            for (episode in doc.select(".episodes-list li, .episode-item")) {
                 episodes.add(newEpisode(episode.select("a").attr("href")) {
                     this.name = episode.select("a").text().cleanTitle()
                     this.season = 0
@@ -170,7 +170,7 @@ class TopCinemaProvider : MainAPI() {
         val doc = app.get(data, headers = requestHeaders).document
         
         // Try multiple server selection methods
-        doc.select(".servers-list li, .watch-links a, .download-links a").forEach { element ->
+        for (element in doc.select(".servers-list li, .watch-links a, .download-links a")) {
             val url = element.attr("href") ?: element.attr("data-link")
             if (url.isNotEmpty()) {
                 loadExtractor(url, data, subtitleCallback, callback)

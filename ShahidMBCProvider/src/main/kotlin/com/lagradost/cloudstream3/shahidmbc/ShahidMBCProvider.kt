@@ -93,7 +93,7 @@ class ShahidMBCProvider : MainAPI() {
         
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            doc.select(".episode-item, .episodes li").forEach { episodeElement ->
+            for (episodeElement in doc.select(".episode-item, .episodes li")) {
                 val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
                 val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
                 val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
@@ -132,8 +132,8 @@ class ShahidMBCProvider : MainAPI() {
         Thread.sleep(getRandomDelay() + 1000)
         val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        doc.select(".video-links a, .download-links a, .watch-links a").forEach { linkElement ->
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
+        for (linkElement in doc.select(".video-links a, .download-links a, .watch-links a")) {
+            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: continue
             val quality = linkElement.select(".quality, .resolution").text().trim()
             val serverName = linkElement.select(".server-name, .host").text().trim()
             

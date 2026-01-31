@@ -107,7 +107,7 @@ class RistoAnimeProvider : MainAPI() {
         
         return if (isSeries && type == TvType.Anime) {
             val episodes = mutableListOf<Episode>()
-            doc.select(".episode-item, .episodes li, .eps-item, article.episode").forEach { episodeElement ->
+            for (episodeElement in doc.select(".episode-item, .episodes li, .eps-item, article.episode")) {
                 val episodeName = episodeElement.selectFirst(".episode-title, .episode-name, .title")?.text()?.trim()
                 val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
                 val episodeNumber = episodeElement.selectFirst(".episode-number, .ep-num")?.text()?.replace("\\D".toRegex(), "")?.toIntOrNull()
@@ -145,8 +145,8 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
         // Try multiple selectors for video links
-        doc.select(".video-links a, .download-links a, .watch-links a, .server-list a, .quality-list a").forEach { linkElement ->
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
+        for (linkElement in doc.select(".video-links a, .download-links a, .watch-links a, .server-list a, .quality-list a")) {
+            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: continue
             val quality = linkElement.select(".quality, .resolution, .res").text().trim()
             val serverName = linkElement.select(".server-name, .host, .server").text().trim()
             
@@ -164,7 +164,7 @@ class RistoAnimeProvider : MainAPI() {
         }
         
         // Also try to load external extractors
-        doc.select("iframe[src]").forEach { iframe ->
+        for (iframe in doc.select("iframe[src]")) {
             val iframeSrc = iframe.attr("src")
             if (iframeSrc.isNotEmpty()) {
                 loadExtractor(iframeSrc, data, subtitleCallback, callback)

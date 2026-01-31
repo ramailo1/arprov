@@ -68,16 +68,16 @@ class Shahid4uProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val finalResult = arrayListOf<SearchResponse>()
-        listOf(
+        for (url in listOf(
             "$mainUrl/?s=$query&category=&type=movie",
             "$mainUrl/?s=$query&type=series"
-        ).forEach { url ->
+        )) {
             var doc = app.get(url).document
 			if(doc.select("title").text() == "Just a moment...") {
 				doc = app.get(url, interceptor = cfKiller, timeout = 120).document
 			}
-			doc.select("li.col-xs-6, div.content-box").mapNotNull {
-                finalResult.add(it.toSearchResponse() ?: return@mapNotNull null)
+			for (it in doc.select("li.col-xs-6, div.content-box")) {
+                finalResult.add(it.toSearchResponse() ?: continue)
             }
         }
         return finalResult
@@ -142,10 +142,10 @@ class Shahid4uProvider : MainAPI() {
                     }
                 }
             } else {
-                episodeElement[1].select("div.content-box").forEach {
+                for (it in episodeElement[1].select("div.content-box")) {
                     val seasonNumber = it.select("div.number em").text().toIntOrNull()
                     val seasonUrl = it.select("a.fullClick").attr("href")
-                    app.get(seasonUrl).document.select(".episode-block").forEach { episode ->
+                    for (episode in app.get(seasonUrl).document.select(".episode-block")) {
                         episodes.add(
                             newEpisode(episode.select("a").attr("href")) {
                                 this.name = episode.select("div.title").text()
@@ -183,9 +183,9 @@ class Shahid4uProvider : MainAPI() {
 		if(doc.select("title").text() == "Just a moment...") {
 			doc = app.get(watchUrl, interceptor = cfKiller, timeout = 120).document
 		}
-		doc.select(
+		for (it in doc.select(
             ".servers-list li:contains(ok), li:contains(Streamtape), li:contains(DoodStream), li:contains(Uqload), li:contains(Voe), li:contains(VIDBOM), li:contains(Upstream), li:contains(السيرفر الخاص), li:contains( GoStream), li:contains(الخاص 1080p), li:contains(vidbom), li:contains(Vidbom)"
-        ).forEach {
+        )) {
             val id = it.attr("data-id")
             val i = it.attr("data-i")
             val sourceUrl = app.post(

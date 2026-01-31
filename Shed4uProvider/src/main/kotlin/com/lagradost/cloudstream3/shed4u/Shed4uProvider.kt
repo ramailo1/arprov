@@ -65,7 +65,7 @@ class Shed4uProvider : MainAPI() {
         
         val episodes = mutableListOf<Episode>()
         // Episodes listing logic for RistoAnime
-        doc.select(".Episodes a, .EpisodeList a").forEach { ep ->
+        for (ep in doc.select(".Episodes a, .EpisodeList a")) {
               val epTitle = ep.text()
               val epUrl = ep.attr("href")
               val epNum = epTitle.filter { it.isDigit() }.toIntOrNull()
@@ -88,7 +88,7 @@ class Shed4uProvider : MainAPI() {
         val doc = app.get(data).document
         
         // Check for servers
-        doc.select(".Servers li, .WatchServers li").forEach { server ->
+        for (server in doc.select(".Servers li, .WatchServers li")) {
              val serverUrl = server.attr("data-url") // Or similar attribute
              // Standard extraction logic would go here. 
              // Since I don't have exact server logic from inspection, I'll attempt a generic extraction or just iframe search.
@@ -98,7 +98,7 @@ class Shed4uProvider : MainAPI() {
         }
         
         // Also check iframes directly
-        doc.select("iframe").forEach { iframe ->
+        for (iframe in doc.select("iframe")) {
             val src = iframe.attr("src")
             loadExtractor(src, data, subtitleCallback, callback)
         }

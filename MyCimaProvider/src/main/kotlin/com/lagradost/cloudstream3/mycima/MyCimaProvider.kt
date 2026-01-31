@@ -145,8 +145,7 @@ class MyCimaProvider : MainAPI() {
             val moreButton = doc.select("div.MoreEpisodes--Button")
             val season =
                 doc.select("div.List--Seasons--Episodes a.selected").text().getIntFromText()
-            doc.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")
-                .forEach {
+            for (it in doc.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")) {
                     episodes.add(
                         newEpisode(it.attr("href")) {
                             this.name = it.text()
@@ -191,20 +190,20 @@ class MyCimaProvider : MainAPI() {
                     n + 1220,
                     totals
                 )
-                mEPS.forEach { it ->
+                for (it in mEPS) {
                     if (it != null) {
-                        if (it > totals!!) return@forEach
+                        if (it > totals!!) break
                         val ajaxURL =
                             "$mainUrl/AjaxCenter/MoreEpisodes/${moreButton.attr("data-term")}/$it"
                         val jsonResponse = app.get(ajaxURL)
                         val json = parseJson<MoreEPS>(jsonResponse.text)
                         val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
-                        document.select("a").forEach {
+                        for (aLink in document.select("a")) {
                             episodes.add(
-                                newEpisode(it.attr("href")) {
-                                    this.name = it.text()
+                                newEpisode(aLink.attr("href")) {
+                                    this.name = aLink.text()
                                     this.season = season
-                                    this.episode = it.text().getIntFromText()
+                                    this.episode = aLink.text().getIntFromText()
                                 }
                             )
                         }
@@ -212,14 +211,13 @@ class MyCimaProvider : MainAPI() {
                 }
             }
             if (seasons.isNotEmpty()) {
-                seasons.forEach { surl ->
-                    if (surl.contains("%d9%85%d8%af%d8%a8%d9%84%d8%ac")) return@forEach
+                for (surl in seasons) {
+                    if (surl.contains("%d9%85%d8%af%d8%a8%d9%84%d8%ac")) continue
                     val seasonsite = app.get(surl).document
                     val fmoreButton = seasonsite.select("div.MoreEpisodes--Button")
                     val fseason = seasonsite.select("div.List--Seasons--Episodes a.selected").text()
                         .getIntFromText() ?: 1
-                    seasonsite.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")
-                        .forEach {
+                    for (it in seasonsite.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")) {
                             episodes.add(
                                 newEpisode(it.attr("href")) {
                                     this.name = it.text()
@@ -235,57 +233,28 @@ class MyCimaProvider : MainAPI() {
                             seasonsite.select("div.Episodes--Seasons--Episodes a").first()!!.text()
                                 .getIntFromText()
                         val mEPS = arrayListOf(
-                            n,
-                            n + 40,
-                            n + 80,
-                            n + 120,
-                            n + 160,
-                            n + 200,
-                            n + 240,
-                            n + 280,
-                            n + 320,
-                            n + 360,
-                            n + 400,
-                            n + 440,
-                            n + 480,
-                            n + 520,
-                            n + 660,
-                            n + 700,
-                            n + 740,
-                            n + 780,
-                            n + 820,
-                            n + 860,
-                            n + 900,
-                            n + 940,
-                            n + 980,
-                            n + 1020,
-                            n + 1060,
-                            n + 1100,
-                            n + 1140,
-                            n + 1180,
-                            n + 1220,
-                            totals
+                            n, n + 40, n + 80, n + 120, n + 160, n + 200, n + 240, n + 280, n + 320, n + 360, n + 400, n + 440, n + 480, n + 520, n + 660, n + 700, n + 740, n + 780, n + 820, n + 860, n + 900, n + 940, n + 980, n + 1020, n + 1060, n + 1100, n + 1140, n + 1180, n + 1220, totals
                         )
-                        mEPS.forEach { it ->
+                        for (it in mEPS) {
                             if (it != null) {
-                                if (it > totals!!) return@forEach
+                                if (it > totals!!) break
                                 val ajaxURL =
                                     "$mainUrl/AjaxCenter/MoreEpisodes/${fmoreButton.attr("data-term")}/$it"
                                 val jsonResponse = app.get(ajaxURL)
                                 val json = parseJson<MoreEPS>(jsonResponse.text)
                                 val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
-                                document.select("a").forEach {
+                                for (aLink in document.select("a")) {
                                     episodes.add(
-                                        newEpisode(it.attr("href")) {
-                                            this.name = it.text()
+                                        newEpisode(aLink.attr("href")) {
+                                            this.name = aLink.text()
                                             this.season = fseason
-                                            this.episode = it.text().getIntFromText()
+                                            this.episode = aLink.text().getIntFromText()
                                         }
                                     )
                                 }
                             }
                         }
-                    } else return@forEach
+                    } else continue
                 }
             }
             newTvSeriesLoadResponse(
@@ -311,12 +280,12 @@ class MyCimaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        doc.select(".WatchServersList > ul > li").forEach {
+        for (it in doc.select(".WatchServersList > ul > li")) {
             val url = it.select("btn").attr("data-url")
             loadExtractor(url, data, subtitleCallback, callback)
         }
-        doc.select("ul.List--Download--Wecima--Single:nth-child(2) li").forEach {
-                it.select("a").forEach { linkElement ->
+        for (it in doc.select("ul.List--Download--Wecima--Single:nth-child(2) li")) {
+                for (linkElement in it.select("a")) {
                     callback.invoke(
                         newExtractorLink(
                             this.name,

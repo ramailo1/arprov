@@ -113,7 +113,7 @@ class FaselHDProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            doc.select("div#epAll a").forEach { ep ->
+            for (ep in doc.select("div#epAll a")) {
                 val epTitle = ep.text()
                 val epUrl = ep.attr("href")
                 val epNumber = Regex("""الحلقة\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
@@ -155,11 +155,12 @@ class FaselHDProvider : MainAPI() {
                     (function() {
                         var urls = [];
                         var buttons = document.querySelectorAll('.hd_btn[data-url]');
-                        buttons.forEach(function(btn) {
+                        for (var i = 0; i < buttons.length; i++) {
+                            var btn = buttons[i];
                             var url = btn.getAttribute('data-url');
                             var quality = btn.innerText.trim();
                             if (url) urls.push(quality + '|||' + url);
-                        });
+                        }
                         // Also check for videoSrc global variable
                         if (window.videoSrc) urls.push('Auto|||' + window.videoSrc);
                         return JSON.stringify(urls);
@@ -186,7 +187,7 @@ class FaselHDProvider : MainAPI() {
                                     .map { it.trim('"') }
                                     .filter { it.contains("|||") }
                                 
-                                urlList.forEach { entry ->
+                                for (entry in urlList) {
                                     val parts = entry.split("|||")
                                     if (parts.size == 2) {
                                         extractedUrls.add(entry)
@@ -207,7 +208,7 @@ class FaselHDProvider : MainAPI() {
                 
                 // Process intercepted m3u8 URLs from network requests
                 val allRequests = listOfNotNull(mainRequest) + additionalRequests
-                allRequests.forEach { request ->
+                for (request in allRequests) {
                     val videoUrl = request.url.toString()
                     if (videoUrl.contains(".m3u8") && extractedUrls.none { it.endsWith(videoUrl) }) {
                         val qualityText = when {
@@ -226,7 +227,7 @@ class FaselHDProvider : MainAPI() {
                 delay(500)
                 
                 // Emit all extracted URLs as ExtractorLinks
-                extractedUrls.forEach { entry ->
+                for (entry in extractedUrls) {
                     val parts = entry.split("|||")
                     if (parts.size == 2) {
                         val qualityText = parts[0]
@@ -255,7 +256,7 @@ class FaselHDProvider : MainAPI() {
                     val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io)[^\s"']*\.m3u8""")
                     val qualityPattern = Regex("""(\d+p)""")
                     
-                    m3u8Pattern.findAll(cleanedResponse).forEach { match ->
+                    for (match in m3u8Pattern.findAll(cleanedResponse)) {
                         val videoUrl = match.value
                         val qualityMatch = qualityPattern.find(videoUrl)
                         val qualityText = qualityMatch?.value ?: "Auto"

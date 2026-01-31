@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
-import java.util.Base64
+import android.util.Base64
 
 class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
@@ -219,13 +219,13 @@ class ArabSeedProvider : MainAPI() {
                 link.contains("url=") -> {
                     val encoded = link.substringAfter("url=")
                     try {
-                        String(Base64.getDecoder().decode(encoded))
+                        String(Base64.decode(encoded, Base64.DEFAULT))
                     } catch (e: Exception) { link }
                 }
                 link.contains("id=") -> {
                     val encoded = link.substringAfter("id=")
                     try {
-                        String(Base64.getDecoder().decode(encoded))
+                        String(Base64.decode(encoded, Base64.DEFAULT))
                     } catch (e: Exception) { link }
                 }
                 else -> link

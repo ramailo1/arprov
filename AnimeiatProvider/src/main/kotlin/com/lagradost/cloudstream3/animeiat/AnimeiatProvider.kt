@@ -128,7 +128,7 @@ class AnimeiatProvider : MainAPI() {
 
         val episodesList = arrayListOf<Episode>()
         val episodesJson = parseJson<Episodes>(fetchText("$mainUrl/anime/$animeId/episodes") ?: "")
-        episodesJson.data.forEach {
+        for (it in episodesJson.data) {
             val watchUrl = "$pageUrl/watch/${json.data?.slug}-episode-${it.number}"
             episodesList.add(newEpisode(watchUrl) {
                 name = it.title
@@ -193,9 +193,13 @@ class AnimeiatProvider : MainAPI() {
                 fun findUrl(obj: Any?): String? {
                     if (obj is Map<*, *>) {
                         (obj["url"] as? String)?.let { return it }
-                        obj.values.forEach { findUrl(it)?.let { return it } }
+                        for (value in obj.values) {
+                            findUrl(value)?.let { return it }
+                        }
                     } else if (obj is List<*>) {
-                        obj.forEach { findUrl(it)?.let { return it } }
+                        for (item in obj) {
+                            findUrl(item)?.let { return it }
+                        }
                     }
                     return null
                 }

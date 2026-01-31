@@ -165,7 +165,7 @@ open class Anime4upProvider : MainAPI() {
         val doc = app.get(data).document
         
         // New Logic: Iterate over UL li elements with data-watch attribute
-        doc.select("ul#episode-servers li[data-watch]").forEach { li ->
+        for (li in doc.select("ul#episode-servers li[data-watch]")) {
             val link = li.attr("data-watch")
             if (link.isNotBlank()) {
                 loadExtractor(link, data, subtitleCallback, callback)
