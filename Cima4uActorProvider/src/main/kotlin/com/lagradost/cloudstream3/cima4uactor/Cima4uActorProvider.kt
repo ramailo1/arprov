@@ -43,7 +43,8 @@ class Cima4uActorProvider : MainAPI() {
         val url = request.data.format(page)
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        val home = doc.select(".GridItem, .Thumb--GridItem").mapNotNull { element ->
+        // Use only .GridItem to avoid duplicates (.Thumb--GridItem is nested inside .GridItem)
+        val home = doc.select(".GridItem").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -58,10 +59,13 @@ class Cima4uActorProvider : MainAPI() {
             .ifEmpty { selectFirst(".title, strong")?.text() }
             ?.trim() ?: return null
 
+        // Extract poster and strip quotes that WebView may inject
         val poster = selectFirst(".BG--GridItem, .GridItem--BG")
             ?.attr("style")
             ?.substringAfter("url(")
             ?.substringBefore(")")
+            ?.replace("\"", "")
+            ?.replace("'", "")
             ?.trim()
             ?.let { fixUrl(it) }
 
@@ -77,28 +81,42 @@ class Cima4uActorProvider : MainAPI() {
         val url = "$mainUrl/?s=${query.replace(" ", "+")}"
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        return doc.select(".GridItem, .Thumb--GridItem").mapNotNull { element ->
+        // Use only .GridItem to avoid duplicates
+        return doc.select(".GridItem").mapNotNull { element ->
             element.toSearchResponse()
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        
-        val title = doc.selectFirst(".PostTitle h1, .PostTitle span")?.text()?.trim() ?: return null
-        val poster = fixUrl(doc.selectFirst(".Img--Poster--Single-begin img")?.attr("src") ?: "")
-        val year = doc.selectFirst("a[href*='/release-year/']")?.text()?.trim()?.toIntOrNull()
-        val description = doc.selectFirst(".PostDetail li:contains(قصة العرض)")?.text()?.replace("قصة العرض", "")?.trim() 
-            ?: doc.selectFirst(".PostDetail")?.text()?.trim()
+
+        // Use h1 with itemprop or fallback to any h1
+        val title = doc.selectFirst("h1[itemprop='name'], h1")?.text()?.trim() ?: return null
+
+        // Use og:image meta tag as primary source (most reliable)
+        val poster = doc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: doc.selectFirst(".Img--Poster--Single-begin")
+                ?.attr("style")
+                ?.substringAfter("url(")
+                ?.substringBefore(")")
+                ?.replace("\"", "")
+                ?.replace("'", "")
+                ?.let { fixUrl(it) }
+
+        val year = doc.selectFirst("a[href*='release-year']")?.text()?.toIntOrNull()
+
+        val plot = doc.selectFirst("li:contains(قصة)")?.text()?.replace("قصة العرض", "")?.trim()
+
+        val tags = doc.select("a[href*='/genre/']").map { it.text() }
+
+        val isSeries = doc.select(".EpisodesList, .episodes-list, .SeasonEpisodes").isNotEmpty()
 
         val ratingText = doc.selectFirst("li:contains(IMDb)")?.text()
         val rating = ratingText?.replace(Regex("[^0-9.]"), "")?.toDoubleOrNull()
         
-        val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }
-        
         // Check for series
-        val isSeries = doc.select(".EpisodesList, .Episodes, .SeasonEpisodes, .episodes-list").isNotEmpty() || 
-                       title.contains("مسلسل") || title.contains("انمي")
+        // val isSeries = doc.select(".EpisodesList, .Episodes, .SeasonEpisodes, .episodes-list").isNotEmpty() || 
+        //                title.contains("مسلسل") || title.contains("انمي")
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
@@ -117,7 +135,7 @@ class Cima4uActorProvider : MainAPI() {
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = plot
                 // this.rating = rating 
                 this.tags = tags
             }
@@ -125,7 +143,7 @@ class Cima4uActorProvider : MainAPI() {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = plot
                 // this.rating = rating
                 this.tags = tags
             }
