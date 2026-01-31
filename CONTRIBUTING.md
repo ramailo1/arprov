@@ -1,10 +1,10 @@
-# 🤝 المساهمة في CloudStream Extensions Arabic
+# 🤝 المساهمة في ArProv
 
 نرحب بالمساهمات في هذا المشروع! دليل المساهمة هذا سيساعدك على فهم كيفية المشاركة بفعالية.
 
 ## 📋 فهرس المحتويات
 
-- [🤝 المساهمة في CloudStream Extensions Arabic](#-المساهمة-في-cloudstream-extensions-arabic)
+- [🤝 المساهمة في ArProv](#-المساهمة-في-arprov)
   - [📋 فهرس المحتويات](#-فهرس-المحتويات)
   - [🌟 لماذا تساهم؟](#-لماذا-تساهم)
   - [🚀 كيف تبدأ](#-كيف-تبدأ)
@@ -28,13 +28,13 @@
 ### 1. 🍴 Fork المستودع
 ```bash
 # انسخ المستودع إلى حسابك
-https://github.com/dhomred/cloudstream-extensions-arabic-v2/fork
+https://github.com/ramailo1/arprov/fork
 ```
 
 ### 2. 📥 Clone المستودع المحلي
 ```bash
-git clone https://github.com/YOUR_USERNAME/cloudstream-extensions-arabic-v2.git
-cd cloudstream-extensions-arabic-v2
+git clone https://github.com/YOUR_USERNAME/arprov.git
+cd arprov
 ```
 
 ### 3. 🌿 إنشاء فرع جديد
@@ -286,6 +286,12 @@ git push origin feature/اسم-الميزة-الجديدة
 ---
 
 **شكراً لمساهمتك في تحسين تجربة المستخدم العربي! 🙏**
+
+---
+> [!NOTE]
+> هذا المشروع هو نسخة مطورة من [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> تم تعديله وصيانته بواسطة [ramailo1](https://github.com/ramailo1).
+---
 
 <p align="center">
   ⭐ <strong>إذا أعجبك المشروع، لا تنسى أن تمنحنا نجمة!</strong> ⭐

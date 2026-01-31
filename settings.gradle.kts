@@ -1,4 +1,4 @@
-rootProject.name = "CloudstreamExtensionsArabic"
+rootProject.name = "ArProv"
 
 val disabled = listOf<String>()
 

@@ -1,4 +1,4 @@
-# 🔒 سياسة الأمان - CloudStream Extensions Arabic
+# 🔒 سياسة الأمان - ArProv
 
 ## 🎯 مقدمة
 
@@ -8,9 +8,9 @@
 
 ### 📧 قناة الإبلاغ الرسمية
 
-**البريد الإلكتروني:** security@cloudstream-extensions-arabic.com (يفضل)
+**البريد الإلكتروني:** security@arprov.com (يفضل)
 
-**GitHub Private Security Advisory:** [إنشاء تقرير أمني خاص](https://github.com/dhomred/cloudstream-extensions-arabic-v2/security/advisories/new)
+**GitHub Private Security Advisory:** [إنشاء تقرير أمني خاص](https://github.com/ramailo1/arprov/security/advisories/new)
 
 ### 📋 ما يجب تضمينه في التقرير
 
@@ -93,15 +93,15 @@
 
 | **الدور** | **الاتصال** | **المسؤوليات** |
 |-----------|-------------|-----------------|
-| 🔒 **مدير الأمان** | security@cloudstream-extensions-arabic.com | الإشراف على جميع قضايا الأمان |
-| 🔍 **محلل الأمان** | security-analyst@cloudstream-extensions-arabic.com | تحليل الثغرات وتطوير الإصلاحات |
-| 🛡️ **مهندس الأمان** | security-engineer@cloudstream-extensions-arabic.com | تنفيذ الإجراءات الأمنية |
+| 🔒 **مدير الأمان** | security@arprov.com | الإشراف على جميع قضايا الأمان |
+| 🔍 **محلل الأمان** | security-analyst@arprov.com | تحليل الثغرات وتطوير الإصلاحات |
+| 🛡️ **مهندس الأمان** | security-engineer@arprov.com | تنفيذ الإجراءات الأمنية |
 
 ### 📱 القنوات الرسمية
 
-- 🌐 **الموقع الرسمي:** https://github.com/dhomred/cloudstream-extensions-arabic-v2
-- 📧 **البريد الإلكتروني:** security@cloudstream-extensions-arabic.com
-- 🐙 **GitHub Security:** [Security Advisories](https://github.com/dhomred/cloudstream-extensions-arabic-v2/security)
+- 🌐 **الموقع الرسمي:** https://github.com/ramailo1/arprov
+- 📧 **البريد الإلكتروني:** security@arprov.com
+- 🐙 **GitHub Security:** [Security Advisories](https://github.com/ramailo1/arprov/security)
 
 ## 📚 الموارد والأدوات
 
@@ -166,6 +166,12 @@
 **معًا نبني مستقبلًا أكثر أمانًا! 🔒**
 
 ---
+> [!NOTE]
+> هذا المشروع هو نسخة مطورة من [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> تم تعديله وصيانته بواسطة [ramailo1](https://github.com/ramailo1).
+---
+
+---
 
 **📅 آخر تحديث:** يناير 2025
-**✍️ بواسطة:** فريق أمان CloudStream Extensions Arabic
+**✍️ بواسطة:** فريق أمان ArProv

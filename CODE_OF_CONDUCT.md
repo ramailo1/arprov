@@ -1,4 +1,4 @@
-# 📋 معايير السلوك - CloudStream Extensions Arabic
+# 📋 معايير السلوك - ArProv
 
 ## 🎯 مقدمة
 
@@ -32,7 +32,7 @@
 إذا واجهت أو شاهدت سلوكًا غير لائق، يرجى الإبلاغ عنه فورًا عن طريق:
 
 ### 📧 عبر البريد الإلكتروني
-- 📬 **dhomred@github.com**
+- 📬 **ramailo1@github.com**
 - 📋 **تضمين**: وصف مفصل للحدث، الوقت، والمكان
 
 ### 🐙 عبر GitHub Issues
@@ -103,9 +103,15 @@
 
 لأي أسئلة أو استفسارات حول معايير السلوك، يرجى التواصل مع:
 
-- 📧 **dhomred@github.com**
-- 🐙 **GitHub Issues**: [إنشاء Issue جديد](https://github.com/dhomred/cloudstream-extensions-arabic-v2/issues)
-- 🌐 **الموقع الرسمي**: [المشروع على GitHub](https://github.com/dhomred/cloudstream-extensions-arabic-v2)
+- 📧 **ramailo1@github.com**
+- 🐙 **GitHub Issues**: [إنشاء Issue جديد](https://github.com/ramailo1/arprov/issues)
+- 🌐 **الموقع الرسمي**: [المشروع على GitHub](https://github.com/ramailo1/arprov)
+
+---
+> [!NOTE]
+> هذا المشروع هو نسخة مطورة من [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> تم تعديله وصيانته بواسطة [ramailo1](https://github.com/ramailo1).
+---
 
 ---
 
@@ -118,4 +124,4 @@
 ---
 
 **📅 آخر تحديث:** يناير 2025
-**✍️ بواسطة:** فريق CloudStream Extensions Arabic
+**✍️ بواسطة:** فريق ArProv
