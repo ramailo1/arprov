@@ -34,15 +34,16 @@ class Cima4uActorProvider : MainAPI() {
     private fun getRandomUserAgent(): String = userAgents.random()
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/" to "أحدث الأفلام",
-        "$mainUrl/episodes/" to "أحدث الحلقات",
-        "$mainUrl/category/افلام-انمي/" to "أفلام الانمي"
+        "$mainUrl/movies/page/%d/" to "أحدث الأفلام",
+        "$mainUrl/episodes/page/%d/" to "أحدث الحلقات",
+        "$mainUrl/category/افلام-انمي/page/%d/" to "أفلام الانمي"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val url = request.data.format(page)
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        val home = doc.select(".Thumb--GridItem").mapNotNull { element ->
+        val home = doc.select(".GridItem, .Thumb--GridItem").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -50,31 +51,33 @@ class Cima4uActorProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val linkElement = this.selectFirst("a") ?: return null
-        val title = linkElement.attr("title").ifEmpty { this.selectFirst("strong")?.text()?.trim() } ?: return null
-        val href = fixUrl(linkElement.attr("href"))
-        
-        // Extract poster from CSS variable --image in style attribute
-        val posterStyle = this.selectFirst(".BG--GridItem")?.attr("style") ?: ""
-        val posterUrl = if (posterStyle.contains("--image:")) {
-            posterStyle.substringAfter("--image: url(").substringBefore(")")
-        } else {
-            this.selectFirst("img")?.attr("src") ?: ""
-        }
+        val link = selectFirst("a") ?: return null
+        val href = fixUrl(link.attr("href"))
 
-        val year = this.selectFirst(".year")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+        val title = link.attr("title")
+            .ifEmpty { selectFirst(".title, strong")?.text() }
+            ?.trim() ?: return null
+
+        val poster = selectFirst(".BG--GridItem, .GridItem--BG")
+            ?.attr("style")
+            ?.substringAfter("url(")
+            ?.substringBefore(")")
+            ?.trim()
+            ?.let { fixUrl(it) }
+
+        val year = selectFirst(".year")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
+            this.posterUrl = poster
             this.year = year
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search?q=${query.replace(" ", "+")}"
+        val url = "$mainUrl/?s=${query.replace(" ", "+")}"
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        return doc.select(".Thumb--GridItem").mapNotNull { element ->
+        return doc.select(".GridItem, .Thumb--GridItem").mapNotNull { element ->
             element.toSearchResponse()
         }
     }
