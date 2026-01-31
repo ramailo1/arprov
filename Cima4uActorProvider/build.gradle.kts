@@ -7,8 +7,8 @@ cloudstream {
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     iconUrl = "https://www.google.com/s2/favicons?domain=cima4u.actor&sz=%size%"
     authors = listOf("ramailo1")
-    description = "Cima4uActor Provider - (In Progress)"
+    description = "Cima4u.forum Provider"
 }
 android {
-    namespace = "com.lagradost.cloudstream3.cima4uactor"
+    namespace = "com.lagradost.cloudstream3.cima4uforum"
 }

@@ -60,6 +60,7 @@ These plugins are fully operational and regularly maintained.
 | **MovizLands** | Movies & Series | Arabic |
 | **Animeiat** | Anime | Arabic |
 | **FaselHD** | Movies & Series | Arabic |
+| **Cima4u Actor** | Movies & Series | Arabic |
 
 ### 🛠️ Working On (WIP / Under Fix)
 New plugins or those undergoing maintenance/updates.
@@ -69,7 +70,6 @@ New plugins or those undergoing maintenance/updates.
 | **RistoAnime** | 🛠️ In Progress | `Soon` |
 | **Shahid4u** | 🛠️ In Progress | `Soon` |
 | **Shed4u** | 🛠️ In Progress | `Soon` |
-| **Cima4u Actor** | 🛠️ In Progress | `Soon` |
 | **Cima4u Shop** | 🛠️ In Progress | `Soon` |
 | **EgyDead** | 🛠️ In Progress | `Soon` |
 | **GateAnime** | 🛠️ In Progress | `Soon` |
