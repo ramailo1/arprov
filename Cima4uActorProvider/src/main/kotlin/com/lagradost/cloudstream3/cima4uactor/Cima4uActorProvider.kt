@@ -11,6 +11,7 @@ class Cima4uActorProvider : MainAPI() {
     override var mainUrl = "https://cima4u.forum"
     override var name = "Cima4uActor"
     override val hasMainPage = true
+    override val usesWebView = true
     override var lang = "ar"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
