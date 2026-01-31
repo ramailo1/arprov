@@ -68,7 +68,7 @@ class Cima4uActorProvider : MainAPI() {
         val styleSelectors = listOf("style", "data-lazy-style", "data-style")
         
         // Try element itself first, then common child background containers
-        val elementsToSearch = listOf(element) + element.select(".BG--GridItem, .Img--Poster--Single-begin")
+        val elementsToSearch = listOf(element) + element.select(".BG--GridItem, .Img--Poster--Single-begin, .Thumb--GridItem")
         
         for (el in elementsToSearch) {
             for (attr in styleSelectors) {
@@ -81,10 +81,10 @@ class Cima4uActorProvider : MainAPI() {
         }
         
         // Fallback to img tags
-        element.selectFirst("img[data-src], img[data-lazy-src]")?.let { 
-            return fixUrl(it.attr("data-src").ifEmpty { it.attr("data-lazy-src") }) 
+        element.selectFirst("img[data-src], img[data-lazy-src], img[src]")?.let { 
+            val url = it.attr("data-src").ifBlank { it.attr("data-lazy-src").ifBlank { it.attr("src") } }
+            if (url.isNotBlank()) return fixUrl(url)
         }
-        element.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
         
         return null
     }
@@ -100,39 +100,30 @@ class Cima4uActorProvider : MainAPI() {
         val document = app.get(fixedUrl, headers = headers).document
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
-        
-        // Extract poster from style attribute or single poster class
-        val posterUrl = extractPosterUrl(document) 
-            ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }
-            ?: document.selectFirst("img[data-src]")?.attr("data-src")?.let { fixUrl(it) }
-            ?: document.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-            ?: document.selectFirst("meta[property='og:image']")?.attr("content")
+        val posterUrl = extractPosterUrl(document)
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
-        val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div")?.text()?.trim()
+        val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
         
         val genres = document.select("a[href*=/genre/]").map { it.text() }
         val actors = document.select("a[href*=/actor/], a[href*=/producer/]").map { 
             Actor(it.text(), "")
         }
         
-        // Rating logic removed due to deprecation/build errors
-        // val rating = document.selectFirst("div.rating span, span.imdb")?.text()?.toRatingInt()
-        
         val duration = document.selectFirst("span:contains(دقيقة)")?.text()
             ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
         
         // Check if it's a series
         val isSeries = document.selectFirst("a[href*=/series/]") != null || 
-                       document.selectFirst("div.seasons") != null ||
+                       document.selectFirst("div.seasons, .EpisodesList") != null ||
                        url.contains("مسلسل") ||
                        title.contains("مسلسل")
         
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
             
-            // Get episodes from current page
-            document.select("div.episodes-list a, div.season-episodes a, a:has(span.episode)").forEach { ep ->
+            // Get episodes from current page list or seasons
+            document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode)").forEach { ep ->
                 val epHref = ep.attr("href")
                 val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
                 val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
@@ -140,7 +131,7 @@ class Cima4uActorProvider : MainAPI() {
                 
                 if (epHref.isNotEmpty()) {
                     episodes.add(
-                        newEpisode(epHref) {
+                        newEpisode(fixUrl(epHref)) {
                             this.name = epName
                             this.episode = epNum
                         }
@@ -154,8 +145,8 @@ class Cima4uActorProvider : MainAPI() {
                 seasonLinks.forEach { seasonLink ->
                     val seasonHref = seasonLink.attr("href")
                     if(seasonHref.isNotEmpty()) {
-                        val seasonDoc = app.get(seasonHref, headers = headers).document
-                        seasonDoc.select("a.GridItem, a:has(span.episode)").forEach { ep ->
+                        val seasonDoc = app.get(fixUrl(seasonHref), headers = headers).document
+                        seasonDoc.select(".EpisodesList a, a.GridItem, a:has(span.episode)").forEach { ep ->
                             val epHref = ep.attr("href")
                             val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
                             val epNum = ep.selectFirst("span.episode")?.text()
@@ -163,7 +154,7 @@ class Cima4uActorProvider : MainAPI() {
                             
                             if (epHref.isNotEmpty()) {
                                 episodes.add(
-                                    newEpisode(epHref) {
+                                    newEpisode(fixUrl(epHref)) {
                                         this.name = epName
                                         this.episode = epNum
                                     }
@@ -181,7 +172,6 @@ class Cima4uActorProvider : MainAPI() {
                 this.tags = genres
                 this.duration = duration
                 addActors(actors)
-                // this.rating = rating
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -191,7 +181,6 @@ class Cima4uActorProvider : MainAPI() {
                 this.tags = genres
                 this.duration = duration
                 addActors(actors)
-                // this.rating = rating
             }
         }
     }
@@ -204,28 +193,33 @@ class Cima4uActorProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data, headers = headers).document
         
-        val servers = mutableListOf<Pair<String, String>>()
-        
-        // Extract server links from buttons and links
-        document.select("ul#watch li[data-watch], a[href*=filemoon], a[href*=streamhg], a[href*=earnvids], a[href*=mixdrop], a[href*=dood], a[href*=forafile]").forEach { link ->
-            val href = link.attr("data-watch").ifEmpty { link.attr("href") }
-            val name = link.text().trim().ifEmpty { "Server" }
-            if (href.isNotEmpty() && (href.startsWith("http") || href.startsWith("//"))) {
-                servers.add(name to fixUrl(href))
+        // Method 1: AJAX Player extraction (as suggested)
+        document.select(".WatchServersList li[data-id]").forEach { server ->
+            val serverId = server.attr("data-id")
+            if (serverId.isNotEmpty()) {
+                val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php?action=get_player&server=$serverId"
+                val playerResponse = app.get(ajaxUrl, headers = headers).document
+                val iframeSrc = playerResponse.selectFirst("iframe")?.attr("src")
+                if (!iframeSrc.isNullOrEmpty()) {
+                    loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
+                }
             }
         }
         
-        // Extract iframes
+        // Method 2: Standard iframe extraction (fallback)
         document.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotEmpty() && (src.startsWith("http") || src.startsWith("//"))) {
-                servers.add("Iframe" to fixUrl(src))
+                loadExtractor(fixUrl(src), data, subtitleCallback, callback)
             }
         }
-        
-        // Process all servers
-        servers.forEach { (name, url) ->
-            loadExtractor(url, data, subtitleCallback, callback)
+
+        // Method 3: Direct server links (fallback)
+        document.select("ul#watch li[data-watch], a[href*=filemoon], a[href*=streamhg], a[href*=earnvids]").forEach { link ->
+            val href = link.attr("data-watch").ifEmpty { link.attr("href") }
+            if (href.isNotEmpty()) {
+                loadExtractor(fixUrl(href), data, subtitleCallback, callback)
+            }
         }
         
         return true
