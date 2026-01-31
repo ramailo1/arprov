@@ -41,35 +41,66 @@ class Cima4uActorProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = request.data.format(page)
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        println("[Cima4u] getMainPage: URL = $url")
+        
+        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        println("[Cima4u] getMainPage: Response status = ${response.code}")
+        
+        val doc = response.document
         
         // Use only .GridItem to avoid duplicates (.Thumb--GridItem is nested inside .GridItem)
-        val home = doc.select(".GridItem").mapNotNull { element ->
+        val allGridItems = doc.select(".GridItem")
+        println("[Cima4u] getMainPage: Found ${allGridItems.size} .GridItem elements")
+        
+        val home = allGridItems.mapNotNull { element ->
             element.toSearchResponse()
         }
+        
+        println("[Cima4u] getMainPage: Parsed ${home.size} items successfully")
 
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val link = selectFirst("a") ?: return null
+        val link = selectFirst("a")
+        if (link == null) {
+            println("[Cima4u] toSearchResponse: No <a> tag found")
+            return null
+        }
+        
         val href = fixUrl(link.attr("href"))
+        println("[Cima4u] toSearchResponse: href = $href")
 
         val title = link.attr("title")
             .ifEmpty { selectFirst(".title, strong")?.text() }
-            ?.trim() ?: return null
+            ?.trim()
+        
+        if (title == null) {
+            println("[Cima4u] toSearchResponse: No title found")
+            return null
+        }
+        
+        println("[Cima4u] toSearchResponse: title = $title")
 
         // Extract poster and strip quotes that WebView may inject
-        val poster = selectFirst(".BG--GridItem, .GridItem--BG")
-            ?.attr("style")
-            ?.substringAfter("url(")
-            ?.substringBefore(")")
+        val bgElement = selectFirst(".BG--GridItem, .GridItem--BG")
+        println("[Cima4u] toSearchResponse: bgElement found = ${bgElement != null}")
+        
+        val styleAttr = bgElement?.attr("style")
+        println("[Cima4u] toSearchResponse: style = $styleAttr")
+        
+        val poster = styleAttr
+            ?.substringAfter("url(", "")
+            ?.substringBefore(")", "")
             ?.replace("\"", "")
             ?.replace("'", "")
             ?.trim()
-            ?.let { fixUrl(it) }
+            ?.let { if (it.isNotEmpty()) fixUrl(it) else null }
+        
+        println("[Cima4u] toSearchResponse: poster = $poster")
 
         val year = selectFirst(".year")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+        println("[Cima4u] toSearchResponse: year = $year")
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = poster
@@ -79,12 +110,20 @@ class Cima4uActorProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=${query.replace(" ", "+")}"
+        println("[Cima4u] search: URL = $url")
+        
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
+        val allGridItems = doc.select(".GridItem")
+        println("[Cima4u] search: Found ${allGridItems.size} .GridItem elements")
+        
         // Use only .GridItem to avoid duplicates
-        return doc.select(".GridItem").mapNotNull { element ->
+        val results = allGridItems.mapNotNull { element ->
             element.toSearchResponse()
         }
+        
+        println("[Cima4u] search: Parsed ${results.size} items successfully")
+        return results
     }
 
     override suspend fun load(url: String): LoadResponse? {
