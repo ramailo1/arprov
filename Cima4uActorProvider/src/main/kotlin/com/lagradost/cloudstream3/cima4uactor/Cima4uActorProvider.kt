@@ -47,6 +47,7 @@ class Cima4uActorProvider : MainAPI() {
         val href = this.attr("href") ?: return null
         
         // Extract poster from style="--image: url(...)"
+        // Some pages have --image on parent <a>, others on child .BG--GridItem
         val posterUrl = this.attr("style")
             .substringAfter("url(", "")
             .substringBefore(")", "")
@@ -54,7 +55,7 @@ class Cima4uActorProvider : MainAPI() {
             .replace("'", "")
             .trim()
             .takeIf { it.isNotEmpty() }
-            ?: this.selectFirst(".BG--GridItem")?.attr("style")
+            ?: this.selectFirst(".BG--GridItem")?.attr("style") // Fallback for nested structure
                 ?.substringAfter("url(", "")
                 ?.substringBefore(")", "")
                 ?.replace("\"", "")
