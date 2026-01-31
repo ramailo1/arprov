@@ -44,23 +44,8 @@ class Cima4uActorProvider : MainAPI() {
             ?: this.attr("title").trim()
             ?: return null
             
-        val href = this.attr("href") ?: return null
-        
-        // Extract poster from style="--image: url(...)"
-        // Some pages have --image on parent <a>, others on child .BG--GridItem
-        val posterUrl = this.attr("style")
-            .substringAfter("url(", "")
-            .substringBefore(")", "")
-            .replace("\"", "")
-            .replace("'", "")
-            .trim()
-            .takeIf { it.isNotEmpty() }
-            ?: this.selectFirst(".BG--GridItem")?.attr("style") // Fallback for nested structure
-                ?.substringAfter("url(", "")
-                ?.substringBefore(")", "")
-                ?.replace("\"", "")
-                ?.replace("'", "")
-                ?.trim()
+        val href = fixUrl(this.attr("href"))
+        val posterUrl = extractPosterUrl(this)
         
         // Check for episode badge
         val isEpisode = this.selectFirst("span.episode, span:contains(حلقة), .Episode--number") != null
@@ -76,6 +61,18 @@ class Cima4uActorProvider : MainAPI() {
         }
     }
 
+    private fun extractPosterUrl(element: Element): String? {
+        val style = element.attr("style").takeIf { it.contains("url") }
+            ?: element.selectFirst(".BG--GridItem")?.attr("style")
+        
+        return style?.substringAfter("url(", "")
+            ?.substringBefore(")", "")
+            ?.replace("\"", "")
+            ?.replace("'", "")
+            ?.trim()
+            ?.let { fixUrl(it) }
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = headers).document
         return document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
@@ -83,19 +80,16 @@ class Cima4uActorProvider : MainAPI() {
 
     @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = headers).document
+        val fixedUrl = fixUrl(url)
+        // Log.d("Cima4u", "Loading URL: $fixedUrl") 
+        val document = app.get(fixedUrl, headers = headers).document
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
         // Extract poster from style attribute
-        val posterUrl = document.selectFirst("[style*='--image']")?.attr("style")
-            ?.substringAfter("url(", "")
-            ?.substringBefore(")", "")
-            ?.replace("\"", "")
-            ?.replace("'", "")
-            ?.trim()
-            ?: document.selectFirst("img[data-src]")?.attr("data-src")
-            ?: document.selectFirst("img")?.attr("src")
+        val posterUrl = document.selectFirst("[style*='--image']")?.let { extractPosterUrl(it) }
+            ?: document.selectFirst("img[data-src]")?.attr("data-src")?.let { fixUrl(it) }
+            ?: document.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
             ?: document.selectFirst("meta[property='og:image']")?.attr("content")
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
