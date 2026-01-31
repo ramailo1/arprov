@@ -34,10 +34,9 @@ class Cima4uActorProvider : MainAPI() {
     private fun getRandomUserAgent(): String = userAgents.random()
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies" to "أحدث الأفلام",
-        "$mainUrl/series" to "أحدث المسلسلات",
-        "$mainUrl/anime" to "أحدث الانمي",
-        "$mainUrl/trending" to "الأكثر مشاهدة"
+        "$mainUrl/movies/" to "أحدث الأفلام",
+        "$mainUrl/episodes/" to "أحدث الحلقات",
+        "$mainUrl/category/افلام-انمي/" to "أفلام الانمي"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -55,9 +54,10 @@ class Cima4uActorProvider : MainAPI() {
         val title = linkElement.attr("title").ifEmpty { this.selectFirst("strong")?.text()?.trim() } ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
+        // Extract poster from CSS variable --image in style attribute
         val posterStyle = this.selectFirst(".BG--GridItem")?.attr("style") ?: ""
         val posterUrl = if (posterStyle.contains("--image:")) {
-            posterStyle.substringAfter("--image: url(").substringBefore(");")
+            posterStyle.substringAfter("--image: url(").substringBefore(")")
         } else {
             this.selectFirst("img")?.attr("src") ?: ""
         }
