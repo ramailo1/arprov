@@ -101,7 +101,7 @@ class Cima4uActorProvider : MainAPI() {
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
-        // Use specifically targeted selectors as suggested by the user to avoid header logos
+        // Use specifically targeted selectors to avoid header logos/sliders
         val posterUrl = document.selectFirst(".Img--Poster--Single-begin, .Poster--Single-begin, aside.Poster a, .SingleDetails a")?.let { 
             extractPosterUrl(it) 
         } ?: extractPosterUrl(document.selectFirst("article, main, #AsideContext") ?: document)
