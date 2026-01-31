@@ -5,6 +5,8 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
 
 class Cima4uActorProvider : MainAPI() {
@@ -48,11 +50,27 @@ class Cima4uActorProvider : MainAPI() {
         
         val doc = response.document
         
-        // Use only .GridItem to avoid duplicates (.Thumb--GridItem is nested inside .GridItem)
-        val allGridItems = doc.select(".GridItem")
-        println("[Cima4u] getMainPage: Found ${allGridItems.size} .GridItem elements")
+        // Log the HTML structure to understand what we're getting
+        println("[Cima4u] getMainPage: HTML title = ${doc.title()}")
+        println("[Cima4u] getMainPage: Body classes = ${doc.body().classNames()}")
         
-        val home = allGridItems.mapNotNull { element ->
+        // Try multiple selectors
+        val gridItems = doc.select(".GridItem")
+        val thumbGridItems = doc.select(".Thumb--GridItem")
+        val articles = doc.select("article")
+        val divs = doc.select("div[class*='Grid']")
+        
+        println("[Cima4u] getMainPage: Found ${gridItems.size} .GridItem")
+        println("[Cima4u] getMainPage: Found ${thumbGridItems.size} .Thumb--GridItem")
+        println("[Cima4u] getMainPage: Found ${articles.size} article elements")
+        println("[Cima4u] getMainPage: Found ${divs.size} divs with 'Grid' in class")
+        
+        // Log first few div classes to see what's available
+        doc.select("div[class]").take(20).forEach { div ->
+            println("[Cima4u] getMainPage: Div class: ${div.className()}")
+        }
+        
+        val home = gridItems.mapNotNull { element ->
             element.toSearchResponse()
         }
         
