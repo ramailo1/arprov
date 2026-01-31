@@ -1,257 +1,218 @@
 package com.lagradost.cloudstream3.cima4uactor
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.nicehttp.requestCreator
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
 
 class Cima4uActorProvider : MainAPI() {
     override var mainUrl = "https://cima4u.forum"
     override var name = "Cima4uActor"
     override val hasMainPage = true
-    override val usesWebView = true
     override var lang = "ar"
-    override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
-
-    // Anti-bot configuration
-    private val userAgents = listOf(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.Anime
     )
 
+    // Headers to bypass bot protection
     private val headers = mapOf(
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1"
+        "Referer" to mainUrl
     )
-
-    private fun getRandomUserAgent(): String = userAgents.random()
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/page/%d/" to "أحدث الأفلام",
-        "$mainUrl/episodes/page/%d/" to "أحدث الحلقات",
-        "$mainUrl/category/افلام-انمي/page/%d/" to "أفلام الانمي"
+        "$mainUrl/" to "جديد سيما فور يو",
+        "$mainUrl/movies/" to "أفلام جديدة",
+        "$mainUrl/episodes/" to "آخر الحلقات",
+        "$mainUrl/series/" to "مسلسلات جديدة"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = request.data.format(page)
-        println("[Cima4u] getMainPage: URL = $url")
-        
-        val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        
-        val response = app.get(url, headers = mapOf(
-            "User-Agent" to mobileUserAgent,
-            "Referer" to mainUrl,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3"
-        ))
-        
-        println("[Cima4u] getMainPage: Response status = ${response.code}")
-        println("[Cima4u] getMainPage: Response length = ${response.text.length}")
-        
-        if (response.text.isEmpty()) {
-            println("[Cima4u] getMainPage: WARNING! Empty response body")
-        } else {
-            println("[Cima4u] getMainPage: Body start (500 chars): ${response.text.take(500)}")
-            if (response.text.contains("GridItem")) {
-                println("[Cima4u] getMainPage: Found 'GridItem' string in raw text")
-            } else {
-                println("[Cima4u] getMainPage: 'GridItem' NOT FOUND in raw text")
-            }
-        }
-        
-        val doc = response.document
-        
-        // Log the HTML structure to understand what we're getting
-        println("[Cima4u] getMainPage: HTML title = ${doc.title()}")
-        
-        val gridItems = doc.select(".GridItem")
-        println("[Cima4u] getMainPage: Found ${gridItems.size} .GridItem")
-        
-        val home = gridItems.mapNotNull { element ->
-            element.toSearchResponse()
-        }
-        
-        println("[Cima4u] getMainPage: Parsed ${home.size} items successfully")
-
+        val url = request.data + if (page > 1) "page/$page/" else ""
+        val document = app.get(url, headers = headers).document
+        val home = document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
-    private fun Element.toSearchResponse(): SearchResponse? {
-        val link = selectFirst("a")
-        if (link == null) {
-            println("[Cima4u] toSearchResponse: No <a> tag found")
-            return null
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = this.selectFirst("strong")?.text()?.trim() 
+            ?: this.attr("title").trim()
+            ?: return null
+            
+        val href = this.attr("href") ?: return null
+        
+        // Extract poster from style="--image: url(...)"
+        val posterUrl = this.attr("style")
+            .substringAfter("url(", "")
+            .substringBefore(")", "")
+            .replace("\"", "")
+            .replace("'", "")
+            .trim()
+            .takeIf { it.isNotEmpty() }
+            ?: this.selectFirst(".BG--GridItem")?.attr("style")
+                ?.substringAfter("url(", "")
+                ?.substringBefore(")", "")
+                ?.replace("\"", "")
+                ?.replace("'", "")
+                ?.trim()
+        
+        // Check for episode badge
+        val isEpisode = this.selectFirst("span.episode, span:contains(حلقة), .Episode--number") != null
+        
+        return if (isEpisode) {
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
         }
-        
-        val href = fixUrl(link.attr("href"))
-        println("[Cima4u] toSearchResponse: href = $href")
+    }
 
-        val title = link.attr("title")
-            .ifEmpty { selectFirst(".title, strong")?.text() }
-            ?.trim()
-        
-        if (title == null) {
-            println("[Cima4u] toSearchResponse: No title found")
-            return null
-        }
-        
-        println("[Cima4u] toSearchResponse: title = $title")
+    override suspend fun search(query: String): List<SearchResponse> {
+        val document = app.get("$mainUrl/?s=$query", headers = headers).document
+        return document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
+    }
 
-        // Extract poster and strip quotes that WebView may inject
-        val bgElement = selectFirst(".BG--GridItem, .GridItem--BG")
-        println("[Cima4u] toSearchResponse: bgElement found = ${bgElement != null}")
+    override suspend fun load(url: String): LoadResponse {
+        val document = app.get(url, headers = headers).document
         
-        val styleAttr = bgElement?.attr("style")
-        println("[Cima4u] toSearchResponse: style = $styleAttr")
+        val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
-        val poster = styleAttr
+        // Extract poster from style attribute
+        val posterUrl = document.selectFirst("[style*='--image']")?.attr("style")
             ?.substringAfter("url(", "")
             ?.substringBefore(")", "")
             ?.replace("\"", "")
             ?.replace("'", "")
             ?.trim()
-            ?.let { if (it.isNotEmpty()) fixUrl(it) else null }
+            ?: document.selectFirst("img[data-src]")?.attr("data-src")
+            ?: document.selectFirst("img")?.attr("src")
+            ?: document.selectFirst("meta[property='og:image']")?.attr("content")
         
-        println("[Cima4u] toSearchResponse: poster = $poster")
-
-        val year = selectFirst(".year")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-        println("[Cima4u] toSearchResponse: year = $year")
+        val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
+        val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div")?.text()?.trim()
         
-        return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = poster
-            this.year = year
-        }
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=${query.replace(" ", "+")}"
-        println("[Cima4u] search: URL = $url")
-        
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        
-        val allGridItems = doc.select(".GridItem")
-        println("[Cima4u] search: Found ${allGridItems.size} .GridItem elements")
-        
-        // Use only .GridItem to avoid duplicates
-        val results = allGridItems.mapNotNull { element ->
-            element.toSearchResponse()
+        val genres = document.select("a[href*=/genre/]").map { it.text() }
+        val actors = document.select("a[href*=/actor/], a[href*=/producer/]").map { 
+            Actor(it.text(), "")
         }
         
-        println("[Cima4u] search: Parsed ${results.size} items successfully")
-        return results
-    }
-
-    override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-
-        // Use h1 with itemprop or fallback to any h1
-        val title = doc.selectFirst("h1[itemprop='name'], h1")?.text()?.trim() ?: return null
-
-        // Use og:image meta tag as primary source (most reliable)
-        val poster = doc.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: doc.selectFirst(".Img--Poster--Single-begin")
-                ?.attr("style")
-                ?.substringAfter("url(")
-                ?.substringBefore(")")
-                ?.replace("\"", "")
-                ?.replace("'", "")
-                ?.let { fixUrl(it) }
-
-        val year = doc.selectFirst("a[href*='release-year']")?.text()?.toIntOrNull()
-
-        val plot = doc.selectFirst("li:contains(قصة)")?.text()?.replace("قصة العرض", "")?.trim()
-
-        val tags = doc.select("a[href*='/genre/']").map { it.text() }
-
-        val isSeries = doc.select(".EpisodesList, .episodes-list, .SeasonEpisodes").isNotEmpty()
-
-        val ratingText = doc.selectFirst("li:contains(IMDb)")?.text()
-        val rating = ratingText?.replace(Regex("[^0-9.]"), "")?.toDoubleOrNull()
+        val rating = document.selectFirst("div.rating span, span.imdb")?.text()?.toRatingInt()
+        val duration = document.selectFirst("span:contains(دقيقة)")?.text()
+            ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
         
-        // Check for series
-        // val isSeries = doc.select(".EpisodesList, .Episodes, .SeasonEpisodes, .episodes-list").isNotEmpty() || 
-        //                title.contains("مسلسل") || title.contains("انمي")
-
-        if (isSeries) {
+        // Check if it's a series
+        val isSeries = document.selectFirst("a[href*=/series/]") != null || 
+                       document.selectFirst("div.seasons") != null ||
+                       url.contains("مسلسل") ||
+                       title.contains("مسلسل")
+        
+        return if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            doc.select(".EpisodesList a, .episodes-list a").forEach { episodeElement ->
-                val episodeName = episodeElement.text().trim()
-                val episodeUrl = fixUrl(episodeElement.attr("href"))
-                val episodeNumber = episodeElement.text().replace(Regex("[^0-9]"), "").toIntOrNull()
-                
-                episodes.add(newEpisode(episodeUrl) {
-                    this.name = episodeName
-                    this.episode = episodeNumber
-                })
-            }
-            // If no episodes found in list, might be a single season view or different layout
             
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
+            // Get episodes from current page
+            document.select("div.episodes-list a, div.season-episodes a, a:has(span.episode)").forEach { ep ->
+                val epHref = ep.attr("href")
+                val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
+                val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
+                    ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                
+                if (epHref.isNotEmpty()) {
+                    episodes.add(
+                        Episode(
+                            data = epHref,
+                            name = epName,
+                            episode = epNum
+                        )
+                    )
+                }
+            }
+            
+            // If no episodes found, try season links
+            if (episodes.isEmpty()) {
+                val seasonLinks = document.select("a[href*=/season/], a:contains(الموسم)")
+                seasonLinks.forEach { seasonLink ->
+                    val seasonHref = seasonLink.attr("href")
+                    if(seasonHref.isNotEmpty()) {
+                        val seasonDoc = app.get(seasonHref, headers = headers).document
+                        seasonDoc.select("a.GridItem, a:has(span.episode)").forEach { ep ->
+                            val epHref = ep.attr("href")
+                            val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
+                            val epNum = ep.selectFirst("span.episode")?.text()
+                                ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                            
+                            if (epHref.isNotEmpty()) {
+                                episodes.add(
+                                    Episode(
+                                        data = epHref,
+                                        name = epName,
+                                        episode = epNum
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = posterUrl
                 this.year = year
-                this.plot = plot
-                // this.rating = rating 
-                this.tags = tags
+                this.plot = description
+                this.tags = genres
+                this.rating = rating
+                this.duration = duration
+                addActors(actors)
             }
         } else {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = posterUrl
                 this.year = year
-                this.plot = plot
-                // this.rating = rating
-                this.tags = tags
+                this.plot = description
+                this.tags = genres
+                this.rating = rating
+                this.duration = duration
+                addActors(actors)
             }
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val document = app.get(data, headers = headers).document
         
-        // Watch servers
-        doc.select("ul#watch li[data-watch]").forEach { linkElement ->
-            val linkUrl = linkElement.attr("data-watch")
-            if (linkUrl.isBlank()) return@forEach
-            
-            val serverName = linkElement.text().trim()
-            
-            callback.invoke(
-                newExtractorLink(
-                    serverName.ifEmpty { "Cima4uActor" },
-                    serverName.ifEmpty { "Cima4uActor" },
-                    linkUrl,
-                    ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = mainUrl
-                }
-            )
+        val servers = mutableListOf<Pair<String, String>>()
+        
+        // Extract server links from buttons and links
+        document.select("ul#watch li[data-watch], a[href*=filemoon], a[href*=streamhg], a[href*=earnvids], a[href*=mixdrop], a[href*=dood], a[href*=forafile]").forEach { link ->
+            val href = link.attr("data-watch").ifEmpty { link.attr("href") }
+            val name = link.text().trim().ifEmpty { "Server" }
+            if (href.isNotEmpty() && (href.startsWith("http") || href.startsWith("//"))) {
+                servers.add(name to fixUrl(href))
+            }
         }
-
-        // Download servers
-        doc.select(".DownloadServers a").forEach { linkElement ->
-            val linkUrl = linkElement.attr("href")
-            if (linkUrl.isBlank()) return@forEach
-            
-            val serverName = linkElement.select("quality").text().trim()
-            
-            callback.invoke(
-                newExtractorLink(
-                    "DL $serverName",
-                    "DL $serverName",
-                    linkUrl,
-                    ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = mainUrl
-                }
-            )
+        
+        // Extract iframes
+        document.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotEmpty() && (src.startsWith("http") || src.startsWith("//"))) {
+                servers.add("Iframe" to fixUrl(src))
+            }
+        }
+        
+        // Process all servers
+        servers.forEach { (name, url) ->
+            loadExtractor(url, data, subtitleCallback, callback)
         }
         
         return true
