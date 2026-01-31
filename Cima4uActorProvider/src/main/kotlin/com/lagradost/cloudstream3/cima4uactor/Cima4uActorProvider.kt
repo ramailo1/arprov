@@ -45,41 +45,36 @@ class Cima4uActorProvider : MainAPI() {
         val url = request.data.format(page)
         println("[Cima4u] getMainPage: URL = $url")
         
-        // Complete browser-like headers to bypass bot detection
-        val browserHeaders = headers + mapOf(
-            "User-Agent" to getRandomUserAgent(),
-            "Referer" to mainUrl,
-            "Sec-Fetch-Dest" to "document",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Site" to "same-origin",
-            "Sec-Fetch-User" to "?1",
-            "Cache-Control" to "max-age=0"
-        )
+        val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         
-        val response = app.get(url, headers = browserHeaders)
+        val response = app.get(url, headers = mapOf(
+            "User-Agent" to mobileUserAgent,
+            "Referer" to mainUrl,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3"
+        ))
+        
         println("[Cima4u] getMainPage: Response status = ${response.code}")
+        println("[Cima4u] getMainPage: Response length = ${response.text.length}")
+        
+        if (response.text.isEmpty()) {
+            println("[Cima4u] getMainPage: WARNING! Empty response body")
+        } else {
+            println("[Cima4u] getMainPage: Body start (500 chars): ${response.text.take(500)}")
+            if (response.text.contains("GridItem")) {
+                println("[Cima4u] getMainPage: Found 'GridItem' string in raw text")
+            } else {
+                println("[Cima4u] getMainPage: 'GridItem' NOT FOUND in raw text")
+            }
+        }
         
         val doc = response.document
         
         // Log the HTML structure to understand what we're getting
         println("[Cima4u] getMainPage: HTML title = ${doc.title()}")
-        println("[Cima4u] getMainPage: Body classes = ${doc.body().classNames()}")
         
-        // Try multiple selectors
         val gridItems = doc.select(".GridItem")
-        val thumbGridItems = doc.select(".Thumb--GridItem")
-        val articles = doc.select("article")
-        val divs = doc.select("div[class*='Grid']")
-        
         println("[Cima4u] getMainPage: Found ${gridItems.size} .GridItem")
-        println("[Cima4u] getMainPage: Found ${thumbGridItems.size} .Thumb--GridItem")
-        println("[Cima4u] getMainPage: Found ${articles.size} article elements")
-        println("[Cima4u] getMainPage: Found ${divs.size} divs with 'Grid' in class")
-        
-        // Log first few div classes to see what's available
-        doc.select("div[class]").take(20).forEach { div ->
-            println("[Cima4u] getMainPage: Div class: ${div.className()}")
-        }
         
         val home = gridItems.mapNotNull { element ->
             element.toSearchResponse()
