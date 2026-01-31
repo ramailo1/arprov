@@ -49,17 +49,8 @@ class Cima4uActorProvider : MainAPI() {
         val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
         val posterUrl = extractPosterUrl(this)
         
-        // Check for episode badge
-        val isEpisode = this.selectFirst("span.episode, span:contains(حلقة), .Episode--number") != null
-        
-        return if (isEpisode) {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
-            }
-        } else {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = posterUrl
-            }
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
         }
     }
 
@@ -74,6 +65,16 @@ class Cima4uActorProvider : MainAPI() {
             for (attr in styleSelectors) {
                 el.attr(attr).takeIf { it.contains("url") }?.let { style ->
                     cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.trim()?.let {
+                        if (it.isNotBlank()) return fixUrl(it)
+                    }
+                }
+            }
+            // Explicitly check for custom CSS variables commonly used by this site theme
+            val styleAttr = el.attr("style")
+            if (styleAttr.isNotBlank()) {
+                val match = cssUrlRegex.find(styleAttr)
+                if (match != null) {
+                    match.groupValues.getOrNull(1)?.trim()?.let {
                         if (it.isNotBlank()) return fixUrl(it)
                     }
                 }
@@ -101,20 +102,13 @@ class Cima4uActorProvider : MainAPI() {
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
-        // TRIPLE-LAYER POSTER EXTRACTION (Final fix for "Red Oaks" repetition)
-        // Layer 1: Meta Tags (Most reliable as UI uses external CSS)
-        val posterUrl = document.select("meta[property=og:image], meta[name=twitter:image]").firstOrNull()?.attr("content")
-            // Layer 2: Targeted UI (User-suggested sidebar context)
-            ?: document.selectFirst("#AsideContext")?.let { aside ->
-                aside.select("a").firstOrNull { link ->
-                    link.attr("style").contains("url") || 
-                    link.selectFirst("[class*='Poster'], [class*='Img']")?.attr("style")?.contains("url") == true
-                }?.let { extractPosterUrl(it) }
-            }
-            // Layer 3: Scoped Fallback (Main content only)
-            ?: document.selectFirst(".Img--Poster--Single-begin, .Poster--Single-begin, .SingleDetails a")?.let { 
-                extractPosterUrl(it) 
-            } ?: extractPosterUrl(document.selectFirst("article, main") ?: document)
+        // STRICT SCOPED POSTER EXTRACTION (Final kill for "Red Oaks" repetition)
+        // Only look in the main post container, avoiding sidebar/AsideContext entirely
+        val posterUrl = document.selectFirst(".Img--Poster--Single-begin img")?.attr("src")
+            ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }
+            ?: document.selectFirst(".SingleDetails a[style*='url']")?.let { extractPosterUrl(it) }
+            // Final fallback: metadata, but ONLY if localized UI extraction fails and NOT as a global scan
+            ?: document.select("meta[property=og:image], meta[name=twitter:image]").firstOrNull()?.attr("content")
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
