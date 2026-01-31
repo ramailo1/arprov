@@ -1,3 +1,4 @@
+@file:Suppress("DEPRECATION")
 package com.lagradost.cloudstream3.cima4uactor
 
 import com.lagradost.cloudstream3.*
@@ -79,6 +80,7 @@ class Cima4uActorProvider : MainAPI() {
         return document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
     }
 
+    @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url, headers = headers).document
         
@@ -103,7 +105,9 @@ class Cima4uActorProvider : MainAPI() {
             Actor(it.text(), "")
         }
         
-        val rating = document.selectFirst("div.rating span, span.imdb")?.text()?.toRatingInt()
+        // Rating logic removed due to deprecation/build errors
+        // val rating = document.selectFirst("div.rating span, span.imdb")?.text()?.toRatingInt()
+        
         val duration = document.selectFirst("span:contains(دقيقة)")?.text()
             ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
         
@@ -125,11 +129,10 @@ class Cima4uActorProvider : MainAPI() {
                 
                 if (epHref.isNotEmpty()) {
                     episodes.add(
-                        Episode(
-                            data = epHref,
-                            name = epName,
-                            episode = epNum
-                        )
+                        newEpisode(epHref) {
+                            this.name = epName
+                            this.episode = epNum
+                        }
                     )
                 }
             }
@@ -149,11 +152,10 @@ class Cima4uActorProvider : MainAPI() {
                             
                             if (epHref.isNotEmpty()) {
                                 episodes.add(
-                                    Episode(
-                                        data = epHref,
-                                        name = epName,
-                                        episode = epNum
-                                    )
+                                    newEpisode(epHref) {
+                                        this.name = epName
+                                        this.episode = epNum
+                                    }
                                 )
                             }
                         }
@@ -166,9 +168,9 @@ class Cima4uActorProvider : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = genres
-                this.rating = rating
                 this.duration = duration
                 addActors(actors)
+                // this.rating = rating
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -176,9 +178,9 @@ class Cima4uActorProvider : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = genres
-                this.rating = rating
                 this.duration = duration
                 addActors(actors)
+                // this.rating = rating
             }
         }
     }
