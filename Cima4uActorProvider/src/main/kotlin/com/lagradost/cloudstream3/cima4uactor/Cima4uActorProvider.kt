@@ -61,17 +61,55 @@ class Cima4uActorProvider : MainAPI() {
         }
     }
 
-    private fun extractPosterUrl(element: Element): String? {
-        val style = element.attr("style").takeIf { it.contains("url") }
-            ?: element.selectFirst(".BG--GridItem")?.attr("style")
-        
-        return style?.substringAfter("url(", "")
-            ?.substringBefore(")", "")
-            ?.replace("\"", "")
-            ?.replace("'", "")
-            ?.trim()
-            ?.let { fixUrl(it) }
+   private fun extractPosterUrl(element: Element): String? {
+    val style = element.attr("style")
+    
+    // Method 1: Extract from --image CSS variable
+    if (style.contains("--image")) {
+        val imageUrl = style.substringAfter("--image:", "")
+            .substringBefore(";", "")
+            .replace("url(", "")
+            .replace(")", "")
+            .replace("\"", "")
+            .replace("'", "")
+            .trim()
+        if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) {
+            return fixUrl(imageUrl)
+        }
     }
+    
+    // Method 2: Regular url() pattern
+    val cssUrlRegex = Regex("""url\(['"]?([^'")]+)['"]?\)""")
+    cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.trim()?.let {
+        if (it.isNotBlank()) return fixUrl(it)
+    }
+    
+    // Method 3: Check child .BG--GridItem
+    element.selectFirst(".BG--GridItem")?.attr("style")?.let { childStyle ->
+        if (childStyle.contains("--image")) {
+            val imageUrl = childStyle.substringAfter("--image:", "")
+                .substringBefore(";")
+                .replace("url(", "")
+                .replace(")", "")
+                .replace("\"", "")
+                .replace("'", "")
+                .trim()
+            if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) {
+                return fixUrl(imageUrl)
+            }
+        }
+        cssUrlRegex.find(childStyle)?.groupValues?.getOrNull(1)?.trim()?.let {
+            if (it.isNotBlank()) return fixUrl(it)
+        }
+    }
+    
+    // Fallback to img tags
+    element.selectFirst("img[data-src]")?.attr("data-src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
+    element.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
+    
+    return null
+}
+
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = headers).document
