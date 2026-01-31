@@ -40,11 +40,13 @@ class Cima4uActorProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("strong")?.text()?.trim() 
-            ?: this.attr("title").trim()
+        val anchor = this.selectFirst("a")
+        val title = anchor?.selectFirst("strong")?.text()?.trim() 
+            ?: anchor?.attr("title")?.trim()
+            ?: this.selectFirst("strong")?.text()?.trim()
             ?: return null
             
-        val href = fixUrl(this.attr("href"))
+        val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
         val posterUrl = extractPosterUrl(this)
         
         // Check for episode badge
@@ -61,71 +63,47 @@ class Cima4uActorProvider : MainAPI() {
         }
     }
 
-   private fun extractPosterUrl(element: Element): String? {
-    val style = element.attr("style")
-    
-    // Method 1: Extract from --image CSS variable
-    if (style.contains("--image")) {
-        val imageUrl = style.substringAfter("--image:", "")
-            .substringBefore(";", "")
-            .replace("url(", "")
-            .replace(")", "")
-            .replace("\"", "")
-            .replace("'", "")
-            .trim()
-        if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) {
-            return fixUrl(imageUrl)
-        }
-    }
-    
-    // Method 2: Regular url() pattern
-    val cssUrlRegex = Regex("""url\(['"]?([^'")]+)['"]?\)""")
-    cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.trim()?.let {
-        if (it.isNotBlank()) return fixUrl(it)
-    }
-    
-    // Method 3: Check child .BG--GridItem
-    element.selectFirst(".BG--GridItem")?.attr("style")?.let { childStyle ->
-        if (childStyle.contains("--image")) {
-            val imageUrl = childStyle.substringAfter("--image:", "")
-                .substringBefore(";")
-                .replace("url(", "")
-                .replace(")", "")
-                .replace("\"", "")
-                .replace("'", "")
-                .trim()
-            if (imageUrl.isNotBlank() && imageUrl.startsWith("http")) {
-                return fixUrl(imageUrl)
+    private fun extractPosterUrl(element: Element): String? {
+        val cssUrlRegex = Regex("""url\(['"]?([^'")]+)['"]?\)""")
+        val styleSelectors = listOf("style", "data-lazy-style", "data-style")
+        
+        // Try element itself first, then common child background containers
+        val elementsToSearch = listOf(element) + element.select(".BG--GridItem, .Img--Poster--Single-begin")
+        
+        for (el in elementsToSearch) {
+            for (attr in styleSelectors) {
+                el.attr(attr).takeIf { it.contains("url") }?.let { style ->
+                    cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.trim()?.let {
+                        if (it.isNotBlank()) return fixUrl(it)
+                    }
+                }
             }
         }
-        cssUrlRegex.find(childStyle)?.groupValues?.getOrNull(1)?.trim()?.let {
-            if (it.isNotBlank()) return fixUrl(it)
+        
+        // Fallback to img tags
+        element.selectFirst("img[data-src], img[data-lazy-src]")?.let { 
+            return fixUrl(it.attr("data-src").ifEmpty { it.attr("data-lazy-src") }) 
         }
+        element.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
+        
+        return null
     }
-    
-    // Fallback to img tags
-    element.selectFirst("img[data-src]")?.attr("data-src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
-    element.selectFirst("img")?.attr("src")?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
-    
-    return null
-}
-
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = headers).document
-        return document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
+        return document.select("div#MainFiltar > .GridItem, .GridItem").mapNotNull { it.toSearchResult() }
     }
 
     @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val fixedUrl = fixUrl(url)
-        // Log.d("Cima4u", "Loading URL: $fixedUrl") 
         val document = app.get(fixedUrl, headers = headers).document
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
         
-        // Extract poster from style attribute
-        val posterUrl = document.selectFirst("[style*='--image']")?.let { extractPosterUrl(it) }
+        // Extract poster from style attribute or single poster class
+        val posterUrl = extractPosterUrl(document) 
+            ?: document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it) }
             ?: document.selectFirst("img[data-src]")?.attr("data-src")?.let { fixUrl(it) }
             ?: document.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
             ?: document.selectFirst("meta[property='og:image']")?.attr("content")
