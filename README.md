@@ -62,12 +62,23 @@ graph TD
 | **ArabSeed** | Movies & Series | `com.lagradost.cloudstream3.arabseed` |
 | **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
+| **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
 | **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
+| **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 
 ### 🛠️ In Development (Coming Soon)
-- [ ] **RistoAnime** - `Development`
+- [ ] **EgyBest** - `Legacy Porting`
+- [ ] **MyCima** - `Architecture Alignment`
+- [ ] **CimaClub** - `Development`
+- [ ] **CimaNow** - `Development`
 - [ ] **Shahid4u** - `Maintenance`
-- [ ] **EgyptDead** - `Paused`
+- [ ] **RistoAnime** - `Development`
+- [ ] **Fushaar** - `Planned`
+- [ ] **GateAnime** - `Planned`
+
+### 🚫 Blocked by Cloudflare
+The following providers are currently inaccessible due to high-security Cloudflare protection.
+- [ ] **AnimeBlkom** - `Pending Bypass Research`
 
 ---
 
