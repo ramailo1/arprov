@@ -45,7 +45,18 @@ class Cima4uActorProvider : MainAPI() {
         val url = request.data.format(page)
         println("[Cima4u] getMainPage: URL = $url")
         
-        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        // Complete browser-like headers to bypass bot detection
+        val browserHeaders = headers + mapOf(
+            "User-Agent" to getRandomUserAgent(),
+            "Referer" to mainUrl,
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "same-origin",
+            "Sec-Fetch-User" to "?1",
+            "Cache-Control" to "max-age=0"
+        )
+        
+        val response = app.get(url, headers = browserHeaders)
         println("[Cima4u] getMainPage: Response status = ${response.code}")
         
         val doc = response.document
