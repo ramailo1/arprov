@@ -9,7 +9,7 @@ import org.jsoup.nodes.Element
 
 class Cima4uActorProvider : MainAPI() {
     override var mainUrl = "https://cima4u.forum"
-    override var name = "Cima4uActor (In Progress)"
+    override var name = "Cima4uActor"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
@@ -31,7 +31,6 @@ class Cima4uActorProvider : MainAPI() {
     )
 
     private fun getRandomUserAgent(): String = userAgents.random()
-    private fun getRandomDelay(): Long = (1500..3500).random().toLong()
 
     override val mainPage = mainPageOf(
         "$mainUrl/movies" to "أحدث الأفلام",
@@ -42,7 +41,6 @@ class Cima4uActorProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        Thread.sleep(getRandomDelay())
         
         val home = doc.select(".Thumb--GridItem").mapNotNull { element ->
             element.toSearchResponse()
@@ -52,122 +50,125 @@ class Cima4uActorProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = this.selectFirst("strong")?.text()?.trim() ?: return null
-        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: "")
-        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: "")
-        val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
-        val quality = this.selectFirst(".quality, .resolution")?.text()?.trim()
+        val linkElement = this.selectFirst("a") ?: return null
+        val title = linkElement.attr("title").ifEmpty { this.selectFirst("strong")?.text()?.trim() } ?: return null
+        val href = fixUrl(linkElement.attr("href"))
+        
+        val posterStyle = this.selectFirst(".BG--GridItem")?.attr("style") ?: ""
+        val posterUrl = if (posterStyle.contains("--image:")) {
+            posterStyle.substringAfter("--image: url(").substringBefore(");")
+        } else {
+            this.selectFirst("img")?.attr("src") ?: ""
+        }
+
+        val year = this.selectFirst(".year")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.year = year
-            this.quality = getSearchQualityFromString(quality ?: "")
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?q=${query.replace(" ", "+")}"
-        Thread.sleep(getRandomDelay())
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        return doc.select(".search-results .movie-item, .results .video-item, .search-item").mapNotNull { element ->
+        return doc.select(".Thumb--GridItem").mapNotNull { element ->
             element.toSearchResponse()
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        Thread.sleep(getRandomDelay())
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        val title = doc.selectFirst(".movie-title, .video-title, h1")?.text()?.trim() ?: return null
-        val poster = fixUrl(doc.selectFirst(".poster img, .movie-poster img")?.attr("src") ?: "")
-        val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
-        val description = doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
-        val rating = doc.selectFirst(".rating, .imdb-rating")?.text()?.trim()?.toFloatOrNull()
-        val duration = doc.selectFirst(".duration, .runtime")?.text()?.trim()?.toIntOrNull()
-        val tags = doc.select(".genres a, .categories a, .tags a").map { it.text().trim() }
+        val title = doc.selectFirst(".PostTitle h1, .PostTitle span")?.text()?.trim() ?: return null
+        val poster = fixUrl(doc.selectFirst(".Img--Poster--Single-begin img")?.attr("src") ?: "")
+        val year = doc.selectFirst("a[href*='/release-year/']")?.text()?.trim()?.toIntOrNull()
+        val description = doc.selectFirst(".PostDetail li:contains(قصة العرض)")?.text()?.replace("قصة العرض", "")?.trim() 
+            ?: doc.selectFirst(".PostDetail")?.text()?.trim()
+
+        val ratingText = doc.selectFirst("li:contains(IMDb)")?.text()
+        val rating = ratingText?.replace(Regex("[^0-9.]"), "")?.toDoubleOrNull()
         
-        val isSeries = doc.select(".episodes, .seasons, .episode-list").isNotEmpty()
+        val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }
         
+        // Check for series
+        val isSeries = doc.select(".EpisodesList, .Episodes, .SeasonEpisodes, .episodes-list").isNotEmpty() || 
+                       title.contains("مسلسل") || title.contains("انمي")
+
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            doc.select(".episode-item, .episodes li").forEach { episodeElement ->
-                val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
-                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
-                val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
-                val seasonNumber = episodeElement.selectFirst(".season-number")?.text()?.trim()?.toIntOrNull() ?: 1
+            doc.select(".EpisodesList a, .episodes-list a").forEach { episodeElement ->
+                val episodeName = episodeElement.text().trim()
+                val episodeUrl = fixUrl(episodeElement.attr("href"))
+                val episodeNumber = episodeElement.text().replace(Regex("[^0-9]"), "").toIntOrNull()
                 
-                if (episodeName != null && episodeUrl != null) {
-                    episodes.add(newEpisode(episodeUrl) {
-                        this.name = episodeName
-                        this.episode = episodeNumber
-                        this.season = seasonNumber
-                    })
-                }
+                episodes.add(newEpisode(episodeUrl) {
+                    this.name = episodeName
+                    this.episode = episodeNumber
+                })
             }
+            // If no episodes found in list, might be a single season view or different layout
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                // this.score = rating // Score type requires special handling
+                // this.rating = rating 
                 this.tags = tags
-                this.duration = duration
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                // this.score = rating // Score type requires special handling
+                // this.rating = rating
                 this.tags = tags
-                this.duration = duration
             }
         }
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        Thread.sleep(getRandomDelay() + 1000)
         val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
         
-        doc.select(".video-links a, .download-links a, .watch-links a").forEach { linkElement ->
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
-            val quality = linkElement.select(".quality, .resolution").text().trim()
-            val serverName = linkElement.select(".server-name, .host").text().trim()
+        // Watch servers
+        doc.select("ul#watch li[data-watch]").forEach { linkElement ->
+            val linkUrl = linkElement.attr("data-watch")
+            if (linkUrl.isBlank()) return@forEach
+            
+            val serverName = linkElement.text().trim()
             
             callback.invoke(
                 newExtractorLink(
                     serverName.ifEmpty { "Cima4uActor" },
                     serverName.ifEmpty { "Cima4uActor" },
                     linkUrl,
-                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = getQualityFromString(quality)
+                    this.referer = mainUrl
+                }
+            )
+        }
+
+        // Download servers
+        doc.select(".DownloadServers a").forEach { linkElement ->
+            val linkUrl = linkElement.attr("href")
+            if (linkUrl.isBlank()) return@forEach
+            
+            val serverName = linkElement.select("quality").text().trim()
+            
+            callback.invoke(
+                newExtractorLink(
+                    "DL $serverName",
+                    "DL $serverName",
+                    linkUrl,
+                    ExtractorLinkType.VIDEO
+                ) {
                     this.referer = mainUrl
                 }
             )
         }
         
         return true
-    }
-
-    private fun getQualityFromString(quality: String): Int {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
-            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
-            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
-            else -> Qualities.Unknown.value
-        }
-    }
-
-    private fun getSearchQualityFromString(quality: String): SearchQuality? {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("720", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("480", ignoreCase = true) -> SearchQuality.SD
-            quality.contains("360", ignoreCase = true) -> SearchQuality.SD
-            else -> null
-        }
     }
 }
