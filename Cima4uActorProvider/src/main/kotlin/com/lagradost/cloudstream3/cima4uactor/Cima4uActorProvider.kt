@@ -100,7 +100,11 @@ class Cima4uActorProvider : MainAPI() {
         val document = app.get(fixedUrl, headers = headers).document
         
         val title = document.selectFirst("h1")?.text()?.trim() ?: ""
-        val posterUrl = extractPosterUrl(document)
+        
+        // Use specifically targeted selectors as suggested by the user to avoid header logos
+        val posterUrl = document.selectFirst(".Img--Poster--Single-begin, .Poster--Single-begin, aside.Poster a, .SingleDetails a")?.let { 
+            extractPosterUrl(it) 
+        } ?: extractPosterUrl(document.selectFirst("article, main, #AsideContext") ?: document)
         
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
