@@ -93,6 +93,18 @@ class Cima4UProvider : MainAPI() {
         ).find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
+    private fun detectSeasonFromDocOrUrl(
+        doc: org.jsoup.nodes.Document,
+        url: String
+    ): Int? {
+        val text = normalizeArabicNumbers(
+            doc.select("h1, h2, h3, .Title, .breadcrumb").text()
+        )
+
+        return extractSeasonNumber(text)
+            ?: extractSeasonNumber(normalizeArabicNumbers(url))
+    }
+
     private fun normalizeSeriesUrl(url: String): String {
         return url.replace(
             Regex("(الحلقة|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9)[^/\\d]*\\d+.*"),
@@ -100,9 +112,36 @@ class Cima4UProvider : MainAPI() {
         ).ensureTrailingSlash()
     }
 
+    private suspend fun loadAllEpisodePages(
+        baseUrl: String,
+        firstDoc: org.jsoup.nodes.Document
+    ): List<Pair<String, org.jsoup.nodes.Document>> {
+        val pages = mutableMapOf(baseUrl to firstDoc)
+
+        // Common pagination selectors on Cima-style sites
+        val pageLinks = firstDoc.select(
+            ".pagination a, .wp-pagenavi a, a.page-numbers"
+        )
+            .mapNotNull { it.attr("href") }
+            .map { fixUrl(it) }
+            .distinct()
+            .filter { it.contains("page") }
+
+        pageLinks.forEach { pageUrl ->
+            if (!pages.containsKey(pageUrl)) {
+                runCatching {
+                    pages[pageUrl] = app.get(pageUrl).document
+                }
+            }
+        }
+
+        return pages.toList()
+    }
+
     private fun parseEpisodes(
         doc: org.jsoup.nodes.Document,
-        baseUrl: String
+        seriesPoster: String?,
+        fallbackSeason: Int? = null
     ): List<Episode> {
         val elements = doc.select(
             "ul.insert_ep li a, " +
@@ -119,14 +158,17 @@ class Cima4UProvider : MainAPI() {
             val text = normalizeArabicNumbers(el.text())
 
             val episode = extractEpisodeNumber(text) ?: extractEpisodeNumber(url)
-            val season = extractSeasonNumber(text) ?: extractSeasonNumber(url)
+            val season = extractSeasonNumber(text) ?: extractSeasonNumber(url) ?: fallbackSeason ?: 1
 
             newEpisode(url) {
-                name = "الحلقة ${episode ?: ""}".trim()
+                name = episode?.let { "الحلقة $it" } ?: "حلقة"
                 this.episode = episode
-                this.season = season ?: 1
+                this.season = season
+                this.posterUrl = el.selectFirst("img")?.let {
+                    it.attr("data-src").ifBlank { it.attr("src") }
+                } ?: seriesPoster
             }
-        }.distinctBy { "${it.season}-${it.episode}" }
+        }.distinctBy { "${it.season}-${it.episode ?: it.data}" }
             .sortedWith(
                 compareBy<Episode> { it.season ?: 1 }
                     .thenBy { it.episode ?: Int.MAX_VALUE }
@@ -211,8 +253,24 @@ class Cima4UProvider : MainAPI() {
             ?.value
             ?.toIntOrNull()
 
-        val episodes = cachedEpisodes ?: parseEpisodes(doc, seriesUrl).also {
-            if (it.isNotEmpty()) cacheEpisodes(seriesUrl, it)
+        val episodes = cachedEpisodes ?: run {
+            val pages = loadAllEpisodePages(seriesUrl, doc)
+
+            val merged = pages.flatMap { (pageUrl, pageDoc) ->
+                val pageSeason = detectSeasonFromDocOrUrl(pageDoc, pageUrl)
+                parseEpisodes(pageDoc, posterUrl, pageSeason)
+            }
+                .distinctBy { "${it.season}-${it.episode ?: it.data}" }
+                .sortedWith(
+                    compareBy<Episode> { it.season ?: 1 }
+                        .thenBy { it.episode ?: Int.MAX_VALUE }
+                )
+
+            if (merged.isNotEmpty()) {
+                cacheEpisodes(seriesUrl, merged)
+            }
+
+            merged
         }
 
         val isSeries = episodes.isNotEmpty() ||
