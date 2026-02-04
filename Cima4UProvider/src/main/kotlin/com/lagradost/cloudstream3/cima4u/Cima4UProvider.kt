@@ -141,7 +141,8 @@ class Cima4UProvider : MainAPI() {
         val year = Regex("(19|20)\\d{2}").find(doc.html())?.value?.toIntOrNull()
         
         // Check for episodes (both Arabic and URL-encoded patterns)
-        val episodeElements = doc.select(".EpisodesList a, a[href*=\"الحلقة\"], a[href*=\"%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9\"], li.MovieBlock a")
+        // STRICT SELECTOR: Only target actual episode lists, avoid li.MovieBlock which catches related items
+        val episodeElements = doc.select("ul.insert_ep a, .EpisodesList a, a[href*=\"الحلقة\"], a[href*=\"%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9\"]")
         val isSeries = episodeElements.isNotEmpty() || 
                       url.contains("مسلسل") || 
                       url.contains("%d9%85%d8%b3%d9%84%d8%b3%d9%84")
@@ -151,8 +152,9 @@ class Cima4UProvider : MainAPI() {
                 val epUrl = fixUrl(ep.attr("href"))
                 if (epUrl.isBlank() || epUrl == url) return@mapNotNull null
                 
-                // Use ownText() or Title class for clean extraction
-                val epTitle = ep.selectFirst(".BoxTitle")?.text()?.trim() ?: ep.ownText().trim().ifBlank { ep.text().trim() }
+                // Use ownText() or Title class for clean extraction, fallback to text()
+                val epTitle = ep.selectFirst(".BoxTitle")?.text()?.trim() 
+                    ?: ep.ownText().trim().ifBlank { ep.text().trim() }
                 val epNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
                 
                 newEpisode(epUrl) {
