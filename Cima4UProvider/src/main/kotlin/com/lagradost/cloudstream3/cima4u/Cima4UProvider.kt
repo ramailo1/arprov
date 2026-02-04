@@ -19,21 +19,34 @@ class Cima4UProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "الرئيسية",
-        "$mainUrl/category/movies/page/" to "أفلام",
-        "$mainUrl/category/series/page/" to "مسلسلات",
-        "$mainUrl/category/anime/page/" to "أنمي"
+        "$mainUrl/" to "الرئيسية",
+        "$mainUrl/#new-cinema" to "جديد السينما",
+        "$mainUrl/category/افلام-اجنبي/" to "أفلام أجنبي",
+        "$mainUrl/category/افلام-اسيوي/" to "أفلام أسيوي",
+        "$mainUrl/category/افلام-انمي/" to "أفلام أنمي",
+        "$mainUrl/category/مسلسلات-انمي/" to "مسلسلات أنمي",
+        "$mainUrl/category/مسلسلات-اجنبي/" to "مسلسلات أجنبي",
+        "$mainUrl/category/مسلسلات-اسيوية/" to "مسلسلات أسيوية"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) request.data.replace("/page/", "/") else request.data + page
+        val url = when {
+            request.data.contains("#new-cinema") -> {
+                if (page > 1) return newHomePageResponse(request.name, emptyList(), hasNext = false)
+                mainUrl
+            }
+            page == 1 -> request.data
+            request.data.endsWith("/") -> "${request.data}page/$page/"
+            else -> "${request.data}/page/$page/"
+        }
+        
         val doc = app.get(url).document
         
         val items = doc.select("li.MovieBlock").mapNotNull { element ->
             element.toSearchResponse()
         }
         
-        return newHomePageResponse(request.name, items, hasNext = true)
+        return newHomePageResponse(request.name, items, hasNext = !request.data.contains("#new-cinema"))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -50,6 +63,7 @@ class Cima4UProvider : MainAPI() {
         val href = fixUrl(aTag.attr("href"))
         
         // Title extraction: Use ownText() to ignore child div text (.BoxTitleInfo)
+        // which contains views and category labels.
         var title = this.selectFirst(".BoxTitle, .Title")?.ownText()?.trim()
             ?: this.selectFirst(".BoxTitle, .Title")?.text()?.trim()
             ?: aTag.attr("title").trim()
@@ -87,11 +101,14 @@ class Cima4UProvider : MainAPI() {
             .replace("فيلم", "")
             .replace("مسلسل", "")
             .replace("انمي", "")
+            .replace("وتحميل", "")
             .replace("مترجم", "")
+            .replace("مدبلج", "")
             .replace("كامل", "")
             .replace("بجودة", "")
             .replace("عالية", "")
             .replace("اون لاين", "")
+            .replace("مباشر", "")
             .replace("تحميل", "")
             .trim()
             .ifBlank { pageTitle }
@@ -102,21 +119,20 @@ class Cima4UProvider : MainAPI() {
             }
         }
         
-        val description = doc.selectFirst(".Story, .story, .plot")?.text()?.trim()
+        val description = doc.selectFirst(".Story, .story, .plot, div[class*=\"story\"], p")?.text()?.trim()
         
         val year = Regex("(19|20)\\d{2}").find(doc.html())?.value?.toIntOrNull()
         
         // Check for episodes
-        val episodeElements = doc.select(".EpisodesList a, a[href*=\"الحلقة\"]")
+        val episodeElements = doc.select(".EpisodesList a, a[href*=\"الحلقة\"], li.MovieBlock a")
         val isSeries = episodeElements.isNotEmpty() || url.contains("مسلسل")
         
         return if (isSeries) {
-            // If episodes list is present
             val episodes = episodeElements.mapNotNull { ep ->
                 val epUrl = fixUrl(ep.attr("href"))
                 if (epUrl.isBlank() || epUrl == url) return@mapNotNull null
                 
-                val epTitle = ep.text().trim()
+                val epTitle = ep.selectFirst(".BoxTitle")?.text()?.trim() ?: ep.text().trim()
                 val epNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
                 
                 newEpisode(epUrl) {
@@ -158,11 +174,19 @@ class Cima4UProvider : MainAPI() {
                 loadExtractor(src, watchUrl, subtitleCallback, callback)
             }
         }
+
+        // Extract streaming servers from list items (often used for AJAX loading)
+        doc.select(".serversWatchSide li, .serversWatchSide ul li").forEach { li ->
+            val url = li.attr("data-url").ifBlank { li.attr("url") }.ifBlank { li.attr("data-src") }
+            if (url.isNotBlank() && url.startsWith("http")) {
+                loadExtractor(url, watchUrl, subtitleCallback, callback)
+            }
+        }
         
         // Extract download links
-        doc.select("a[href*=\".com/d/\"], a.DownloadLink").forEach { link ->
+        doc.select(".DownloadServers a, a[href*=\".com/d/\"], a.DownloadLink").forEach { link ->
             val href = link.attr("href")
-            if (href.isNotBlank() && href.startsWith("http")) {
+            if (href.isNotBlank() && href.startsWith("http") && !href.contains("midgerelativelyhoax")) {
                 loadExtractor(href, watchUrl, subtitleCallback, callback)
             }
         }
