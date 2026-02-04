@@ -241,13 +241,7 @@ class Cima4UProvider : MainAPI() {
         seriesPoster: String?,
         fallbackSeason: Int? = null
     ): List<Episode> {
-        val elements = doc.select(
-            "ul.insert_ep li a, " +
-            "ul.Episodes li a, " +
-            "div.Episodes a, " +
-            "a[href*=\"-الحلقة-\"], " +
-            "a[href*=\"%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-\"]"
-        )
+        val elements = doc.select("#related a, div#related a")
 
         return elements.mapNotNull { el ->
             val href = el.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -441,29 +435,40 @@ class Cima4UProvider : MainAPI() {
         }
     }
 
-    private suspend fun loadEpisodeLinks(
-        episode: Episode,
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        if (episode.data.isNullOrBlank()) return
+    ): Boolean {
+        // Construct watch URL - append /watch/ if not present
+        val watchUrl = when {
+            data.endsWith("/watch/") -> data
+            data.endsWith("/watch") -> "$data/"
+            data.endsWith("/") -> "${data}watch/"
+            else -> "$data/watch/"
+        }
 
-        // Ensure watch URL ends with slash
-        val watchUrl = episode.data!!
         val doc = app.get(watchUrl).document
 
-        // Iframes: common streaming servers
-        doc.select("iframe[src]").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.startsWith("http")) {
-                loadExtractor(src, watchUrl, subtitleCallback, callback)
+        // Avoid duplicates if a server is listed in multiple places
+        val visited = mutableSetOf<String>()
+
+        suspend fun loadLink(url: String) {
+            if (url.startsWith("http") && visited.add(url)) {
+                loadExtractor(url, watchUrl, subtitleCallback, callback)
             }
         }
 
+        // Iframes: common streaming servers
+        doc.select("iframe[src]").forEach { iframe ->
+            loadLink(iframe.attr("src"))
+        }
+
         // AJAX server list
-        doc.select(".serversWatchSide li, .serversWatchSide ul li").forEach { li ->
+        doc.select(".serversWatchSide li").forEach { li ->
             val url = li.attr("data-url").ifBlank { li.attr("url") }.ifBlank { li.attr("data-src") }
-            if (url.startsWith("http")) loadExtractor(url, watchUrl, subtitleCallback, callback)
+            loadLink(url)
         }
 
         // Download links
@@ -478,46 +483,12 @@ class Cima4UProvider : MainAPI() {
             "a[href*=\"streamtape\"]"
         ).forEach { link ->
             val href = link.attr("href")
-            if (href.startsWith("http")) loadExtractor(href, watchUrl, subtitleCallback, callback)
+            // Filter out known broken/ad links if needed, user mentioned midgerelativelyhoax
+            if (!href.contains("midgerelativelyhoax")) {
+                loadLink(href)
+            }
         }
-    }
 
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        // If this is a season/series page, get cached episodes
-        val seriesUrl = normalizeSeriesUrl(data)
-        // Try getting season cache first, if not try episode cache
-        // But wait, loadLinks is called on episode data usually.
-        // However, the user's strategy says: "If this is a season/series page, get cached episodes".
-        // BUT loadLinks is called for an EPISODE. The `data` is the episode URL.
-        // UNLESS the user is doing something advanced where 'data' is series URL? 
-        // Cloudstream calls loadLinks with the data from NewEpisode.
-        // If NewEpisode.data is the WATCH URL, then we just load that.
-        // PROBABLY the user wants to use the cache to find the episode entry?
-        // NO, the user's snippet logic iterates ALL seasons:
-        // seasons.forEach { season -> season.episodes.forEach { ... } }
-        // This would load links for ALL episodes? That's wrong for `loadLinks`.
-        // `loadLinks` handles a SINGLE episode.
-        // Wait, "we can now attach streaming/download links per episode... loop through each season -> each episode... loadEpisodeLinks(ep...)"
-        // This logic in the user snippet seems to imply they want to pre-load links?
-        // OR, they are misunderstanding `loadLinks` context.
-        // `loadLinks` is called when the user clicks an episode. `data` is `episode.url`.
-        // The snippet `val seriesUrl = normalizeSeriesUrl(data)` implies `data` is series URL?
-        // If `data` is episode URL, `normalizeSeriesUrl` might return something else or fail.
-        // However, if we look at `newEpisode(url)`, we set `data` to `url` (the watch page).
-        
-        // I will implement `loadLinks` to handle the specific episode URL passed in `data`,
-        // utilizing the `loadEpisodeLinks` helper for robustness.
-        // I will ignoring the "loop through all seasons" part of the snippet because that would load links for the entire series when clicking one episode, which is inefficient/wrong.
-        // I will assume the snippet meant: "Here is how to load links for an episode, using the helper".
-        
-        // Use helper for the single episode
-        val episode = newEpisode(data)
-        loadEpisodeLinks(episode, subtitleCallback, callback)
         return true
     }
 }
