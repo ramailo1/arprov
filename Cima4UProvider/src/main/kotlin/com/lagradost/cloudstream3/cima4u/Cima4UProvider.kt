@@ -19,7 +19,6 @@ class Cima4UProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "الرئيسية",
         "$mainUrl/#new-cinema" to "جديد السينما",
         "$mainUrl/category/افلام-اجنبي/" to "أفلام أجنبي",
         "$mainUrl/category/افلام-اسيوي/" to "أفلام أسيوي",
@@ -66,14 +65,19 @@ class Cima4UProvider : MainAPI() {
         
         if (href == mainUrl || href.isBlank()) return null
         
-        // Title extraction: Use ownText() to ignore child div text (.BoxTitleInfo)
-        // which contains views and category labels. This is more robust than generic tags
-        // which are currently absent from the DOM.
-        val title = this.selectFirst(".BoxTitle, .Title")?.ownText()?.trim()
+        // Title extraction: Favor .BoxTitle's ownText(). 
+        // If it's "Cima4u" or blank, fallback to other elements.
+        var title = this.selectFirst(".BoxTitle, .Title")?.ownText()?.trim()
             ?: this.ownText().trim()
             ?: aTag.attr("title").trim()
             
-        if (title.isBlank() || title.matches(Regex("^\\d+$"))) return null
+        if (title.equals("Cima4u", ignoreCase = true) || title.isBlank() || title.matches(Regex("^\\d+$"))) {
+            title = aTag.attr("title").trim().ifBlank { 
+                this.selectFirst(".BoxTitle, .Title")?.text()?.replace("Cima4u", "", ignoreCase = true)?.trim() ?: ""
+            }
+        }
+        
+        if (title.isBlank() || title.equals("Cima4u", ignoreCase = true)) return null
         
         val posterUrl = this.selectFirst("img")?.let { img ->
             img.attr("data-image").ifBlank { 
@@ -81,7 +85,7 @@ class Cima4UProvider : MainAPI() {
             }
         }
 
-        // Detect series by URL (both Arabic and URL-encoded) or title
+        // ... Detect series logic
         val isSeries = href.contains("مسلسل") || 
                       href.contains("%d9%85%d8%b3%d9%84%d8%b3%d9%84") ||
                       href.contains("الحلقة") || 
@@ -103,8 +107,9 @@ class Cima4UProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         
-        // Use ownText() to avoid grabbing extra text from child elements
-        val pageTitle = doc.selectFirst("h1")?.ownText()?.trim() ?: ""
+        // Target the actual content h1 inside SingleContent to avoid the site logo h1
+        val pageTitle = doc.selectFirst(".SingleContent h1, h1.Title, .PageTitle h1")?.ownText()?.trim()
+            ?: doc.selectFirst("h1")?.ownText()?.trim() ?: ""
         
         // Clean extraction of the actual content title
         val title = pageTitle
@@ -121,10 +126,11 @@ class Cima4UProvider : MainAPI() {
             .replace("اون لاين", "")
             .replace("مباشر", "")
             .replace("تحميل", "")
+            .replace("Cima4u", "", ignoreCase = true)
             .trim()
             .ifBlank { pageTitle.ifBlank { throw ErrorLoadingException("No title found") } }
 
-        val posterUrl = doc.selectFirst(".Thumb img, .Poster img, figure img")?.let { img ->
+        val posterUrl = doc.selectFirst(".SinglePoster img, .Thumb img, .Poster img, figure img")?.let { img ->
             img.attr("data-image").ifBlank {
                 img.attr("data-src").ifBlank { img.attr("src") }
             }
