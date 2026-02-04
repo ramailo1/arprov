@@ -59,6 +59,75 @@ class Cima4UProvider : MainAPI() {
             }.distinctBy { it.url }
     }
 
+    private val seriesCache = LinkedHashMap<String, List<Episode>>(20, 0.75f, true)
+
+    private fun cacheEpisodes(url: String, episodes: List<Episode>) {
+        if (seriesCache.size > 30) {
+            seriesCache.remove(seriesCache.keys.first())
+        }
+        seriesCache[url] = episodes
+    }
+
+    private fun normalizeArabicNumbers(text: String): String {
+        val arabic = "٠١٢٣٤٥٦٧٨٩"
+        return text.map {
+            val index = arabic.indexOf(it)
+            if (index >= 0) index.toString()[0] else it
+        }.joinToString("")
+    }
+
+    private fun extractEpisodeNumber(text: String): Int? {
+        return Regex(
+            "(?:الحلقة|episode|ep)[^\\d]*(\\d{1,3})",
+            RegexOption.IGNORE_CASE
+        ).find(text)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    private fun extractSeasonNumber(text: String): Int? {
+        return Regex(
+            "(?:الموسم|season|s)[^\\d]*(\\d+)",
+            RegexOption.IGNORE_CASE
+        ).find(text)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    private fun normalizeSeriesUrl(url: String): String {
+        return url.replace(
+            Regex("(-الحلقة-|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-)\\d+.*"),
+            "/"
+        )
+    }
+
+    private fun parseEpisodes(
+        doc: org.jsoup.nodes.Document,
+        baseUrl: String
+    ): List<Episode> {
+        val elements = doc.select(
+            "ul.insert_ep li a, " +
+            "ul.Episodes li a, " +
+            "div.Episodes a, " +
+            "a[href*=\"-الحلقة-\"], " +
+            "a[href*=\"%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-\"]"
+        )
+
+        return elements.mapNotNull { el ->
+            val link = el.selectFirst("a") ?: el
+            val href = link.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val url = fixUrl(href)
+
+            val text = normalizeArabicNumbers(link.text().ifBlank { el.text() })
+
+            val episode = extractEpisodeNumber(text) ?: extractEpisodeNumber(url)
+            val season = extractSeasonNumber(text) ?: extractSeasonNumber(url)
+
+            newEpisode(url) {
+                name = text.trim()
+                this.episode = episode
+                this.season = season ?: 1
+            }
+        }.distinctBy { "${it.season}-${it.episode}" }
+            .sortedBy { it.episode }
+    }
+
     private fun Element.toSearchResponse(): SearchResponse? {
         val aTag = if (this.tagName() == "a") this else this.selectFirst("a") ?: return null
         val href = fixUrl(aTag.attr("href"))
@@ -105,97 +174,71 @@ class Cima4UProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
-        
-        // Target the actual content h1 inside SingleContent to avoid the site logo h1
-        val pageTitle = doc.selectFirst(".SingleContent h1, h1.Title, .PageTitle h1")?.ownText()?.trim()
-            ?: doc.selectFirst("h1")?.ownText()?.trim() ?: ""
-        
-        // Clean extraction of the actual content title
-        val title = pageTitle
-            .replace("مشاهدة", "")
-            .replace("فيلم", "")
-            .replace("مسلسل", "")
-            .replace("انمي", "")
-            .replace("وتحميل", "")
-            .replace("مترجم", "")
-            .replace("مدبلج", "")
-            .replace("كامل", "")
-            .replace("بجودة", "")
-            .replace("عالية", "")
-            .replace("اون لاين", "")
-            .replace("مباشر", "")
-            .replace("تحميل", "")
+        val seriesUrl = normalizeSeriesUrl(url)
+
+        // Use cache if available
+        val cachedEpisodes = seriesCache[seriesUrl]
+
+        val doc = app.get(seriesUrl).document
+
+        val rawTitle = doc.selectFirst(
+            ".SingleContent h1, h1.Title, .PageTitle h1, h1"
+        )?.ownText()?.trim()
+            ?: throw ErrorLoadingException("No title")
+
+        val title = rawTitle
+            .replace(Regex("مشاهدة|تحميل|فيلم|مسلسل|انمي|مترجم|مدبلج|كامل|اون لاين", RegexOption.IGNORE_CASE), "")
             .replace("Cima4u", "", ignoreCase = true)
             .trim()
-            .ifBlank { pageTitle.ifBlank { throw ErrorLoadingException("No title found") } }
 
-        val posterUrl = doc.selectFirst(".SinglePoster img, .Thumb img, .Poster img, figure img")?.let { img ->
-            img.attr("data-image").ifBlank {
-                img.attr("data-src").ifBlank { img.attr("src") }
+        val posterUrl = doc.selectFirst(
+            ".SinglePoster img, .Thumb img, figure img"
+        )?.let {
+            it.attr("data-image").ifBlank {
+                it.attr("data-src").ifBlank { it.attr("src") }
             }
         }
-        
-        val description = doc.selectFirst(".Story, .story, .plot, div[class*=\"story\"], p")?.text()?.trim()
-        
-        val year = Regex("(19|20)\\d{2}").find(doc.html())?.value?.toIntOrNull()
-        
-        // STRICT EPISODE SCOPING: Only target ul.insert_ep which contains actual episodes
-        // Episode pages show only recent episodes, and current episode is often NOT a link
-        val episodeContainer = doc.selectFirst("ul.insert_ep")
-        val episodeElements = episodeContainer?.select("li") ?: emptyList()
-        
-        val isSeries = episodeElements.isNotEmpty() || 
-                      url.contains("مسلسل") || 
-                      url.contains("%d9%85%d8%b3%d9%84%d8%b3%d9%84")
-        
+
+        val plot = doc.selectFirst(
+            ".Story, .story, div[class*=story], p"
+        )?.text()?.trim()
+
+        val year = Regex("(19|20)\\d{2}")
+            .find(doc.text())
+            ?.value
+            ?.toIntOrNull()
+
+        val episodes = cachedEpisodes ?: parseEpisodes(doc, seriesUrl).also {
+            if (it.isNotEmpty()) cacheEpisodes(seriesUrl, it)
+        }
+
+        val isSeries = episodes.isNotEmpty() ||
+                doc.selectFirst("ul.insert_ep, ul.Episodes, div.Episodes") != null ||
+                seriesUrl.contains("مسلسل")
+
         return if (isSeries) {
-            val episodes = mutableListOf<Episode>()
-            
-            // Extract episodes from the list (both links and current episode)
-            episodeElements.forEach { li ->
-                val link = li.selectFirst("a")
-                val epUrl = if (link != null) {
-                    fixUrl(link.attr("href"))
-                } else {
-                    // Current episode might not be a link, use current URL
-                    url
+            newTvSeriesLoadResponse(
+                title,
+                seriesUrl,
+                TvType.TvSeries,
+                episodes.ifEmpty {
+                    listOf(
+                        newEpisode(url) {
+                            name = "الحلقة الحالية"
+                            episode = extractEpisodeNumber(url)
+                            season = extractSeasonNumber(url) ?: 1
+                        }
+                    )
                 }
-                
-                if (epUrl.isBlank()) return@forEach
-                
-                // Extract episode title and number
-                val epTitle = (link?.text() ?: li.text()).trim()
-                val epNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
-                
-                episodes.add(newEpisode(epUrl) {
-                    this.name = epTitle
-                    this.episode = epNum
-                })
-            }
-            
-            // If current URL is an episode but not in the list, add it
-            if (url.contains("الحلقة") || url.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9")) {
-                val currentEpNum = Regex("الحلقة-(\\d+)|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-(\\d+)").find(url)
-                    ?.groupValues?.firstOrNull { it.toIntOrNull() != null }?.toIntOrNull()
-                
-                if (currentEpNum != null && episodes.none { it.episode == currentEpNum }) {
-                    episodes.add(newEpisode(url) {
-                        this.name = "الحلقة $currentEpNum"
-                        this.episode = currentEpNum
-                    })
-                }
-            }
-            
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
+            ) {
                 this.posterUrl = posterUrl
-                this.plot = description
+                this.plot = plot
                 this.year = year
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = posterUrl
-                this.plot = description
+                this.plot = plot
                 this.year = year
             }
         }
