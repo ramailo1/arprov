@@ -68,6 +68,9 @@ class Cima4UProvider : MainAPI() {
         seriesCache[url] = episodes
     }
 
+    private fun String.ensureTrailingSlash(): String =
+        if (endsWith("/")) this else "$this/"
+
     private fun normalizeArabicNumbers(text: String): String {
         val arabic = "٠١٢٣٤٥٦٧٨٩"
         return text.map {
@@ -92,9 +95,9 @@ class Cima4UProvider : MainAPI() {
 
     private fun normalizeSeriesUrl(url: String): String {
         return url.replace(
-            Regex("(-الحلقة-|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-)\\d+.*"),
-            "/"
-        )
+            Regex("(الحلقة|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9)[^/\\d]*\\d+.*"),
+            ""
+        ).ensureTrailingSlash()
     }
 
     private fun parseEpisodes(
@@ -110,22 +113,24 @@ class Cima4UProvider : MainAPI() {
         )
 
         return elements.mapNotNull { el ->
-            val link = el.selectFirst("a") ?: el
-            val href = link.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val href = el.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val url = fixUrl(href)
 
-            val text = normalizeArabicNumbers(link.text().ifBlank { el.text() })
+            val text = normalizeArabicNumbers(el.text())
 
             val episode = extractEpisodeNumber(text) ?: extractEpisodeNumber(url)
             val season = extractSeasonNumber(text) ?: extractSeasonNumber(url)
 
             newEpisode(url) {
-                name = text.trim()
+                name = "الحلقة ${episode ?: ""}".trim()
                 this.episode = episode
                 this.season = season ?: 1
             }
         }.distinctBy { "${it.season}-${it.episode}" }
-            .sortedBy { it.episode }
+            .sortedWith(
+                compareBy<Episode> { it.season ?: 1 }
+                    .thenBy { it.episode ?: Int.MAX_VALUE }
+            )
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
@@ -155,12 +160,10 @@ class Cima4UProvider : MainAPI() {
         }
 
         // ... Detect series logic
-        val isSeries = href.contains("مسلسل") || 
-                      href.contains("%d9%85%d8%b3%d9%84%d8%b3%d9%84") ||
-                      href.contains("الحلقة") || 
-                      href.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9") ||
-                      title.contains("مسلسل") ||
-                      title.contains("الحلقة")
+        val isSeries =
+            href.contains("-الحلقة-") ||
+            href.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-") ||
+            href.contains("مسلسل")
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
