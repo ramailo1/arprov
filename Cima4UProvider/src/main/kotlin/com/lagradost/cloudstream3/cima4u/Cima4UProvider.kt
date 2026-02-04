@@ -93,6 +93,83 @@ class Cima4UProvider : MainAPI() {
         ).find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
+    private fun detectMissingEpisodes(
+        episodes: List<Episode>
+    ): List<Episode> {
+        val repaired = mutableListOf<Episode>()
+
+        episodes
+            .groupBy { it.season ?: 1 }
+            .forEach { (season, eps) ->
+                val numbers = eps.mapNotNull { it.episode }.sorted()
+                if (numbers.size < 2) return@forEach
+
+                val min = numbers.first()
+                val max = numbers.last()
+                val existing = numbers.toSet()
+
+                for (ep in min..max) {
+                    if (ep !in existing) {
+                        repaired.add(
+                            newEpisode("") {
+                                name = "الحلقة $ep (قيد الإصلاح)"
+                                episode = ep
+                                this.season = season
+                            }
+                        )
+                    }
+                }
+            }
+
+        return repaired
+    }
+
+    private fun inferEpisodeUrl(
+        sample: Episode,
+        episodeNumber: Int
+    ): String? {
+        val base = sample.data
+        if (base.isBlank()) return null
+
+        return when {
+            base.contains("-الحلقة-") ->
+                base.replace(
+                    Regex("-الحلقة-\\d+"),
+                    "-الحلقة-$episodeNumber"
+                )
+
+            base.contains("episode") ->
+                base.replace(
+                    Regex("episode\\D*\\d+"),
+                    "episode-$episodeNumber"
+                )
+
+            else -> null
+        }
+    }
+
+    private fun repairEpisodeUrls(
+        episodes: List<Episode>
+    ): List<Episode> {
+        val fixed = episodes.toMutableList()
+
+        episodes
+            .groupBy { it.season ?: 1 }
+            .forEach { (_, eps) ->
+                val sample = eps.firstOrNull { !it.data.isNullOrBlank() } ?: return@forEach
+
+                eps.filter { it.data.isNullOrBlank() && it.episode != null }
+                    .forEach { missing ->
+                        val inferred = inferEpisodeUrl(sample, missing.episode!!)
+                        if (inferred != null) {
+                            missing.data = inferred
+                        }
+                    }
+            }
+
+        return fixed
+    }
+
     private fun detectSeasonFromDocOrUrl(
         doc: org.jsoup.nodes.Document,
         url: String
@@ -260,17 +337,25 @@ class Cima4UProvider : MainAPI() {
                 val pageSeason = detectSeasonFromDocOrUrl(pageDoc, pageUrl)
                 parseEpisodes(pageDoc, posterUrl, pageSeason)
             }
-                .distinctBy { "${it.season}-${it.episode ?: it.data}" }
-                .sortedWith(
-                    compareBy<Episode> { it.season ?: 1 }
-                        .thenBy { it.episode ?: Int.MAX_VALUE }
-                )
 
-            if (merged.isNotEmpty()) {
-                cacheEpisodes(seriesUrl, merged)
+            val repaired = run {
+                val missing = detectMissingEpisodes(merged)
+                if (missing.isEmpty()) merged
+                else {
+                    repairEpisodeUrls(merged + missing)
+                        .distinctBy { "${it.season}-${it.episode}" }
+                        .sortedWith(
+                            compareBy<Episode> { it.season ?: 1 }
+                                .thenBy { it.episode ?: Int.MAX_VALUE }
+                        )
+                }
             }
 
-            merged
+            if (repaired.isNotEmpty()) {
+                cacheEpisodes(seriesUrl, repaired)
+            }
+
+            repaired
         }
 
         val isSeries = episodes.isNotEmpty() ||
