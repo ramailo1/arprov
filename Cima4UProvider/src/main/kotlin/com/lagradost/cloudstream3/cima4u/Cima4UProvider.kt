@@ -102,12 +102,9 @@ class Cima4UProvider : MainAPI() {
 
     private fun extractSeasonNumber(text: String): Int? {
         return Regex(
-            "(?:الموسم|season|s)[^\\d]*(\\d{1,2})",
+            "(?:^|\\s+|\\b)(?:الموسم|season|s)\\s*(\\d{1,4})(?:\\b|\\s+|$)",
             RegexOption.IGNORE_CASE
-        ).find(text)?.groupValues?.get(1)?.let {
-            val num = it.toIntOrNull()
-            if (num != null && num < 100) num else null
-        }
+        ).find(text)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it < 100 }
     }
 
 
@@ -128,14 +125,9 @@ class Cima4UProvider : MainAPI() {
             val max = numbers.last()
             val existing = numbers.toSet()
 
-            for (ep in 1..max) {
+            val min = numbers.minOrNull() ?: 1
+            for (ep in min..max) {
                 if (ep !in existing) {
-                     // Check if this gap is "reasonable". 
-                     // e.g., if we have 1, 5. Missing 2,3,4. 
-                     // If we have 1, 100. Missing 98 episodes? NO.
-                     // Let's limit contiguous missing count?
-                     // For now, I'll trust the provider V10 logic which repaired safely, 
-                     // but use isValidEpisodeNumber filter.
                      repaired.add(
                         newEpisode("") {
                             name = "الحلقة $ep (قيد الإصلاح)"
