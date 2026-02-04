@@ -141,28 +141,53 @@ class Cima4UProvider : MainAPI() {
         val year = Regex("(19|20)\\d{2}").find(doc.html())?.value?.toIntOrNull()
         
         // STRICT EPISODE SCOPING: Only target ul.insert_ep which contains actual episodes
-        // DO NOT use a[href*="الحلقة"] as it picks up "Related Shows" section
-        val episodeElements = doc.select("ul.insert_ep a")
+        // Episode pages show only recent episodes, and current episode is often NOT a link
+        val episodeContainer = doc.selectFirst("ul.insert_ep")
+        val episodeElements = episodeContainer?.select("li") ?: emptyList()
+        
         val isSeries = episodeElements.isNotEmpty() || 
                       url.contains("مسلسل") || 
                       url.contains("%d9%85%d8%b3%d9%84%d8%b3%d9%84")
         
         return if (isSeries) {
-            val episodes = episodeElements.mapNotNull { ep ->
-                val epUrl = fixUrl(ep.attr("href"))
-                if (epUrl.isBlank() || epUrl == url) return@mapNotNull null
+            val episodes = mutableListOf<Episode>()
+            
+            // Extract episodes from the list (both links and current episode)
+            episodeElements.forEach { li ->
+                val link = li.selectFirst("a")
+                val epUrl = if (link != null) {
+                    fixUrl(link.attr("href"))
+                } else {
+                    // Current episode might not be a link, use current URL
+                    url
+                }
                 
-                // Extract episode title - ul.insert_ep items have simple text structure
-                val epTitle = ep.text().trim()
+                if (epUrl.isBlank()) return@forEach
+                
+                // Extract episode title and number
+                val epTitle = (link?.text() ?: li.text()).trim()
                 val epNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
                 
-                newEpisode(epUrl) {
+                episodes.add(newEpisode(epUrl) {
                     this.name = epTitle
                     this.episode = epNum
-                }
-            }.distinctBy { it.data }.reversed()
+                })
+            }
             
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            // If current URL is an episode but not in the list, add it
+            if (url.contains("الحلقة") || url.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9")) {
+                val currentEpNum = Regex("الحلقة-(\\d+)|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-(\\d+)").find(url)
+                    ?.groupValues?.firstOrNull { it.toIntOrNull() != null }?.toIntOrNull()
+                
+                if (currentEpNum != null && episodes.none { it.episode == currentEpNum }) {
+                    episodes.add(newEpisode(url) {
+                        this.name = "الحلقة $currentEpNum"
+                        this.episode = currentEpNum
+                    })
+                }
+            }
+            
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.plot = description
                 this.year = year
