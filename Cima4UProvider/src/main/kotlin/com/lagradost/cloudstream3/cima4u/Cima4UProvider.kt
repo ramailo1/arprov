@@ -95,7 +95,7 @@ class Cima4UProvider : MainAPI() {
 
     private fun extractEpisodeNumber(text: String): Int? {
         return Regex(
-            "(?:الحلقة|episode|ep)[^\\d]*(\\d{1,3})",
+            "(?:^|\\s+|\\b)(?:الحلقة|episode|ep)\\s*(\\d{1,4})(?:\\b|\\s+|$)",
             RegexOption.IGNORE_CASE
         ).find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
@@ -448,7 +448,7 @@ class Cima4UProvider : MainAPI() {
         if (episode.data.isNullOrBlank()) return
 
         // Ensure watch URL ends with slash
-        val watchUrl = if (episode.data!!.endsWith("/")) episode.data!! else "${episode.data!!}/"
+        val watchUrl = episode.data!!
         val doc = app.get(watchUrl).document
 
         // Iframes: common streaming servers
