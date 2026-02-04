@@ -3,6 +3,7 @@ package com.lagradost.cloudstream3.cima4u
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.amap
 import org.jsoup.nodes.Element
 
 class Cima4UProvider : MainAPI() {
@@ -109,7 +110,7 @@ class Cima4UProvider : MainAPI() {
 
 
     private fun isValidEpisodeNumber(num: Int?): Boolean {
-        return num != null && num in 1..2000 // avoid unreal episodes
+        return num != null && num in 1..20000 // avoid unreal episodes, cap increased slightly for safe measure
     }
 
 
@@ -204,7 +205,7 @@ class Cima4UProvider : MainAPI() {
 
     private fun normalizeSeriesUrl(url: String): String {
         return url.replace(
-            Regex("(الحلقة|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9)[^/\\d]*\\d+.*"),
+            Regex("(الحلقة|%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9)[^/\\d]*?\\d+.*"),
             ""
         ).ensureTrailingSlash()
     }
@@ -224,11 +225,11 @@ class Cima4UProvider : MainAPI() {
             .distinct()
             .filter { it.contains("page") }
 
-        pageLinks.forEach { pageUrl ->
+        pageLinks.amap { pageUrl ->
             if (!pages.containsKey(pageUrl)) {
                 runCatching {
                     pages[pageUrl] = app.get(pageUrl).document
-                }
+                }.onFailure { it.printStackTrace() }
             }
         }
 
