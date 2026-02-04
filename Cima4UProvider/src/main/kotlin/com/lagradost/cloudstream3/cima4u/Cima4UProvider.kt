@@ -88,9 +88,12 @@ class Cima4UProvider : MainAPI() {
 
     private fun extractSeasonNumber(text: String): Int? {
         return Regex(
-            "(?:الموسم|season|s)[^\\d]*(\\d+)",
+            "(?:الموسم|season|s)[^\\d]*(\\d{1,2})",
             RegexOption.IGNORE_CASE
-        ).find(text)?.groupValues?.get(1)?.toIntOrNull()
+        ).find(text)?.groupValues?.get(1)?.let {
+            val num = it.toIntOrNull()
+            if (num != null && num < 100) num else null
+        }
     }
 
     private fun detectMissingEpisodes(
@@ -102,13 +105,12 @@ class Cima4UProvider : MainAPI() {
             .groupBy { it.season ?: 1 }
             .forEach { (season, eps) ->
                 val numbers = eps.mapNotNull { it.episode }.sorted()
-                if (numbers.size < 2) return@forEach
+                if (numbers.isEmpty()) return@forEach
 
-                val min = numbers.first()
                 val max = numbers.last()
                 val existing = numbers.toSet()
 
-                for (ep in min..max) {
+                for (ep in 1..max) {
                     if (ep !in existing) {
                         repaired.add(
                             newEpisode("") {
@@ -174,12 +176,15 @@ class Cima4UProvider : MainAPI() {
         doc: org.jsoup.nodes.Document,
         url: String
     ): Int? {
+        // Priority 1: URL context (usually definitive)
+        extractSeasonNumber(normalizeArabicNumbers(url))?.let { return it }
+
+        // Priority 2: Page headers and breadcrumbs
         val text = normalizeArabicNumbers(
-            doc.select("h1, h2, h3, .Title, .breadcrumb").text()
+            doc.select("h1, h2, h3, .Title, .breadcrumb, .PostHeader").text()
         )
 
         return extractSeasonNumber(text)
-            ?: extractSeasonNumber(normalizeArabicNumbers(url))
     }
 
     private fun normalizeSeriesUrl(url: String): String {
