@@ -22,7 +22,7 @@ graph TD
     Core --> Providers[ArProv Providers Library]
     
     subgraph "ArProv Logic"
-        Providers --> CP[Cima4u Actor & Forum]
+        Providers --> CP[Cima4u Forum]
         Providers --> AS[ArabSeed]
         Providers --> AK[Akwam]
         
@@ -58,7 +58,7 @@ graph TD
 ### ✅ Active & Optimized
 | Provider | Genre | Package Name |
 | :--- | :--- | :--- |
-| **Cima4u Actor** | Premium Movies/Series | `com.lagradost.cloudstream3.cima4uforum` |
+| **Cima4u Forum** | Premium Movies/Series | `com.lagradost.cloudstream3.cima4uforum` |
 | **ArabSeed** | Movies & Series | `com.lagradost.cloudstream3.arabseed` |
 | **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |

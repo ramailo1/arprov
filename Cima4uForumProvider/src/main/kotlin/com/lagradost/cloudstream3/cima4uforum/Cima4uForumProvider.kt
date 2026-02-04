@@ -5,9 +5,9 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
 
-class Cima4uActorProvider : MainAPI() {
+class Cima4uForumProvider : MainAPI() {
     override var mainUrl = "https://cima4u.forum"
-    override var name = "Cima4uActor"
+    override var name = "Cima4uForum"
     override val hasMainPage = true
     override var lang = "ar"
     override val supportedTypes = setOf(

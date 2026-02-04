@@ -5,8 +5,8 @@ import com.lagradost.cloudstream3.plugins.BasePlugin
 import android.content.Context
 
 @CloudstreamPlugin
-class Cima4uActorPlugin : BasePlugin() {
+class Cima4uForumPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(Cima4uActorProvider())
+        registerMainAPI(Cima4uForumProvider())
     }
 }
