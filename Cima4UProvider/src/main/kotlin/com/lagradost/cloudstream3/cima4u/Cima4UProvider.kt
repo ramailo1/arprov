@@ -1,11 +1,11 @@
-package com.lagradost.cloudstream3.cima4ushop
+package com.lagradost.cloudstream3.cima4u
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
-class Cima4uShopProvider : MainAPI() {
+class Cima4UProvider : MainAPI() {
     override var mainUrl = "https://cfu.cam"
     override var name = "Cima4U"
     override var lang = "ar"
@@ -49,17 +49,17 @@ class Cima4uShopProvider : MainAPI() {
         val aTag = this.selectFirst("a") ?: return null
         val href = fixUrl(aTag.attr("href"))
         
-        // Title extraction: Try .BoxTitle first, or fallback to generic title attributes
-        // The site often puts the title in .BoxTitle but it might have extra text
-        var title = this.selectFirst(".BoxTitle, .Title")?.text()?.trim() 
+        // Title extraction: Use ownText() to ignore child div text (.BoxTitleInfo)
+        var title = this.selectFirst(".BoxTitle, .Title")?.ownText()?.trim()
+            ?: this.selectFirst(".BoxTitle, .Title")?.text()?.trim()
             ?: aTag.attr("title").trim()
             
         if (title.isBlank()) return null
         
-        // Clean title if needed (often clean enough on this site)
-        
         val posterUrl = this.selectFirst("img")?.let { img ->
-            img.attr("data-src").ifBlank { img.attr("src") }
+            img.attr("data-image").ifBlank { 
+                img.attr("data-src").ifBlank { img.attr("src") }
+            }
         }
 
         val isSeries = href.contains("مسلسل") || href.contains("الحلقة") || title.contains("مسلسل")
@@ -88,13 +88,18 @@ class Cima4uShopProvider : MainAPI() {
             .replace("مسلسل", "")
             .replace("انمي", "")
             .replace("مترجم", "")
+            .replace("كامل", "")
+            .replace("بجودة", "")
+            .replace("عالية", "")
             .replace("اون لاين", "")
             .replace("تحميل", "")
             .trim()
             .ifBlank { pageTitle }
 
         val posterUrl = doc.selectFirst(".Thumb img, .Poster img, figure img")?.let { img ->
-            img.attr("data-src").ifBlank { img.attr("src") }
+            img.attr("data-image").ifBlank {
+                img.attr("data-src").ifBlank { img.attr("src") }
+            }
         }
         
         val description = doc.selectFirst(".Story, .story, .plot")?.text()?.trim()

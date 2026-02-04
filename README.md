@@ -65,6 +65,7 @@ graph TD
 | **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
 | **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
+| **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
