@@ -66,44 +66,42 @@ class Cima4UProvider : MainAPI() {
         val episodes: List<Episode>
     )
 
-    private val seriesCacheSeasons = LinkedHashMap<String, List<SeasonEpisodes>>(20, 0.75f, true)
-    private val seriesCache = LinkedHashMap<String, List<Episode>>(20, 0.75f, true)
-
-    private fun cacheSeasons(url: String, seasons: List<SeasonEpisodes>) {
-        if (seriesCacheSeasons.size > 30) {
-            seriesCacheSeasons.remove(seriesCacheSeasons.keys.first())
+    // LRU Cache Implementation (Auto-evicting)
+    private val seriesCacheSeasons = object : LinkedHashMap<String, List<SeasonEpisodes>>(30, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SeasonEpisodes>>?): Boolean {
+            return size > 30
         }
-        seriesCacheSeasons[url] = seasons
+    }
+    
+    private val seriesCache = object : LinkedHashMap<String, List<Episode>>(30, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Episode>>?): Boolean {
+            return size > 30
+        }
     }
 
-    private fun cacheEpisodes(url: String, episodes: List<Episode>) {
-        if (seriesCache.size > 30) {
-            seriesCache.remove(seriesCache.keys.first())
-        }
-        seriesCache[url] = episodes
-    }
+    private val blockedDomains = listOf("midgerelativelyhoax")
+    
+    private val arabicToEnglish = mapOf(
+        '٠' to '0', '١' to '1', '٢' to '2', '٣' to '3', '٤' to '4',
+        '٥' to '5', '٦' to '6', '٧' to '7', '٨' to '8', '٩' to '9'
+    )
 
     private fun String.ensureTrailingSlash(): String =
         if (endsWith("/")) this else "$this/"
 
-    private fun normalizeArabicNumbers(text: String): String {
-        val arabic = "٠١٢٣٤٥٦٧٨٩"
-        return text.map {
-            val index = arabic.indexOf(it)
-            if (index >= 0) index.toString()[0] else it
-        }.joinToString("")
-    }
+    private fun normalizeArabicNumbers(text: String): String =
+        text.map { arabicToEnglish[it] ?: it }.joinToString("")
 
     private fun extractEpisodeNumber(text: String): Int? {
         return Regex(
-            "(?:^|\\s+|\\b)(?:الحلقة|episode|ep)\\s*(\\d{1,4})(?:\\b|\\s+|$)",
+            "(?:^|\\b)(?:الحلقة|episode|ep)\\s*[:\\-]?\\s*(\\d{1,4})(?:\\b|\\s|:|$)",
             RegexOption.IGNORE_CASE
         ).find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun extractSeasonNumber(text: String): Int? {
         return Regex(
-            "(?:^|\\s+|\\b)(?:الموسم|season|s)\\s*(\\d{1,4})(?:\\b|\\s+|$)",
+            "(?:^|\\b)(?:الموسم|season|s)\\s*[:\\-]?\\s*(\\d{1,4})(?:\\b|\\s|:|$)",
             RegexOption.IGNORE_CASE
         ).find(text)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it < 100 }
     }
@@ -225,13 +223,15 @@ class Cima4UProvider : MainAPI() {
             .distinct()
             .filter { it.contains("page") }
 
-        pageLinks.amap { pageUrl ->
+        val otherPages = pageLinks.amap { pageUrl ->
             if (!pages.containsKey(pageUrl)) {
-                runCatching {
-                    pages[pageUrl] = app.get(pageUrl).document
-                }.onFailure { it.printStackTrace() }
-            }
-        }
+                 runCatching {
+                    pageUrl to app.get(pageUrl).document
+                }.getOrNull()
+            } else null
+        }.filterNotNull()
+
+        pages.putAll(otherPages)
 
         return pages.toList()
     }
@@ -338,12 +338,19 @@ class Cima4UProvider : MainAPI() {
         
         val posterUrl = this.selectFirst("img")?.let { img ->
             img.attr("data-image").ifBlank { 
-                img.attr("data-src").ifBlank { img.attr("src") }
+                img.attr("data-src").ifBlank { 
+                    img.attr("lazy-src").ifBlank { 
+                        img.attr("data-lazy-src").ifBlank { 
+                            img.attr("src") 
+                        }
+                    }
+                }
             }
         }
 
         // ... Detect series logic
         val isSeries =
+            this.selectFirst("ul.Episodes, ul.insert_ep, div.Episodes") != null ||
             href.contains("-الحلقة-") ||
             href.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9-") ||
             href.contains("مسلسل")
@@ -381,7 +388,13 @@ class Cima4UProvider : MainAPI() {
             ".SinglePoster img, .Thumb img, figure img"
         )?.let {
             it.attr("data-image").ifBlank {
-                it.attr("data-src").ifBlank { it.attr("src") }
+                it.attr("data-src").ifBlank { 
+                    it.attr("lazy-src").ifBlank { 
+                        it.attr("data-lazy-src").ifBlank { 
+                            it.attr("src") 
+                        }
+                    }
+                }
             }
         }
 
@@ -396,7 +409,7 @@ class Cima4UProvider : MainAPI() {
 
         val seasonList = cachedSeasons ?: run {
             val seasons = loadEpisodesBySeason(seriesUrl, doc, posterUrl)
-            if (seasons.isNotEmpty()) cacheSeasons(seriesUrl, seasons)
+            if (seasons.isNotEmpty()) seriesCacheSeasons[seriesUrl] = seasons
             seasons
         }
 
@@ -483,8 +496,8 @@ class Cima4UProvider : MainAPI() {
             "a[href*=\"streamtape\"]"
         ).forEach { link ->
             val href = link.attr("href")
-            // Filter out known broken/ad links if needed, user mentioned midgerelativelyhoax
-            if (!href.contains("midgerelativelyhoax")) {
+            // Filter out known broken/ad links
+            if (blockedDomains.none { href.contains(it) }) {
                 loadLink(href)
             }
         }
