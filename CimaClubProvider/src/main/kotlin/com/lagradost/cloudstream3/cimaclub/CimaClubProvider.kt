@@ -5,14 +5,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import kotlinx.coroutines.delay
 
 class CimaClubProvider : MainAPI() {
     override var mainUrl = "https://ciimaclub.us"
-    override var name = "CimaClub (In Progress)"
+    override var name = "CimaClub"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
@@ -21,7 +20,6 @@ class CimaClubProvider : MainAPI() {
     // Anti-bot configuration
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
@@ -37,7 +35,7 @@ class CimaClubProvider : MainAPI() {
 
     private fun getRandomUserAgent(): String = userAgents.random()
     
-    private fun getRandomDelay(): Long = (1000..3000).random().toLong()
+    private fun getRandomDelay(): Long = (500..1500).random().toLong()
 
     override val mainPage = mainPageOf(
         "$mainUrl/movies" to "أحدث الأفلام",
@@ -46,12 +44,13 @@ class CimaClubProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
+        val url = if (page > 1) "${request.data}/page/$page" else request.data
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 60).document
         
         // Add random delay to avoid detection
-        Thread.sleep(getRandomDelay())
+        delay(getRandomDelay())
         
-        val home = doc.select(".recent--block").mapNotNull { element ->
+        val home = doc.select(".Small--Box").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -59,128 +58,168 @@ class CimaClubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = this.selectFirst("h2")?.text()?.trim() ?: return null
-        val href = fixUrl(this.attr("href") ?: "")
+        val linkElement = this.selectFirst("a") ?: return null
+        val title = this.selectFirst(".Box-Title, .Title")?.text()?.trim() ?: linkElement.attr("title").trim()
+        val href = fixUrl(linkElement.attr("href"))
         val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: "")
-        val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
-        val quality = this.selectFirst(".quality, .resolution")?.text()?.trim()
+        
+        // CimaClub specific: Sometimes they put the year in a span or div
+        val year = this.selectFirst(".year")?.text()?.trim()?.toIntOrNull()
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.year = year
-            this.quality = getSearchQualityFromString(quality ?: "")
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search?q=${query.replace(" ", "+")}"
+        val url = "$mainUrl/search?s=${query.replace(" ", "+")}"
         
-        // Add random delay and user agent
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
+        delay(getRandomDelay())
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 60).document
         
-        return doc.select(".search-results .movie-item, .results .video-item").mapNotNull { element ->
+        return doc.select(".Small--Box").mapNotNull { element ->
             element.toSearchResponse()
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // Add random delay and user agent
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 120).document
+        delay(getRandomDelay())
+        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 60).document
         
-        val title = doc.selectFirst(".movie-title, .video-title, h1")?.text()?.trim() ?: return null
-        val poster = fixUrl(doc.selectFirst(".poster img, .movie-poster img")?.attr("src") ?: "")
-        val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
-        val description = doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
-        val rating = doc.selectFirst(".rating, .imdb-rating")?.text()?.trim()?.toFloatOrNull()
-        val duration = doc.selectFirst(".duration, .runtime")?.text()?.trim()?.toIntOrNull()
-        val tags = doc.select(".genres a, .categories a, .tags a").map { it.text().trim() }
+        val title = doc.selectFirst("h1, .PostTitle")?.text()?.trim() ?: return null
+        val poster = fixUrl(doc.selectFirst(".image img, .Poster img, .Post--Poster img")?.attr("src") ?: "")
+        val year = doc.selectFirst("a[href*='release-year']")?.text()?.trim()?.toIntOrNull()
         
-        // Check if it's a series
-        val isSeries = doc.select(".episodes, .seasons, .episode-list").isNotEmpty()
+        // Description: Look for 'قصة العرض' or similar
+        val description = doc.select("div:contains(قصة العرض) + div, div:contains(قصة العرض) + p, .Story, .StoryArea").firstOrNull()?.text()?.trim()
+            ?: doc.select("div:contains(قصة العرض)").text().replace("قصة العرض", "").trim()
+        
+        val tags = doc.select(".Genres a, .Post-Genres a").map { it.text().trim() }
+        
+        // Check if it's a series or has episodes
+        // CimaClub puts episodes in .BlocksHolder usually
+        val episodeElements = doc.select(".Episodes-List .Small--Box, .BlocksHolder .Small--Box")
+        val isSeries = episodeElements.isNotEmpty() || url.contains("/series/")
         
         if (isSeries) {
-            val episodes = mutableListOf<Episode>()
-            doc.select(".episode-item, .episodes li").forEach { episodeElement ->
-                val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
-                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
-                val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
-                val seasonNumber = episodeElement.selectFirst(".season-number")?.text()?.trim()?.toIntOrNull() ?: 1
+            val episodes = ArrayList<Episode>()
+            for (element in episodeElements) {
+                val link = element.selectFirst("a")
+                val episodeUrl = fixUrl(link?.attr("href") ?: continue)
+                val episodeTitle = element.selectFirst(".Box-Title")?.text() ?: link?.attr("title") ?: "Episode"
                 
-                if (episodeName != null && episodeUrl.isNotEmpty()) {
-                    episodes.add(newEpisode(episodeUrl) {
-                        this.name = episodeName
-                        this.episode = episodeNumber
-                        this.season = seasonNumber
-                    })
-                }
+                // Try to extract episode number
+                // Format often: "مسلسل Name الحلقة 3"
+                val episodeNumber = Regex("(\\d+)").findAll(episodeTitle).lastOrNull()?.value?.toIntOrNull()
+                
+                episodes.add(newEpisode(episodeUrl) {
+                    this.name = episodeTitle
+                    this.episode = episodeNumber
+                })
             }
+            // If no episodes found but it's a series page, it might be an empty season or single season
+             // Sometimes the page IS the season page.
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                // this.score = rating // Score type requires special handling
                 this.tags = tags
-                this.duration = duration
             }
         } else {
+            // It's a movie
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                // this.score = rating // Score type requires special handling
                 this.tags = tags
-                this.duration = duration
             }
         }
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        // Add random delay and user agent
-        Thread.sleep(getRandomDelay() + 1000) // Extra delay for link loading
-        val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        delay(getRandomDelay())
         
-        // Extract video links
-        doc.select(".video-links a, .download-links a, .watch-links a").forEach { linkElement ->
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: return@forEach
-            val quality = linkElement.select(".quality, .resolution").text().trim()
-            val serverName = linkElement.select(".server-name, .host").text().trim()
-            
-            callback.invoke(
+        // CimaClub: To get links we usually need to go to the Watch page.
+        // If the URL ends with /watch/ it's good, otherwise we try to append it or find the button.
+        
+        var watchUrl = data
+        if (!data.endsWith("/watch/")) {
+            // Try fetching the page to find the watch button if simply appending doesn't work?
+            // Usually appending /watch/ works for CimaClub
+             if (!data.endsWith("/")) watchUrl += "/"
+             watchUrl += "watch/"
+        }
+
+        val doc = try {
+            app.get(watchUrl, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        } catch (e: Exception) {
+            // Fallback: maybe the original URL was the watch page or we need to find the link
+             app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        }
+        
+        // 1. Look for iframes
+        val iframes = doc.select("iframe")
+        for (iframe in iframes) {
+             val src = iframe.attr("src")
+             if (src.isNotEmpty()) {
+                 loadExtractor(src, mainUrl, subtitleCallback, callback)
+             }
+        }
+        
+        // 2. Look for server lists (li elements usually)
+        // Structure: <ul class="Servers-List"> <li data-server="id">...</li> </ul>
+        // Or direct links
+        val serverLinks = doc.select(".Servers-List li, .servers-list li")
+        // Note: Often CimaClub uses AJAX to load servers or they are just buttons changing the iframe.
+        // Ideally we inspect the 'data-url' or 'data-embed' attributes if they exist.
+        
+        for (server in serverLinks) {
+            val embedUrl = server.attr("data-embed") ?: server.attr("data-url")
+            if (embedUrl.isNotEmpty()) {
+                 loadExtractor(fixUrl(embedUrl), mainUrl, subtitleCallback, callback)
+            }
+        }
+        
+        // 3. Fallback: Check for 'a' tags in server lists if `li` doesn't have data
+        val anchorServers = doc.select(".Servers-List a, .servers-list a")
+        for (a in anchorServers) {
+             val href = a.attr("href")
+             if (href.contains("watch")) {
+                  // This might be a link to another watch page, avoid infinite recursion
+             } else {
+                 loadExtractor(fixUrl(href), mainUrl, subtitleCallback, callback)
+             }
+        }
+
+        // 4. Download Links
+        val downloadLinks = doc.select(".Download-Links a, .download-servers a")
+        for (link in downloadLinks) {
+            val href = fixUrl(link.attr("href"))
+            val qualityText = link.text() // extract quality
+             callback.invoke(
                 newExtractorLink(
-                    serverName.ifEmpty { "CimaClub" },
-                    serverName.ifEmpty { "CimaClub" },
-                    linkUrl,
-                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    "CimaClub Download",
+                    "CimaClub Download",
+                    href,
+                    ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = getQualityFromString(quality)
-                    this.referer = mainUrl
+                    this.quality = getQualityFromString(qualityText)
                 }
             )
         }
-        
+
         return true
     }
 
     private fun getQualityFromString(quality: String): Int {
         return when {
-            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
-            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
-            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
+            quality.contains("1080") -> 1080
+            quality.contains("720") -> 720
+            quality.contains("480") -> 480
+            quality.contains("360") -> 360
             else -> Qualities.Unknown.value
-        }
-    }
-
-    private fun getSearchQualityFromString(quality: String): SearchQuality? {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("720", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("480", ignoreCase = true) -> SearchQuality.SD
-            quality.contains("360", ignoreCase = true) -> SearchQuality.SD
-            else -> null
         }
     }
 }

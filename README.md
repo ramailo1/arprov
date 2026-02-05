@@ -66,11 +66,12 @@ graph TD
 | **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** (Working) | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
+| **CimaClub** (Working) | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
 - [ ] **MyCima** - `Architecture Alignment`
-- [ ] **CimaClub** - `Development`
+
 - [ ] **CimaNow** - `Development`
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`

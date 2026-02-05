@@ -13,11 +13,11 @@ cloudstream {
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     
     // The icon url of this extension, optional
-    iconUrl = "https://www.google.com/s2/favicons?domain=cimaclub.us&sz=%size%"
+    iconUrl = "https://www.google.com/s2/favicons?domain=ciimaclub.us&sz=%size%"
     
     // The authors of this extension
     authors = listOf("ramailo1")
-    description = "CimaClub Provider - (In Progress)"
+    description = "CimaClub Provider (Working)"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimaclub"
