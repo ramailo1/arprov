@@ -168,7 +168,7 @@ class CimaClubProvider : MainAPI() {
 
             return newTvSeriesLoadResponse(
                 title,
-                url,
+                playUrl,
                 tvType,
                 episodes.sortedBy { it.episode ?: 0 }
             ) {
