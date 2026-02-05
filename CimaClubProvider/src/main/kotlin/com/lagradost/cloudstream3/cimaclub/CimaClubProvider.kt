@@ -220,14 +220,23 @@ class CimaClubProvider : MainAPI() {
             safeLoad(fixUrl(iframe.attr("src")))
         }
 
-        // JS / data servers
-        for (element in doc.select("[data-embed],[data-url]")) {
-            safeLoad(fixUrl(element.attr("data-embed").ifBlank { element.attr("data-url") }))
+        // JS / data servers (data-embed, data-url, data-watch)
+        for (element in doc.select("[data-embed], [data-url], [data-watch]")) {
+            val url = element.attr("data-watch")
+                .ifBlank { element.attr("data-embed") }
+                .ifBlank { element.attr("data-url") }
+            safeLoad(fixUrl(url))
         }
 
-        // anchor servers
-        for (a in doc.select(".Servers-List a")) {
+        // anchor servers (fallback)
+        for (a in doc.select(".Servers-List a, .Watch-Servers-List a, .Watch-Servers-List li a")) {
             safeLoad(fixUrl(a.attr("href")))
+        }
+
+        // servers List (li elements with data-watch)
+        for (li in doc.select(".Watch-Servers-List li, .Servers-List li")) {
+             val url = li.attr("data-watch")
+             safeLoad(fixUrl(url))
         }
 
         // download links → direct video
