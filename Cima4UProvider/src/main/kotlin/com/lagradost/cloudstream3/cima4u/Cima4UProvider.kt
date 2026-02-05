@@ -325,13 +325,13 @@ class Cima4UProvider : MainAPI() {
         // Title extraction: Favor .BoxTitle's ownText(). 
         // If it's "Cima4u" or blank, fallback to other elements.
         var title = this.selectFirst(".BoxTitle, .Title")?.ownText()?.trim()
-            ?: this.ownText().trim()
-            ?: aTag.attr("title").trim()
-            
-        if (title.equals("Cima4u", ignoreCase = true) || title.isBlank() || title.matches(Regex("^\\d+$"))) {
-            title = aTag.attr("title").trim().ifBlank { 
-                this.selectFirst(".BoxTitle, .Title")?.text()?.replace("Cima4u", "", ignoreCase = true)?.trim() ?: ""
-            }
+        
+        if (title.isNullOrBlank() || title.equals("Cima4u", ignoreCase = true)) {
+            title = aTag.attr("title").trim()
+        }
+
+        if (title.isNullOrBlank() || title.equals("Cima4u", ignoreCase = true)) {
+             title = this.selectFirst("img")?.attr("alt")?.trim() ?: ""
         }
         
         if (title.isBlank() || title.equals("Cima4u", ignoreCase = true)) return null
@@ -374,15 +374,19 @@ class Cima4UProvider : MainAPI() {
 
         val doc = app.get(seriesUrl).document
 
-        val rawTitle = doc.selectFirst(
-            ".SingleContent h1, h1.Title, .PageTitle h1, h1"
-        )?.ownText()?.trim()
-            ?: throw ErrorLoadingException("No title")
-
+        // Title Extraction (Robust)
+        val rawTitle = doc.selectFirst(".SingleContent h1, h1.Title, .PageTitle h1, .Title")?.ownText()?.trim()
+            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.trim()
+            ?: doc.selectFirst("meta[name='title']")?.attr("content")?.trim()
+            ?: doc.title().trim()
+            
         val title = rawTitle
-            .replace(Regex("مشاهدة|تحميل|فيلم|مسلسل|انمي|مترجم|مدبلج|كامل|اون لاين", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("مشاهدة|تحميل|فيلم|مسلسل|انمي|مترجم|مدبلج|كامل|اون لاين"), "")
+            .replace(" - Cima4u", "", ignoreCase = true)
             .replace("Cima4u", "", ignoreCase = true)
+            .replace(Regex("(\\s-)+\$"), "") // Remove trailing separators
             .trim()
+            .ifBlank { "Unknown Title" }
 
         val posterUrl = doc.selectFirst(
             ".SinglePoster img, .Thumb img, figure img"
