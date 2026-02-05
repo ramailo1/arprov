@@ -33,6 +33,8 @@ class CimaClubProvider : MainAPI() {
         return title
             .replace(Regex("الحلقة\\s*\\d+"), "")
             .replace(Regex("الموسم\\s*\\d+"), "")
+            .replace(Regex("الحلقة\\s*\\d+\\s*مترجمة"), "")
+            .replace(Regex("الحلقة\\s*\\d+\\s*مدبلجة"), "")
             .replace(Regex("\\(.*?\\)"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -64,8 +66,7 @@ class CimaClubProvider : MainAPI() {
         }
 
         val doc = app.get(url, headers = headers, timeout = 30).document
-        // Fixed selector - items are direct children with class Small--Box
-        val items = doc.select("#MainFiltar > .Small--Box, .Small--Box")
+        val items = doc.select(".Small--Box, .small--box, .MovieItem")
         val home = items.mapNotNull { it.toSearchResponse() }
 
         return newHomePageResponse(request.name, home)
@@ -75,15 +76,14 @@ class CimaClubProvider : MainAPI() {
         val a = selectFirst("a") ?: return null
         val link = fixUrl(a.attr("href"))
         
-        // Try multiple selectors for title
-        val rawTitle = selectFirst("h2, .inner--title h2")?.text() ?: return null
+        val rawTitle = selectFirst("h2, .inner--title h2, .title")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
         val poster = selectFirst("img")?.let {
             it.attr("data-src").ifBlank { it.attr("src") }
         }
 
-        val category = selectFirst(".category")?.text() ?: ""
+        val category = selectFirst(".category, .cat")?.text() ?: ""
         val type = detectTvType(category, link, rawTitle)
 
         return when (type) {
@@ -99,26 +99,75 @@ class CimaClubProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=${query.replace(" ", "+")}"
         val doc = app.get(url, headers = headers, timeout = 30).document
-        return doc.select(".Small--Box").mapNotNull { it.toSearchResponse() }
+        return doc.select(".Small--Box, .MovieItem").mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = headers, timeout = 30).document
 
-        val rawTitle = doc.selectFirst("h1")?.text() ?: return null
+        val rawTitle = doc.selectFirst("h1, .TitleArea h1")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
-        val poster = doc.selectFirst(".Poster img, .image img")?.attr("src")
-        val description = doc.selectFirst(".Story, .StoryArea")?.text()?.trim()
-        val category = doc.selectFirst(".category")?.text() ?: ""
+        val poster = doc.selectFirst(".Poster img, .image img, .Thumb img")?.attr("src")
+        val description = doc.selectFirst(".Story, .StoryArea, .description")?.text()?.trim()
+        val category = doc.selectFirst(".category, .cat")?.text() ?: ""
 
         val tvType = detectTvType(category, url, rawTitle)
         
-        // Check if it's an episode page (contains "الحلقة" in title or URL)
-        val isEpisodePage = rawTitle.contains("الحلقة") || url.contains("الحلقة")
+        // Check if this is a series main page (has episode list) or an episode page
+        val isSeriesMainPage = url.contains("/series/") && !rawTitle.contains("الحلقة")
+        val isEpisodePage = rawTitle.contains("الحلقة") || url.contains("الحلقة") || url.contains("/episode/")
         
-        if (isEpisodePage || tvType != TvType.Movie) {
-            // For episode pages, return single episode pointing to itself
+        if (isSeriesMainPage) {
+            // Fetch episodes from series page
+            val episodes = mutableListOf<Episode>()
+            
+            // Look for episode links on the series page
+            doc.select("a[href*=\"الحلقة\"], .EpisodeItem a, .episodes a, a[href*=\"episode\"]").forEach { epLink ->
+                val epUrl = fixUrl(epLink.attr("href"))
+                val epTitle = epLink.text().trim()
+                val epNum = extractEpisodeNumber(epTitle) ?: episodes.size + 1
+                
+                if (epUrl.isNotBlank()) {
+                    episodes.add(
+                        newEpisode(epUrl) {
+                            this.name = epTitle
+                            this.episode = epNum
+                        }
+                    )
+                }
+            }
+            
+            // If no episodes found with specific selectors, try general links
+            if (episodes.isEmpty()) {
+                doc.select("a[href]").forEach { a ->
+                    val href = a.attr("href")
+                    if (href.contains("الحلقة") || href.contains("episode")) {
+                        val epUrl = fixUrl(href)
+                        val epTitle = a.text().trim()
+                        val epNum = extractEpisodeNumber(epTitle) ?: episodes.size + 1
+                        
+                        episodes.add(
+                            newEpisode(epUrl) {
+                                this.name = epTitle.ifBlank { "الحلقة $epNum" }
+                                this.episode = epNum
+                            }
+                        )
+                    }
+                }
+            }
+
+            return newTvSeriesLoadResponse(
+                title,
+                url,
+                tvType,
+                episodes
+            ) {
+                this.posterUrl = poster?.let { fixUrl(it) }
+                this.plot = description
+            }
+        } else if (isEpisodePage || tvType != TvType.Movie) {
+            // Single episode page - return as series with one episode
             val episodeNumber = extractEpisodeNumber(rawTitle)
             val episodes = listOf(
                 newEpisode(url) {
@@ -189,14 +238,6 @@ class CimaClubProvider : MainAPI() {
             if (!loaded.add(fixed)) return
 
             try {
-                // If it's a known host, just use the extractor and return
-                // This prevents fetching the page content for well-behaved extractors
-                if (isKnownHost(fixed)) {
-                    loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-                    return
-                }
-
-                // For others, fetch and look for direct links
                 val iframeDoc = app.get(fixed, headers = headers, timeout = 30).document
                 
                 // Try to find direct video sources in iframe
@@ -205,9 +246,8 @@ class CimaClubProvider : MainAPI() {
                 
                 matches.forEach { match ->
                     val videoUrl = match.value
-                    // Avoid recursion/loops
                     if (!loaded.contains(videoUrl)) {
-                         callback(
+                        callback(
                             newExtractorLink(
                                 this.name,
                                 "$name (Direct)",
@@ -241,13 +281,17 @@ class CimaClubProvider : MainAPI() {
                     }
                 }
 
+                // Try loadExtractor for known hosts
+                if (isKnownHost(fixed)) {
+                    loadExtractor(fixed, mainUrl, subtitleCallback, callback)
+                }
+
             } catch (e: Exception) {
                 // Fail silently for individual iframe
             }
         }
 
         // ======== 1. WATCH AREA - Try to get watch page first ========
-        // Some CimaClub versions use a /watch subpage
         val watchUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
         try {
             val watchDoc = app.get(watchUrl, headers = headers, timeout = 30).document
@@ -260,12 +304,10 @@ class CimaClubProvider : MainAPI() {
                 }
             }
 
-            // Find server links with data attributes (legacy/alt support)
-            watchDoc.select("[data-server], [data-link], [data-src], #watch li[data-watch]").forEach { el ->
+            // Find server links with data attributes
+            watchDoc.select("[data-server], [data-link], [data-src]").forEach { el ->
                 val serverUrl = el.attr("data-server").ifBlank { 
-                    el.attr("data-link").ifBlank { 
-                        el.attr("data-src").ifBlank { el.attr("data-watch") } 
-                    }
+                    el.attr("data-link").ifBlank { el.attr("data-src") }
                 }
                 if (serverUrl.isNotBlank() && serverUrl.startsWith("http")) {
                     loadFromIframe(serverUrl, el.text().trim().ifBlank { "Server" })
@@ -281,24 +323,15 @@ class CimaClubProvider : MainAPI() {
             }
 
         } catch (e: Exception) {
-            // Fallback to main page if /watch doesn't exist or fails
+            // Fallback to main page if watch page fails
         }
 
         // ======== 2. MAIN PAGE - Look for embeds ========
-        // Also check the main doc we already loaded
         doc.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotBlank() && src.startsWith("http")) {
                 loadFromIframe(src, "Embed")
             }
-        }
-        
-        // Also check #watch list on main page (if not handled by /watch above)
-        doc.select("#watch li[data-watch]").forEach { li ->
-             val url = li.attr("data-watch").trim()
-             if (url.isNotBlank()) {
-                 loadFromIframe(url, li.text().trim().ifBlank { "Server" })
-             }
         }
 
         // ======== 3. DOWNLOAD AREA ========
@@ -312,7 +345,7 @@ class CimaClubProvider : MainAPI() {
                     loadExtractor(href, data, subtitleCallback, callback)
                 }
 
-                // Also add direct link (fallback)
+                // Also add direct link
                 if (loaded.add(href)) {
                     callback(
                         newExtractorLink(
