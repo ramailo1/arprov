@@ -176,7 +176,8 @@ class CimaClubProvider : MainAPI() {
                 "listeamed",
                 "megaup",
                 "1cloudfile",
-                "multiup"
+                "multiup",
+                "wasuytm"
             ).any { url.contains(it, ignoreCase = true) }
         }
 
@@ -192,26 +193,30 @@ class CimaClubProvider : MainAPI() {
         suspend fun loadSafe(
             url: String,
             name: String,
-            qualityHint: String = ""
+            qualityHint: String = "",
+            allowFallback: Boolean = true
         ) {
             val fixed = fixUrl(url)
             if (!loaded.add(fixed)) return
 
             if (isKnownHost(fixed)) {
                 loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-            } else {
-                callback(
-                    newExtractorLink(
-                        this.name,
-                        name,
-                        fixed,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = detectQuality(qualityHint)
-                    }
-                )
+                if (!allowFallback) return
             }
+            
+            // Always callback with a link, even for known hosts (as fallback) 
+            // to ensure CloudStream doesn't say "No links found" if extractor is slow/async
+            callback(
+                newExtractorLink(
+                    this.name,
+                    name,
+                    fixed,
+                    ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = mainUrl
+                    this.quality = detectQuality(qualityHint)
+                }
+            )
         }
 
         /* =======================
@@ -220,7 +225,7 @@ class CimaClubProvider : MainAPI() {
         doc.select("#watch li[data-watch]").forEach { li ->
             val url = li.attr("data-watch").trim()
             val serverName = li.text().trim().ifBlank { "Server" }
-            loadSafe(url, serverName)
+            loadSafe(url, serverName, allowFallback = false)
         }
 
         /* =======================
@@ -234,7 +239,7 @@ class CimaClubProvider : MainAPI() {
                     ?: "Download"
 
             val qualityHint = a.text()
-            loadSafe(url, serverName, qualityHint)
+            loadSafe(url, serverName, qualityHint, allowFallback = true)
         }
 
         return loaded.isNotEmpty()
