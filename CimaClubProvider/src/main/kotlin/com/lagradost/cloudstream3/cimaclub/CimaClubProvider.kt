@@ -155,87 +155,86 @@ class CimaClubProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val doc = try {
             app.get(data, headers = headers, timeout = 30).document
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             return false
         }
 
         val loaded = HashSet<String>()
 
-        fun detectQuality(textOrUrl: String): Int {
+        fun isKnownHost(url: String): Boolean {
+            return listOf(
+                "peytonepre",
+                "iplayerhls",
+                "mxdrop",
+                "filemoon",
+                "vudeo",
+                "uqload",
+                "luluvdo",
+                "listeamed",
+                "megaup",
+                "1cloudfile",
+                "multiup"
+            ).any { url.contains(it, ignoreCase = true) }
+        }
+
+        fun detectQuality(text: String): Int {
             return when {
-                textOrUrl.contains("1080") -> 1080
-                textOrUrl.contains("720") -> 720
-                textOrUrl.contains("480") -> 480
-                textOrUrl.contains("360") -> 360
+                text.contains("1080") -> 1080
+                text.contains("720") -> 720
+                text.contains("480") -> 480
                 else -> Qualities.Unknown.value
             }
         }
 
-        fun isKnownStreamingHost(url: String): Boolean {
-            return url.contains("peytonepre") ||
-                   url.contains("iplayerhls") ||
-                   url.contains("mxdrop") ||
-                   url.contains("mixdrop") ||
-                   url.contains("filemoon") ||
-                   url.contains("vudeo") ||
-                   url.contains("uqload") ||
-                   url.contains("luluvdo") ||
-                   url.contains("listeamed") ||
-                   url.contains("megaup") ||
-                   url.contains("1cloudfile") ||
-                   url.contains("multiup") ||
-                   url.contains("frdl") ||
-                   url.contains("bowfile")
-        }
-
-        suspend fun safeLoad(
+        suspend fun loadSafe(
             url: String,
-            serverName: String = "CimaClub",
-            qualityHint: String? = null
+            name: String,
+            qualityHint: String = ""
         ) {
-            if (url.isBlank()) return
             val fixed = fixUrl(url)
             if (!loaded.add(fixed)) return
 
-            try {
-                // Known streaming hosts: use extractor (handles quality variants automatically)
-                if (isKnownStreamingHost(fixed)) {
-                    loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-                } else {
-                    // Unknown host or direct link: create manual ExtractorLink
-                    val qualityValue = detectQuality(qualityHint ?: url)
-                    callback(
-                        newExtractorLink(
-                            name,
-                            serverName,
-                            fixed,
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = mainUrl
-                            this.quality = qualityValue
-                        }
-                    )
-                }
-            } catch (_: Exception) {}
+            if (isKnownHost(fixed)) {
+                loadExtractor(fixed, mainUrl, subtitleCallback, callback)
+            } else {
+                callback(
+                    newExtractorLink(
+                        this.name,
+                        name,
+                        fixed,
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = detectQuality(qualityHint)
+                    }
+                )
+            }
         }
 
-        // 1️⃣ WatchArea — streaming links from #watch list
+        /* =======================
+           1️⃣ WatchArea (STREAM)
+           ======================= */
         doc.select("#watch li[data-watch]").forEach { li ->
             val url = li.attr("data-watch").trim()
             val serverName = li.text().trim().ifBlank { "Server" }
-            safeLoad(url, serverName)
+            loadSafe(url, serverName)
         }
 
-        // 2️⃣ DownloadArea — download links
+        /* =======================
+           2️⃣ DownloadArea
+           ======================= */
         doc.select(".DownloadArea ul li a[href]").forEach { a ->
             val url = a.attr("href").trim()
-            val serverName = a.selectFirst(".text span")?.text()?.trim()
-                ?: a.selectFirst(".text p")?.text()?.trim()
-                ?: "Download Server"
-            val qualityHint = a.text().trim()
-            safeLoad(url, serverName, qualityHint)
+            val serverName =
+                a.selectFirst(".text span")?.text()
+                    ?: a.selectFirst(".text p")?.text()
+                    ?: "Download"
+
+            val qualityHint = a.text()
+            loadSafe(url, serverName, qualityHint)
         }
 
         return loaded.isNotEmpty()
