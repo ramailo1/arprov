@@ -207,30 +207,44 @@ class CimaClubProvider : MainAPI() {
             }
         }
 
-        // 4. Download links
+        // 4. Download and streaming links from known hosts
         doc.select("a[href]").forEach { a ->
             val href = a.attr("href")
-            if (href.contains("/download/")) {
+            
+            // Check if link is from a known video/download host
+            val isKnownHost = href.contains("1cloudfile") || href.contains("multiup") || 
+                             href.contains("filemoon") || href.contains("megaup") || 
+                             href.contains("iplayerhls") || href.contains("peytonepre") || 
+                             href.contains("uqload") || href.contains("vudeo") ||
+                             href.contains("luluvdo") || href.contains("listeamed") ||
+                             href.contains("bowfile") || href.contains("frdl") ||
+                             href.contains("mxdrop") || href.contains("mixdrop")
+            
+            if (isKnownHost) {
+                // Try to extract quality from link text if available
                 val qualityText = a.text()
-                val qualityValue = when {
-                    qualityText.contains("1080") -> 1080
-                    qualityText.contains("720") -> 720
-                    qualityText.contains("480") -> 480
-                    else -> Qualities.Unknown.value
-                }
-                callback(
-                    newExtractorLink(
-                        name,
-                        "CimaClub Direct",
-                        fixUrl(href),
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = qualityValue
+                if (qualityText.contains("1080") || qualityText.contains("720") || qualityText.contains("480")) {
+                    val qualityValue = when {
+                        qualityText.contains("1080") -> 1080
+                        qualityText.contains("720") -> 720
+                        qualityText.contains("480") -> 480
+                        else -> Qualities.Unknown.value
                     }
-                )
-            } else if (href.contains("1cloudfile") || href.contains("multiup") || href.contains("filemoon") || href.contains("megaup") || href.contains("iplayerhls") || href.contains("peytonepre") || href.contains("uqload") || href.contains("vudeo")) {
-                safeLoad(href)
+                    callback(
+                        newExtractorLink(
+                            name,
+                            "CimaClub Direct",
+                            fixUrl(href),
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = qualityValue
+                        }
+                    )
+                } else {
+                    // No quality specified, use extractor
+                    safeLoad(href)
+                }
             }
         }
 
