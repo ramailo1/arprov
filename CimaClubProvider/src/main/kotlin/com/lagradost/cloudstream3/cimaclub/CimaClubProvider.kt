@@ -112,42 +112,45 @@ class CimaClubProvider : MainAPI() {
         val rawTitle = doc.selectFirst("h1, .TitleArea h1, .PageTitle")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
-        // Metadata extraction - improved selectors
-        val poster = doc.selectFirst(".Poster img, .image img, .Thumb img, .SingleContent img")?.let {
+        // Metadata extraction - ensure we check all possible containers
+        val poster = doc.selectFirst(".Poster img, .image img, .Thumb img, .SingleContent img, .PostThumb img")?.let {
             val src = it.attr("src")
             val dataSrc = it.attr("data-src")
             if (dataSrc.isNotBlank()) dataSrc else src
         }
         
-        val description = doc.selectFirst(".Story, .StoryArea, .description, .PostContent p")?.text()?.trim()
+        val description = doc.selectFirst(".Story, .StoryArea, .description, .PostContent, .SinglePost p")?.text()?.trim()
         val category = doc.selectFirst(".category, .cat")?.text() ?: ""
 
         val tvType = detectTvType(category, url, rawTitle)
         
-        // Check if this is a series main page (has episode list) or an episode page
-        val isSeriesMainPage = url.contains("/series/") && !rawTitle.contains("الحلقة")
-        val isEpisodePage = rawTitle.contains("الحلقة") || url.contains("الحلقة") || url.contains("/episode/")
+        // Strict Series Check: Does it have the episode container?
+        val episodeContainer = doc.selectFirst(".allepcont, .Episodes--Seasons--Episodes")
+        val isSeriesPage = episodeContainer != null
         
-        if (isSeriesMainPage) {
-            // Fetch episodes from series page
+        // If it's a "Series" by type/URL but has no episode list container, 
+        // it's likely a direct episode page (like "Leil Ep 14").
+        // We should treat it as a single episode to avoid empty/wrong episode lists.
+        
+        if (isSeriesPage) {
+            // Fetch episodes from strict container ONLY
             val episodes = mutableListOf<Episode>()
             
-            // Refined extraction: Check for .epnum class, or text/href
-            val potentialEpisodes = doc.select("a")
+            // STRICT SELECTOR: Use the container we found to avoid sidebar leaks
+            val potentialEpisodes = episodeContainer!!.select("a")
             
             potentialEpisodes.forEach { epLink ->
                 val href = epLink.attr("href")
-                // URL decode to ensure we match arabic characters
                 val decodedHref = try { java.net.URLDecoder.decode(href, "UTF-8") } catch(e:Exception) { href }
                 val text = epLink.text()
-                val hasEpNumClass = epLink.select(".epnum").isNotEmpty()
                 
-                if (hasEpNumClass || text.contains("الحلقة") || decodedHref.contains("الحلقة") || href.contains("episode")) {
-                    val epUrl = fixUrl(href)
-                    val epTitle = epLink.text().trim()
-                    
-                    // Only add if we haven't already (simple dedup by URL)
-                    if (epUrl.isNotBlank() && episodes.none { it.data == epUrl }) {
+                // Still do basic sanity checks, but rely mostly on the container
+                if (href.isNotBlank()) {
+                     val epUrl = fixUrl(href)
+                     val epTitle = epLink.text().trim()
+                     
+                     // De-duplication
+                     if (episodes.none { it.data == epUrl }) {
                         val epNum = extractEpisodeNumber(epTitle) ?: episodes.size + 1
                         episodes.add(
                             newEpisode(epUrl) {
@@ -155,7 +158,7 @@ class CimaClubProvider : MainAPI() {
                                 this.episode = epNum
                             }
                         )
-                    }
+                     }
                 }
             }
 
@@ -163,39 +166,44 @@ class CimaClubProvider : MainAPI() {
                 title,
                 url,
                 tvType,
-                episodes
-            ) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.plot = description
-            }
-        } else if (isEpisodePage || tvType != TvType.Movie) {
-            // Single episode page - return as series with one episode
-            val episodeNumber = extractEpisodeNumber(rawTitle)
-            val episodes = listOf(
-                newEpisode(url) {
-                    this.name = rawTitle
-                    this.episode = episodeNumber
-                }
-            )
-
-            return newTvSeriesLoadResponse(
-                title,
-                url,
-                tvType,
-                episodes
+                episodes.reversed() // Usually list is new->old, we want old->new generally, or keep as is?
+                // Site lists episodes often 1..N or N..1. Let's keep strict order as site for now unless requested.
+                // Actually reversed() is safer for some sites if they list latest first.
             ) {
                 this.posterUrl = poster?.let { fixUrl(it) }
                 this.plot = description
             }
         } else {
-            return newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                url
-            ) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.plot = description
+            // Single Episode Page OR Movie Page
+            // If it's technically a "Series" type but no episode list, treat as 1-episode series
+            
+            if (tvType == TvType.TvSeries || url.contains("episode") || rawTitle.contains("الحلقة")) {
+                 val episodeNumber = extractEpisodeNumber(rawTitle)
+                 val episodes = listOf(
+                    newEpisode(url) {
+                        this.name = rawTitle
+                        this.episode = episodeNumber
+                    }
+                )
+                return newTvSeriesLoadResponse(
+                    title,
+                    url,
+                    tvType,
+                    episodes
+                ) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                    this.plot = description
+                }
+            } else {
+                 return newMovieLoadResponse(
+                    title,
+                    url,
+                    TvType.Movie,
+                    url
+                ) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                    this.plot = description
+                }
             }
         }
     }
@@ -295,9 +303,13 @@ class CimaClubProvider : MainAPI() {
         val watchButton = doc.selectFirst("a.watch, a:contains(مشاهدة وتحميل), .watch-btn")
         
         if (watchButton != null) {
-             watchPageUrl = fixUrl(watchButton.attr("href"))
+             val href = watchButton.attr("href")
+             if (href.isNotBlank()) {
+                 watchPageUrl = fixUrl(href)
+             }
         } else if (!data.endsWith("/watch") && !data.endsWith("/watch/")) {
-             // Fallback: try appending /watch if not found
+             // Fallback: try appending /watch if not found, but only if we suspect it's needed
+             // Be careful not to break direct server links if they ever exist
              val testUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
              watchPageUrl = testUrl
         }
