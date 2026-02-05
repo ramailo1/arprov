@@ -223,7 +223,8 @@ class CimaClubProvider : MainAPI() {
                 "peytonepre", "iplayerhls", "mxdrop", "filemoon", "mixdrop",
                 "vudeo", "uqload", "luluvdo", "listeamed", "megaup",
                 "1cloudfile", "multiup", "wasuytm", "vidmoly", "streamtape",
-                "dood", "embed", "mega", "stream", "hd", "fembed", "govad"
+                "dood", "embed", "mega", "stream", "hd", "fembed", "govad",
+                "hglink", "dsvplay", "obhitv", "somfr", "tubeload", "wishfast"
             )
             return hosts.any { url.contains(it, ignoreCase = true) }
         }
@@ -414,6 +415,20 @@ class CimaClubProvider : MainAPI() {
             } catch (e: Exception) {
                 // Fail silently
             }
+        }
+
+        if (loaded.isEmpty()) {
+            callback(
+                newExtractorLink(
+                    this.name,
+                    "⚠️ Episode likely missing on website",
+                    "https://ciimaclub.us",
+                    ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                }
+            )
         }
 
         return loaded.isNotEmpty()
