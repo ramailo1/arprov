@@ -326,28 +326,38 @@ class CimaClubProvider : MainAPI() {
             doc
         }
 
-        // 4. Scrape the Watch Page (or original doc if failed)
+        // --- Extract Servers ---
         val workingDoc = watchDoc ?: doc
         val workingUrl = if (watchDoc != null) watchPageUrl else data
-
-        // --- Scrape Iframes ---
-        workingDoc.select("iframe[src]").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank()) loadFromIframe(src, "Watch Server", workingUrl)
-        }
-
-        // --- Scrape Server List (li[data-watch]) ---
-        workingDoc.select("#watch li[data-watch], .ServersList li[data-watch]").forEach { li ->
-             val url = li.attr("data-watch").trim()
+        
+        val serverElements: List<Element> = workingDoc.select("#watch li, .ServersList li").toList()
+        serverElements.forEach { li ->
+             // Possible attributes for the URL/ID
+             val url = li.attr("data-watch").ifBlank { 
+                 li.attr("data-source").ifBlank { 
+                     li.attr("data-url") 
+                 }
+             }.trim()
+             
              val name = li.text().trim().ifBlank { "Server" }
-             if (url.isNotBlank()) loadFromIframe(url, name, workingUrl)
+             if (url.isNotBlank()) {
+                 if (url.startsWith("http")) {
+                     loadFromIframe(url, name, workingUrl)
+                 } else {
+                     if (url.contains("/embed/")) {
+                         loadFromIframe(fixUrl(url), name, workingUrl)
+                     }
+                 }
+             }
         }
         
-        // --- Scrape Download Links ---
+        val videoExtPattern = Regex("""\.(mp4|m3u8|mkv|avi|flv|mov|wmv)($|\?)""", RegexOption.IGNORE_CASE)
+
         val docsToCheck = if (workingDoc != doc) listOf(doc, workingDoc) else listOf(doc)
-        
-        docsToCheck.forEach { d ->
-            d.select(".DownloadArea a[href], .download-area a[href], .downloads a[href], .ServersList.Download a[href]").forEach { a ->
+        val docs: List<Element> = docsToCheck
+        docs.forEach { d ->
+            val downloadElements: List<Element> = d.select(".DownloadArea a[href], .download-area a[href], .downloads a[href], .ServersList.Download a[href]").toList()
+            downloadElements.forEach { a ->
                 val href = a.attr("href").trim()
                 if (href.isNotBlank() && href.startsWith("http")) {
                     val name = a.text().trim().ifBlank { "Download" }
@@ -355,20 +365,21 @@ class CimaClubProvider : MainAPI() {
                     
                     if (isKnownHost(href)) {
                         loadExtractor(href, data, subtitleCallback, callback)
-                    }
-                    
-                    if (loaded.add(href)) {
-                        callback(
-                            newExtractorLink(
-                                this.name,
-                                "Download: $name",
-                                href,
-                                ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = data
-                                this.quality = quality
-                            }
-                        )
+                    } else if (videoExtPattern.containsMatchIn(href)) {
+                        // Only add as direct link if it looks like a video file
+                        if (loaded.add(href)) {
+                            callback(
+                                newExtractorLink(
+                                    this.name,
+                                    "Download: $name",
+                                    href,
+                                    if (href.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = data
+                                    this.quality = quality
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -377,7 +388,7 @@ class CimaClubProvider : MainAPI() {
         // ======== 4. AJAX/API endpoints ========
         // Try to find any API endpoints that return video sources
         val apiPattern = Regex("""(https?://[^\"'<>\\s]+/ajax/[^\"'<>\\s]+)""")
-        val apiMatches = apiPattern.findAll(doc.toString())
+        val apiMatches: Sequence<MatchResult> = apiPattern.findAll(doc.toString())
         apiMatches.forEach { match ->
             try {
                 val apiUrl = match.value
