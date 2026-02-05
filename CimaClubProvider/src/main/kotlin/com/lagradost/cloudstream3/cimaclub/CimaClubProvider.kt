@@ -60,8 +60,9 @@ class CimaClubProvider : MainAPI() {
         val baseUrl = request.data
         val url = when {
             baseUrl == mainUrl -> if (page == 1) baseUrl else "$mainUrl/page/$page/"
+            // Movies and Series both use /page/N/ structure on this site
             baseUrl.contains("/movies") -> if (page == 1) baseUrl else "$baseUrl/page/$page/"
-            baseUrl.contains("/series") -> if (page == 1) baseUrl else "$baseUrl?offset=$page"
+            baseUrl.contains("/series") -> if (page == 1) baseUrl else "$baseUrl/page/$page/"
             else -> baseUrl
         }
 
@@ -79,8 +80,11 @@ class CimaClubProvider : MainAPI() {
         val rawTitle = selectFirst("h2, .inner--title h2, .title")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
+        // Prioritize standard src for some layouts, check data-src for others
         val poster = selectFirst("img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
+            val src = it.attr("src")
+            val dataSrc = it.attr("data-src")
+            if (dataSrc.isNotBlank()) dataSrc else src
         }
 
         val category = selectFirst(".category, .cat")?.text() ?: ""
@@ -105,11 +109,17 @@ class CimaClubProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = headers, timeout = 30).document
 
-        val rawTitle = doc.selectFirst("h1, .TitleArea h1")?.text() ?: return null
+        val rawTitle = doc.selectFirst("h1, .TitleArea h1, .PageTitle")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
-        val poster = doc.selectFirst(".Poster img, .image img, .Thumb img")?.attr("src")
-        val description = doc.selectFirst(".Story, .StoryArea, .description")?.text()?.trim()
+        // Metadata extraction - improved selectors
+        val poster = doc.selectFirst(".Poster img, .image img, .Thumb img, .SingleContent img")?.let {
+            val src = it.attr("src")
+            val dataSrc = it.attr("data-src")
+            if (dataSrc.isNotBlank()) dataSrc else src
+        }
+        
+        val description = doc.selectFirst(".Story, .StoryArea, .description, .PostContent p")?.text()?.trim()
         val category = doc.selectFirst(".category, .cat")?.text() ?: ""
 
         val tvType = detectTvType(category, url, rawTitle)
@@ -122,31 +132,23 @@ class CimaClubProvider : MainAPI() {
             // Fetch episodes from series page
             val episodes = mutableListOf<Episode>()
             
-            // Look for episode links on the series page
-            doc.select("a[href*=\"الحلقة\"], .EpisodeItem a, .episodes a, a[href*=\"episode\"]").forEach { epLink ->
-                val epUrl = fixUrl(epLink.attr("href"))
-                val epTitle = epLink.text().trim()
-                val epNum = extractEpisodeNumber(epTitle) ?: episodes.size + 1
-                
-                if (epUrl.isNotBlank()) {
-                    episodes.add(
-                        newEpisode(epUrl) {
-                            this.name = epTitle
-                            this.episode = epNum
-                        }
-                    )
-                }
-            }
+            // Refined extraction: Check for .epnum class, or text/href
+            val potentialEpisodes = doc.select("a")
             
-            // If no episodes found with specific selectors, try general links
-            if (episodes.isEmpty()) {
-                doc.select("a[href]").forEach { a ->
-                    val href = a.attr("href")
-                    if (href.contains("الحلقة") || href.contains("episode")) {
-                        val epUrl = fixUrl(href)
-                        val epTitle = a.text().trim()
+            potentialEpisodes.forEach { epLink ->
+                val href = epLink.attr("href")
+                // URL decode to ensure we match arabic characters
+                val decodedHref = try { java.net.URLDecoder.decode(href, "UTF-8") } catch(e:Exception) { href }
+                val text = epLink.text()
+                val hasEpNumClass = epLink.select(".epnum").isNotEmpty()
+                
+                if (hasEpNumClass || text.contains("الحلقة") || decodedHref.contains("الحلقة") || href.contains("episode")) {
+                    val epUrl = fixUrl(href)
+                    val epTitle = epLink.text().trim()
+                    
+                    // Only add if we haven't already (simple dedup by URL)
+                    if (epUrl.isNotBlank() && episodes.none { it.data == epUrl }) {
                         val epNum = extractEpisodeNumber(epTitle) ?: episodes.size + 1
-                        
                         episodes.add(
                             newEpisode(epUrl) {
                                 this.name = epTitle.ifBlank { "الحلقة $epNum" }
@@ -210,7 +212,7 @@ class CimaClubProvider : MainAPI() {
 
         fun isKnownHost(url: String): Boolean {
             val hosts = listOf(
-                "peytonepre", "iplayerhls", "mxdrop", "filemoon", 
+                "peytonepre", "iplayerhls", "mxdrop", "filemoon", "mixdrop",
                 "vudeo", "uqload", "luluvdo", "listeamed", "megaup",
                 "1cloudfile", "multiup", "wasuytm", "vidmoly", "streamtape",
                 "dood", "embed", "mega", "stream", "hd", "fembed", "govad"
@@ -289,10 +291,6 @@ class CimaClubProvider : MainAPI() {
         }
 
         // 2. Identify the Watch Page URL
-        // Priority 1: Check for "Watch" button (red button)
-        // Priority 2: Check for existing subpath /watch
-        // Priority 3: Fallback to current page
-        
         var watchPageUrl = data
         val watchButton = doc.selectFirst("a.watch, a:contains(مشاهدة وتحميل), .watch-btn")
         
@@ -301,8 +299,6 @@ class CimaClubProvider : MainAPI() {
         } else if (!data.endsWith("/watch") && !data.endsWith("/watch/")) {
              // Fallback: try appending /watch if not found
              val testUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
-             // Verify if this URL exists/is distinct? 
-             // Ideally we just assume it might exist if no other options
              watchPageUrl = testUrl
         }
 
@@ -335,13 +331,11 @@ class CimaClubProvider : MainAPI() {
              if (url.isNotBlank()) loadFromIframe(url, name, workingUrl)
         }
         
-        // --- Scrape Download Links (DownloadArea) ---
-        // Note: Download area might be on the Episode Page (doc), not Watch Page
-        // So we check BOTH if they are different
-        val docsToCheck = if (watchDoc != null && watchDoc != doc) listOf(doc, watchDoc) else listOf(doc)
+        // --- Scrape Download Links ---
+        val docsToCheck = if (workingDoc != doc) listOf(doc, workingDoc) else listOf(doc)
         
         docsToCheck.forEach { d ->
-            d.select(".DownloadArea a[href], .downloads a[href]").forEach { a ->
+            d.select(".DownloadArea a[href], .download-area a[href], .downloads a[href], .ServersList.Download a[href]").forEach { a ->
                 val href = a.attr("href").trim()
                 if (href.isNotBlank() && href.startsWith("http")) {
                     val name = a.text().trim().ifBlank { "Download" }
@@ -365,6 +359,37 @@ class CimaClubProvider : MainAPI() {
                         )
                     }
                 }
+            }
+        }
+
+        // ======== 4. AJAX/API endpoints ========
+        // Try to find any API endpoints that return video sources
+        val apiPattern = Regex("""(https?://[^\"'<>\\s]+/ajax/[^\"'<>\\s]+)""")
+        val apiMatches = apiPattern.findAll(doc.toString())
+        apiMatches.forEach { match ->
+            try {
+                val apiUrl = match.value
+                val apiResponse = app.get(apiUrl, headers = headers, timeout = 15).text
+                
+                val videoPattern = Regex("""(https?://[^\"'<>\\s]+\\.(mp4|m3u8))""", RegexOption.IGNORE_CASE)
+                videoPattern.findAll(apiResponse).forEach { videoMatch ->
+                    val videoUrl = videoMatch.value
+                    if (loaded.add(videoUrl)) {
+                        callback(
+                            newExtractorLink(
+                                this.name,
+                                "API Source",
+                                videoUrl,
+                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                // Fail silently
             }
         }
 
