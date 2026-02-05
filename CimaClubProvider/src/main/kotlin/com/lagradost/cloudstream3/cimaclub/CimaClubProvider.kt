@@ -225,7 +225,7 @@ class CimaClubProvider : MainAPI() {
         doc.select("#watch li[data-watch]").forEach { li ->
             val url = li.attr("data-watch").trim()
             val serverName = li.text().trim().ifBlank { "Server" }
-            loadSafe(url, serverName, allowFallback = false)
+            loadSafe(url, serverName, allowFallback = true)
         }
 
         /* =======================
