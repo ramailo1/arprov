@@ -157,7 +157,6 @@ class CimaClubProvider : MainAPI() {
     ): Boolean {
 
         val watchUrl = if (data.contains("/watch")) data else "${data.trimEnd('/')}/watch/"
-        
         val doc = try {
             app.get(watchUrl, headers = headers, timeout = 30).document
         } catch (_: Exception) {
@@ -168,70 +167,70 @@ class CimaClubProvider : MainAPI() {
 
         suspend fun safeLoad(url: String) {
             if (url.isBlank()) return
-            if (!loaded.add(url)) return
+            val fixed = fixUrl(url)
+            if (!loaded.add(fixed)) return
             try {
-                loadExtractor(url, mainUrl, subtitleCallback, callback)
-            } catch (e: Exception) {
-                // Silent fail for extractor issues
-            }
+                loadExtractor(fixed, mainUrl, subtitleCallback, callback)
+            } catch (_: Exception) {}
         }
 
-        // 1. Extract from Server List (data-watch, data-url, etc.)
-        doc.select(".ServersList li, ul#watch li, [data-watch], [data-embed], [data-url]").forEach { element ->
-             val url = element.attr("data-watch")
-                 .ifBlank { element.attr("data-url") }
-                 .ifBlank { element.attr("data-embed") }
-                 .ifBlank { element.attr("data-player") }
-                 .ifBlank { element.attr("data-src") }
-             
-             safeLoad(fixUrl(url))
+        // 1. Data attributes
+        doc.select("[data-watch], [data-url], [data-embed], [data-player], [data-src]").forEach { e ->
+            val url = e.attr("data-watch")
+                .ifBlank { e.attr("data-url") }
+                .ifBlank { e.attr("data-embed") }
+                .ifBlank { e.attr("data-player") }
+                .ifBlank { e.attr("data-src") }
+            safeLoad(url)
         }
 
-        // 2. Extract Iframes (Mixed logic)
+        // 2. Onclick attributes (JS links)
+        doc.select("*[onclick]").forEach { e ->
+            val onclick = e.attr("onclick")
+            val regex = Regex("'(http.*?)'") // Extract any URL inside single quotes
+            regex.find(onclick)?.groups?.get(1)?.value?.let { safeLoad(it) }
+        }
+
+        // 3. Iframes (nested /embed/)
         doc.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("src")
-            // ONLY skip if it is exactly "/embed/" or empty
-            if (src.isNotBlank() && src != "/embed/" && src != "/embed") {
-                 safeLoad(fixUrl(src))
-                 
-                 // Try to extract nested iframes from /embed/ pages
-                 if (src.contains("/embed/")) {
-                     try {
-                         val embedDoc = app.get(fixUrl(src), headers = headers).document
-                         embedDoc.select("iframe[src]").forEach { nested ->
-                             safeLoad(fixUrl(nested.attr("src")))
-                         }
-                     } catch (_: Exception) {}
-                 }
+            if (src.isNotBlank()) {
+                safeLoad(src)
+                if (src.contains("/embed/")) {
+                    try {
+                        val embedDoc = app.get(fixUrl(src), headers = headers).document
+                        embedDoc.select("iframe[src]").forEach { nested ->
+                            safeLoad(nested.attr("src"))
+                        }
+                    } catch (_: Exception) {}
+                }
             }
         }
 
-        // 3. Download Links (Host-based)
-        doc.select("a[href*='1cloudfile'], a[href*='bowfile'], a[href*='multiup'], a[href*='megaup'], a[href*='frdl'], a[href*='iplayerhls'], a[href*='peytonepre'], a[href*='filemoon'], a[href*='uqload'], a[href*='vudeo']").forEach { a ->
+        // 4. Download links
+        doc.select("a[href]").forEach { a ->
             val href = a.attr("href")
-            if (href.isNotBlank()) {
-                 // Check if it's a direct download link
-                 if (href.contains("/download/")) {
-                    val quality = a.text()
-                    val qualityValue = when {
-                        quality.contains("1080") -> 1080
-                        quality.contains("720") -> 720
-                        quality.contains("480") -> 480
-                        else -> Qualities.Unknown.value
+            if (href.contains("/download/")) {
+                val qualityText = a.text()
+                val qualityValue = when {
+                    qualityText.contains("1080") -> 1080
+                    qualityText.contains("720") -> 720
+                    qualityText.contains("480") -> 480
+                    else -> Qualities.Unknown.value
+                }
+                callback(
+                    newExtractorLink(
+                        name,
+                        "CimaClub Direct",
+                        fixUrl(href),
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityValue
                     }
-                    callback(
-                        newExtractorLink(
-                            name,
-                            "CimaClub Direct",
-                            fixUrl(href),
-                            ExtractorLinkType.VIDEO
-                        ) {
-                           this.quality = qualityValue
-                        }
-                    )
-                 } else {
-                     safeLoad(fixUrl(href))
-                 }
+                )
+            } else if (href.contains("1cloudfile") || href.contains("multiup") || href.contains("filemoon") || href.contains("megaup") || href.contains("iplayerhls") || href.contains("peytonepre") || href.contains("uqload") || href.contains("vudeo")) {
+                safeLoad(href)
             }
         }
 
