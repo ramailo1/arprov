@@ -176,53 +176,62 @@ class CimaClubProvider : MainAPI() {
             }
         }
 
-        // 1. Try iframes (even if they show 404, structure might change)
+        // 1. Extract from Server List (data-watch, data-url, etc.)
+        doc.select(".ServersList li, ul#watch li, [data-watch], [data-embed], [data-url]").forEach { element ->
+             val url = element.attr("data-watch")
+                 .ifBlank { element.attr("data-url") }
+                 .ifBlank { element.attr("data-embed") }
+                 .ifBlank { element.attr("data-player") }
+                 .ifBlank { element.attr("data-src") }
+             
+             safeLoad(fixUrl(url))
+        }
+
+        // 2. Extract Iframes (Mixed logic)
         doc.select("iframe[src]").forEach { iframe ->
-            val src = fixUrl(iframe.attr("src"))
-            if (!src.contains("/embed/")) { // Skip the broken default embed
-                safeLoad(src)
+            val src = iframe.attr("src")
+            // ONLY skip if it is exactly "/embed/" or empty
+            if (src.isNotBlank() && src != "/embed/" && src != "/embed") {
+                 safeLoad(fixUrl(src))
+                 
+                 // Try to extract nested iframes from /embed/ pages
+                 if (src.contains("/embed/")) {
+                     try {
+                         val embedDoc = app.get(fixUrl(src), headers = headers).document
+                         embedDoc.select("iframe[src]").forEach { nested ->
+                             safeLoad(fixUrl(nested.attr("src")))
+                         }
+                     } catch (_: Exception) {}
+                 }
             }
         }
 
-        // 2. Check for data attributes on various elements
-        // Added .ServersList li and ul#watch li based on user provided HTML
-        doc.select("[data-src], [data-url], [data-embed], [data-player], .ServersList li[data-watch], ul#watch li[data-watch]").forEach { element ->
-            val dataUrl = element.attr("data-watch")
-                .ifBlank { element.attr("data-src") }
-                .ifBlank { element.attr("data-url") }
-                .ifBlank { element.attr("data-embed") }
-                .ifBlank { element.attr("data-player") }
-            if (dataUrl.isNotBlank()) {
-                safeLoad(fixUrl(dataUrl))
-            }
-        }
-
-        // 3. Parse download links (MAIN SOURCE OF LINKS)
-        doc.select("a[href*='iplayerhls'], a[href*='1cloudfile'], a[href*='peytonepre'], a[href*='filemoon'], a[href*='uqload'], a[href*='multiup'], a[href*='megaup'], a[href*='vudeo']").forEach { a ->
+        // 3. Download Links (Host-based)
+        doc.select("a[href*='1cloudfile'], a[href*='bowfile'], a[href*='multiup'], a[href*='megaup'], a[href*='frdl'], a[href*='iplayerhls'], a[href*='peytonepre'], a[href*='filemoon'], a[href*='uqload'], a[href*='vudeo']").forEach { a ->
             val href = a.attr("href")
-            if (href.isNotBlank() && !href.contains("/download/")) {
-                // Only process non-download direct links
-                safeLoad(fixUrl(href))
-            } else if (href.contains("/download/")) {
-                // Handle direct download links as video sources
-                val quality = a.text()
-                val qualityValue = when {
-                    quality.contains("1080") -> 1080
-                    quality.contains("720") -> 720
-                    quality.contains("480") -> 480
-                    else -> Qualities.Unknown.value
-                }
-                
-                callback(
-                    newExtractorLink(
-                        name,
-                        "CimaClub Direct",
-                        fixUrl(href),
-                        ExtractorLinkType.VIDEO
-                    ) {
-                       this.quality = qualityValue
+            if (href.isNotBlank()) {
+                 // Check if it's a direct download link
+                 if (href.contains("/download/")) {
+                    val quality = a.text()
+                    val qualityValue = when {
+                        quality.contains("1080") -> 1080
+                        quality.contains("720") -> 720
+                        quality.contains("480") -> 480
+                        else -> Qualities.Unknown.value
                     }
-                )
+                    callback(
+                        newExtractorLink(
+                            name,
+                            "CimaClub Direct",
+                            fixUrl(href),
+                            ExtractorLinkType.VIDEO
+                        ) {
+                           this.quality = qualityValue
+                        }
+                    )
+                 } else {
+                     safeLoad(fixUrl(href))
+                 }
             }
         }
 
