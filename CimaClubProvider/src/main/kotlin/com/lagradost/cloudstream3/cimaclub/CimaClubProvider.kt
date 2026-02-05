@@ -173,42 +173,45 @@ class CimaClubProvider : MainAPI() {
             }
         }
 
+        fun isKnownStreamingHost(url: String): Boolean {
+            return url.contains("peytonepre") ||
+                   url.contains("iplayerhls") ||
+                   url.contains("mxdrop") ||
+                   url.contains("mixdrop") ||
+                   url.contains("filemoon") ||
+                   url.contains("vudeo") ||
+                   url.contains("uqload") ||
+                   url.contains("luluvdo") ||
+                   url.contains("listeamed") ||
+                   url.contains("megaup") ||
+                   url.contains("1cloudfile") ||
+                   url.contains("multiup") ||
+                   url.contains("frdl") ||
+                   url.contains("bowfile")
+        }
+
         suspend fun safeLoad(
             url: String,
             serverName: String = "CimaClub",
-            type: ExtractorLinkType = ExtractorLinkType.VIDEO,
             qualityHint: String? = null
         ) {
             if (url.isBlank()) return
             val fixed = fixUrl(url)
             if (!loaded.add(fixed)) return
 
-            val qualityValue = detectQuality(qualityHint ?: url)
-
             try {
-                // Known streaming hosts use extractor
-                if (type == ExtractorLinkType.VIDEO && (
-                        fixed.contains("peytonepre") ||
-                        fixed.contains("iplayerhls") ||
-                        fixed.contains("mxdrop") ||
-                        fixed.contains("filemoon") ||
-                        fixed.contains("vudeo") ||
-                        fixed.contains("uqload") ||
-                        fixed.contains("luluvdo") ||
-                        fixed.contains("listeamed") ||
-                        fixed.contains("megaup") ||
-                        fixed.contains("1cloudfile")
-                    )
-                ) {
+                // Known streaming hosts: use extractor (handles quality variants automatically)
+                if (isKnownStreamingHost(fixed)) {
                     loadExtractor(fixed, mainUrl, subtitleCallback, callback)
                 } else {
-                    // Direct download or unknown host
+                    // Unknown host or direct link: create manual ExtractorLink
+                    val qualityValue = detectQuality(qualityHint ?: url)
                     callback(
                         newExtractorLink(
                             name,
                             serverName,
                             fixed,
-                            type
+                            ExtractorLinkType.VIDEO
                         ) {
                             this.referer = mainUrl
                             this.quality = qualityValue
@@ -222,7 +225,7 @@ class CimaClubProvider : MainAPI() {
         doc.select("#watch li[data-watch]").forEach { li ->
             val url = li.attr("data-watch").trim()
             val serverName = li.text().trim().ifBlank { "Server" }
-            safeLoad(url, serverName, ExtractorLinkType.VIDEO)
+            safeLoad(url, serverName)
         }
 
         // 2️⃣ DownloadArea — download links
@@ -232,7 +235,7 @@ class CimaClubProvider : MainAPI() {
                 ?: a.selectFirst(".text p")?.text()?.trim()
                 ?: "Download Server"
             val qualityHint = a.text().trim()
-            safeLoad(url, serverName, ExtractorLinkType.VIDEO, qualityHint)
+            safeLoad(url, serverName, qualityHint)
         }
 
         return loaded.isNotEmpty()
