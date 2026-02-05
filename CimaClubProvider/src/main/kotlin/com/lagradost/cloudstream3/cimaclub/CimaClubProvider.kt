@@ -198,18 +198,13 @@ class CimaClubProvider : MainAPI() {
         }
     }
 
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
-        val doc = try {
-            app.get(data, headers = headers, timeout = 30).document
-        } catch (e: Exception) {
-            return false
-        }
 
         val loaded = HashSet<String>()
 
@@ -233,28 +228,30 @@ class CimaClubProvider : MainAPI() {
             }
         }
 
-        suspend fun loadFromIframe(iframeUrl: String, name: String = "Server") {
+        suspend fun loadFromIframe(iframeUrl: String, name: String = "Server", referer: String) {
             val fixed = fixUrl(iframeUrl)
             if (!loaded.add(fixed)) return
 
             try {
-                val iframeDoc = app.get(fixed, headers = headers, timeout = 30).document
+                if (isKnownHost(fixed)) {
+                    loadExtractor(fixed, referer, subtitleCallback, callback)
+                    return
+                }
+
+                val iframeDoc = app.get(fixed, headers = mapOf("Referer" to referer), timeout = 30).document
                 
-                // Try to find direct video sources in iframe
                 val videoPattern = Regex("""(https?://[^\"'<>\\s]+\\.(mp4|m3u8|mkv|avi))""", RegexOption.IGNORE_CASE)
-                val matches = videoPattern.findAll(iframeDoc.toString())
-                
-                matches.forEach { match ->
+                videoPattern.findAll(iframeDoc.toString()).forEach { match ->
                     val videoUrl = match.value
                     if (!loaded.contains(videoUrl)) {
-                        callback(
+                         callback(
                             newExtractorLink(
                                 this.name,
                                 "$name (Direct)",
                                 videoUrl,
                                 if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
-                                this.referer = mainUrl
+                                this.referer = referer
                                 this.quality = detectQuality(videoUrl)
                             }
                         )
@@ -262,7 +259,6 @@ class CimaClubProvider : MainAPI() {
                     }
                 }
 
-                // Try to extract from common embed patterns
                 val jwPattern = Regex("""file["']?\\s*:\\s*["']([^"']+)["']""")
                 jwPattern.findAll(iframeDoc.toString()).forEach { match ->
                     val videoUrl = match.groupValues[1]
@@ -281,115 +277,94 @@ class CimaClubProvider : MainAPI() {
                     }
                 }
 
-                // Try loadExtractor for known hosts
-                if (isKnownHost(fixed)) {
-                    loadExtractor(fixed, mainUrl, subtitleCallback, callback)
-                }
-
             } catch (e: Exception) {
-                // Fail silently for individual iframe
             }
         }
 
-        // ======== 1. WATCH AREA - Try to get watch page first ========
-        val watchUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
-        try {
-            val watchDoc = app.get(watchUrl, headers = headers, timeout = 30).document
-            
-            // Find iframe embeds
-            watchDoc.select("iframe[src]").forEach { iframe ->
-                val src = iframe.attr("src")
-                if (src.isNotBlank()) {
-                    loadFromIframe(src, "Watch Server")
-                }
-            }
-
-            // Find server links with data attributes
-            watchDoc.select("[data-server], [data-link], [data-src]").forEach { el ->
-                val serverUrl = el.attr("data-server").ifBlank { 
-                    el.attr("data-link").ifBlank { el.attr("data-src") }
-                }
-                if (serverUrl.isNotBlank() && serverUrl.startsWith("http")) {
-                    loadFromIframe(serverUrl, el.text().trim().ifBlank { "Server" })
-                }
-            }
-
-            // Find direct links in watch tabs
-            watchDoc.select(".watch-tab, .server-item, .tab-item").forEach { tab ->
-                val link = tab.attr("data-url").ifBlank { tab.attr("data-link") }
-                if (link.isNotBlank() && link.startsWith("http")) {
-                    loadFromIframe(link, tab.text().trim().ifBlank { "Server" })
-                }
-            }
-
+        // 1. Fetch the main data URL (Episode Page or Series Page)
+        val doc = try {
+            app.get(data, headers = headers, timeout = 30).document
         } catch (e: Exception) {
-            // Fallback to main page if watch page fails
+            return false
         }
 
-        // ======== 2. MAIN PAGE - Look for embeds ========
-        doc.select("iframe[src]").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank() && src.startsWith("http")) {
-                loadFromIframe(src, "Embed")
-            }
+        // 2. Identify the Watch Page URL
+        // Priority 1: Check for "Watch" button (red button)
+        // Priority 2: Check for existing subpath /watch
+        // Priority 3: Fallback to current page
+        
+        var watchPageUrl = data
+        val watchButton = doc.selectFirst("a.watch, a:contains(مشاهدة وتحميل), .watch-btn")
+        
+        if (watchButton != null) {
+             watchPageUrl = fixUrl(watchButton.attr("href"))
+        } else if (!data.endsWith("/watch") && !data.endsWith("/watch/")) {
+             // Fallback: try appending /watch if not found
+             val testUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
+             // Verify if this URL exists/is distinct? 
+             // Ideally we just assume it might exist if no other options
+             watchPageUrl = testUrl
         }
 
-        // ======== 3. DOWNLOAD AREA ========
-        doc.select(".DownloadArea a[href], .download-area a[href], .downloads a[href]").forEach { a ->
-            val href = a.attr("href").trim()
-            if (href.isNotBlank() && href.startsWith("http")) {
-                val name = a.text().trim().ifBlank { "Download" }
-                val quality = detectQuality(name + " " + a.parent()?.text())
-
-                if (isKnownHost(href)) {
-                    loadExtractor(href, data, subtitleCallback, callback)
-                }
-
-                // Also add direct link
-                if (loaded.add(href)) {
-                    callback(
-                        newExtractorLink(
-                            this.name,
-                            "Download: $name",
-                            href,
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = quality
-                        }
-                    )
-                }
-            }
-        }
-
-        // ======== 4. AJAX/API endpoints ========
-        // Try to find any API endpoints that return video sources
-        val apiPattern = Regex("""(https?://[^\"'<>\\s]+/ajax/[^\"'<>\\s]+)""")
-        val apiMatches = apiPattern.findAll(doc.toString())
-        apiMatches.forEach { match ->
+        // 3. Load the Watch Page content
+        val watchDoc = if (watchPageUrl != data) {
             try {
-                val apiUrl = match.value
-                val apiResponse = app.get(apiUrl, headers = headers, timeout = 15).text
-                
-                val videoPattern = Regex("""(https?://[^\"'<>\\s]+\\.(mp4|m3u8))""", RegexOption.IGNORE_CASE)
-                videoPattern.findAll(apiResponse).forEach { videoMatch ->
-                    val videoUrl = videoMatch.value
-                    if (loaded.add(videoUrl)) {
+                // IMPORTANT: Use the Episode URL as Referer when fetching Watch Page
+                app.get(watchPageUrl, headers = mapOf("Referer" to data)).document
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            doc
+        }
+
+        // 4. Scrape the Watch Page (or original doc if failed)
+        val workingDoc = watchDoc ?: doc
+        val workingUrl = if (watchDoc != null) watchPageUrl else data
+
+        // --- Scrape Iframes ---
+        workingDoc.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) loadFromIframe(src, "Watch Server", workingUrl)
+        }
+
+        // --- Scrape Server List (li[data-watch]) ---
+        workingDoc.select("#watch li[data-watch], .ServersList li[data-watch]").forEach { li ->
+             val url = li.attr("data-watch").trim()
+             val name = li.text().trim().ifBlank { "Server" }
+             if (url.isNotBlank()) loadFromIframe(url, name, workingUrl)
+        }
+        
+        // --- Scrape Download Links (DownloadArea) ---
+        // Note: Download area might be on the Episode Page (doc), not Watch Page
+        // So we check BOTH if they are different
+        val docsToCheck = if (watchDoc != null && watchDoc != doc) listOf(doc, watchDoc) else listOf(doc)
+        
+        docsToCheck.forEach { d ->
+            d.select(".DownloadArea a[href], .downloads a[href]").forEach { a ->
+                val href = a.attr("href").trim()
+                if (href.isNotBlank() && href.startsWith("http")) {
+                    val name = a.text().trim().ifBlank { "Download" }
+                    val quality = detectQuality(name + " " + a.parent()?.text())
+                    
+                    if (isKnownHost(href)) {
+                        loadExtractor(href, data, subtitleCallback, callback)
+                    }
+                    
+                    if (loaded.add(href)) {
                         callback(
                             newExtractorLink(
                                 this.name,
-                                "API Source",
-                                videoUrl,
-                                if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                "Download: $name",
+                                href,
+                                ExtractorLinkType.VIDEO
                             ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.Unknown.value
+                                this.referer = data
+                                this.quality = quality
                             }
                         )
                     }
                 }
-            } catch (e: Exception) {
-                // Fail silently
             }
         }
 
