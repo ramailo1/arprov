@@ -18,8 +18,9 @@ class CimaClubProvider : MainAPI() {
     )
 
     private val headers = mapOf(
-        "User-Agent" to USER_AGENT,
-        "Accept-Language" to "ar,en;q=0.8"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language" to "ar-SA,ar;q=0.9,en;q=0.8",
+        "Referer" to mainUrl
     )
 
     override val mainPage = mainPageOf(
@@ -28,15 +29,10 @@ class CimaClubProvider : MainAPI() {
         "$mainUrl/series/" to "أحدث المسلسلات",
     )
 
-    // =======================
-    // HELPERS
-    // =======================
-
     private fun cleanTitle(title: String): String {
         return title
             .replace(Regex("الحلقة\\s*\\d+"), "")
             .replace(Regex("الموسم\\s*\\d+"), "")
-            .replace(Regex("الوسم\\s*\\d+"), "")
             .replace(Regex("\\(.*?\\)"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -45,7 +41,7 @@ class CimaClubProvider : MainAPI() {
     private fun detectTvType(category: String, url: String, title: String = ""): TvType {
         return when {
             category.contains("انمي") || title.contains("انمي") || url.contains("anime") -> TvType.Anime
-            url.contains("/series/") || title.contains("مسلسل") || url.contains("الحلقة") -> TvType.TvSeries
+            url.contains("/series/") || title.contains("مسلسل") || title.contains("الحلقة") -> TvType.TvSeries
             else -> TvType.Movie
         }
     }
@@ -58,30 +54,18 @@ class CimaClubProvider : MainAPI() {
             ?.toIntOrNull()
     }
 
-    private fun extractLastNumber(text: String): Int? {
-        return Regex("(\\d+)")
-            .findAll(text)
-            .lastOrNull()
-            ?.value
-            ?.toIntOrNull()
-    }
-
-    // =======================
-    // MAIN PAGE
-    // =======================
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = request.data
-
         val url = when {
             baseUrl == mainUrl -> if (page == 1) baseUrl else "$mainUrl/page/$page/"
             baseUrl.contains("/movies") -> if (page == 1) baseUrl else "$baseUrl/page/$page/"
-            baseUrl.contains("/series") || baseUrl.contains("/anime") -> if (page == 1) baseUrl else "$baseUrl?offset=$page"
+            baseUrl.contains("/series") -> if (page == 1) baseUrl else "$baseUrl?offset=$page"
             else -> baseUrl
         }
 
         val doc = app.get(url, headers = headers, timeout = 30).document
-        val items = doc.select("#MainFiltar .Small--Box")
+        // Fixed selector - items are direct children with class Small--Box
+        val items = doc.select("#MainFiltar > .Small--Box, .Small--Box")
         val home = items.mapNotNull { it.toSearchResponse() }
 
         return newHomePageResponse(request.name, home)
@@ -90,8 +74,9 @@ class CimaClubProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         val a = selectFirst("a") ?: return null
         val link = fixUrl(a.attr("href"))
-
-        val rawTitle = selectFirst("inner--title h2")?.text() ?: return null
+        
+        // Try multiple selectors for title
+        val rawTitle = selectFirst("h2, .inner--title h2")?.text() ?: return null
         val title = cleanTitle(rawTitle)
 
         val poster = selectFirst("img")?.let {
@@ -102,10 +87,7 @@ class CimaClubProvider : MainAPI() {
         val type = detectTvType(category, link, rawTitle)
 
         return when (type) {
-            TvType.TvSeries -> newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-            }
-            TvType.Anime -> newAnimeSearchResponse(title, link, TvType.Anime) {
+            TvType.TvSeries, TvType.Anime -> newTvSeriesSearchResponse(title, link, type) {
                 this.posterUrl = poster?.let { fixUrl(it) }
             }
             else -> newMovieSearchResponse(title, link, TvType.Movie) {
@@ -114,19 +96,11 @@ class CimaClubProvider : MainAPI() {
         }
     }
 
-    // =======================
-    // SEARCH
-    // =======================
-
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=${query.replace(" ", "+")}"
         val doc = app.get(url, headers = headers, timeout = 30).document
         return doc.select(".Small--Box").mapNotNull { it.toSearchResponse() }
     }
-
-    // =======================
-    // LOAD PAGE
-    // =======================
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = headers, timeout = 30).document
@@ -138,39 +112,26 @@ class CimaClubProvider : MainAPI() {
         val description = doc.selectFirst(".Story, .StoryArea")?.text()?.trim()
         val category = doc.selectFirst(".category")?.text() ?: ""
 
-        val episodeElements = doc.select(".allepcont a, .Episodes-List .Small--Box, .BlocksHolder .Small--Box")
-
         val tvType = detectTvType(category, url, rawTitle)
-        val isSeries = tvType == TvType.TvSeries || tvType == TvType.Anime || episodeElements.isNotEmpty()
-
-        if (isSeries) {
-            val episodes = episodeElements.mapNotNull { ep ->
-                val a = ep.selectFirst("a") ?: ep
-                val epUrl = fixUrl(a.attr("href"))
-
-                val name = if (ep.tagName() == "a") {
-                    ep.text().ifBlank { ep.attr("title") }
-                } else {
-                    ep.selectFirst("h2")?.text() ?: a.attr("title")
+        
+        // Check if it's an episode page (contains "الحلقة" in title or URL)
+        val isEpisodePage = rawTitle.contains("الحلقة") || url.contains("الحلقة")
+        
+        if (isEpisodePage || tvType != TvType.Movie) {
+            // For episode pages, return single episode pointing to itself
+            val episodeNumber = extractEpisodeNumber(rawTitle)
+            val episodes = listOf(
+                newEpisode(url) {
+                    this.name = rawTitle
+                    this.episode = episodeNumber
                 }
-
-                val number = extractEpisodeNumber(name) ?: extractLastNumber(name)
-
-                newEpisode(epUrl) {
-                    this.name = name
-                    this.episode = number
-                }
-            }.distinctBy { it.data }
-
-            // 🔹 Key Fix: Play clicked episode if available
-            val clickedEpisode = episodes.find { it.data == url } ?: episodes.firstOrNull()
-            val playUrl = clickedEpisode?.data ?: url
+            )
 
             return newTvSeriesLoadResponse(
                 title,
-                playUrl,
+                url,
                 tvType,
-                episodes.sortedBy { it.episode ?: 0 }
+                episodes
             ) {
                 this.posterUrl = poster?.let { fixUrl(it) }
                 this.plot = description
@@ -188,10 +149,6 @@ class CimaClubProvider : MainAPI() {
         }
     }
 
-    // =======================
-    // LINK EXTRACTOR
-    // =======================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -200,7 +157,7 @@ class CimaClubProvider : MainAPI() {
     ): Boolean {
 
         val watchUrl = if (data.contains("/watch")) data else "${data.trimEnd('/')}/watch/"
-
+        
         val doc = try {
             app.get(watchUrl, headers = headers, timeout = 30).document
         } catch (_: Exception) {
@@ -212,59 +169,63 @@ class CimaClubProvider : MainAPI() {
         suspend fun safeLoad(url: String) {
             if (url.isBlank()) return
             if (!loaded.add(url)) return
-            loadExtractor(url, mainUrl, subtitleCallback, callback)
+            try {
+                loadExtractor(url, mainUrl, subtitleCallback, callback)
+            } catch (e: Exception) {
+                // Silent fail for extractor issues
+            }
         }
 
-        // iframe servers
-        for (iframe in doc.select("iframe")) {
-            safeLoad(fixUrl(iframe.attr("src")))
+        // 1. Try iframes (even if they show 404, structure might change)
+        doc.select("iframe[src]").forEach { iframe ->
+            val src = fixUrl(iframe.attr("src"))
+            if (!src.contains("/embed/")) { // Skip the broken default embed
+                safeLoad(src)
+            }
         }
 
-        // JS / data servers (data-embed, data-url, data-watch)
-        for (element in doc.select("[data-embed], [data-url], [data-watch]")) {
-            val url = element.attr("data-watch")
-                .ifBlank { element.attr("data-embed") }
+        // 2. Check for data attributes on various elements
+        // Added .ServersList li and ul#watch li based on user provided HTML
+        doc.select("[data-src], [data-url], [data-embed], [data-player], .ServersList li[data-watch], ul#watch li[data-watch]").forEach { element ->
+            val dataUrl = element.attr("data-watch")
+                .ifBlank { element.attr("data-src") }
                 .ifBlank { element.attr("data-url") }
-            safeLoad(fixUrl(url))
+                .ifBlank { element.attr("data-embed") }
+                .ifBlank { element.attr("data-player") }
+            if (dataUrl.isNotBlank()) {
+                safeLoad(fixUrl(dataUrl))
+            }
         }
 
-        // anchor servers (fallback)
-        for (a in doc.select(".Servers-List a, .Watch-Servers-List a, .Watch-Servers-List li a")) {
-            safeLoad(fixUrl(a.attr("href")))
-        }
-
-        // servers List (li elements with data-watch)
-        for (li in doc.select(".Watch-Servers-List li, .Servers-List li")) {
-             val url = li.attr("data-watch")
-             safeLoad(fixUrl(url))
-        }
-
-        // download links → direct video
-        for (a in doc.select(".Download-Links a")) {
-            val href = fixUrl(a.attr("href"))
-            val quality = a.text()
-
-            callback(
-                newExtractorLink(
-                    name,
-                    "CimaClub Direct",
-                    href,
-                    ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = getQualityFromName(quality)
+        // 3. Parse download links (MAIN SOURCE OF LINKS)
+        doc.select("a[href*='iplayerhls'], a[href*='1cloudfile'], a[href*='peytonepre'], a[href*='filemoon'], a[href*='uqload'], a[href*='multiup'], a[href*='megaup'], a[href*='vudeo']").forEach { a ->
+            val href = a.attr("href")
+            if (href.isNotBlank() && !href.contains("/download/")) {
+                // Only process non-download direct links
+                safeLoad(fixUrl(href))
+            } else if (href.contains("/download/")) {
+                // Handle direct download links as video sources
+                val quality = a.text()
+                val qualityValue = when {
+                    quality.contains("1080") -> 1080
+                    quality.contains("720") -> 720
+                    quality.contains("480") -> 480
+                    else -> Qualities.Unknown.value
                 }
-            )
+                
+                callback(
+                    newExtractorLink(
+                        name,
+                        "CimaClub Direct",
+                        fixUrl(href),
+                        ExtractorLinkType.VIDEO
+                    ) {
+                       this.quality = qualityValue
+                    }
+                )
+            }
         }
 
-        return true
-    }
-
-    private fun getQualityFromName(text: String): Int {
-        return when {
-            text.contains("1080") -> 1080
-            text.contains("720") -> 720
-            text.contains("480") -> 480
-            else -> Qualities.Unknown.value
-        }
+        return loaded.isNotEmpty()
     }
 }
