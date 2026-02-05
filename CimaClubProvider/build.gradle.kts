@@ -17,7 +17,7 @@ cloudstream {
     
     // The authors of this extension
     authors = listOf("ramailo1")
-    description = "CimaClub Provider (Working)"
+    description = "CimaClub Provider (In Progress)"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimaclub"

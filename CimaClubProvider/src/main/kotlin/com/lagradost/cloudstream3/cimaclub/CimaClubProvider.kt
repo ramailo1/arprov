@@ -38,13 +38,13 @@ class CimaClubProvider : MainAPI() {
     private fun getRandomDelay(): Long = (500..1500).random().toLong()
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies" to "أحدث الأفلام",
-        "$mainUrl/series" to "أحدث المسلسلات",
-        "$mainUrl/anime" to "أحدث الانمي"
+        "$mainUrl/movies/" to "أحدث الأفلام",
+        "$mainUrl/series/" to "أحدث المسلسلات",
+        "$mainUrl/anime/" to "أحدث الانمي"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page > 1) "${request.data}/page/$page" else request.data
+        val url = if (page > 1) "${request.data}page/$page/" else request.data
         val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()), timeout = 60).document
         
         // Add random delay to avoid detection
@@ -59,9 +59,9 @@ class CimaClubProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val linkElement = this.selectFirst("a") ?: return null
-        val title = this.selectFirst(".Box-Title, .Title")?.text()?.trim() ?: linkElement.attr("title").trim()
+        val title = this.selectFirst(".Box-Title, .Title, h2")?.text()?.trim() ?: linkElement.attr("title").trim()
         val href = fixUrl(linkElement.attr("href"))
-        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: "")
+        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-src") ?: "")
         
         // CimaClub specific: Sometimes they put the year in a span or div
         val year = this.selectFirst(".year")?.text()?.trim()?.toIntOrNull()
@@ -100,7 +100,8 @@ class CimaClubProvider : MainAPI() {
         // Check if it's a series or has episodes
         // CimaClub puts episodes in .BlocksHolder usually
         val episodeElements = doc.select(".Episodes-List .Small--Box, .BlocksHolder .Small--Box")
-        val isSeries = episodeElements.isNotEmpty() || url.contains("/series/")
+        // Check if it is series by category or url
+        val isSeries = episodeElements.isNotEmpty() || url.contains("/series/") || doc.select(".Episodes-List, .BlocksHolder").isNotEmpty()
         
         if (isSeries) {
             val episodes = ArrayList<Episode>()
@@ -118,8 +119,6 @@ class CimaClubProvider : MainAPI() {
                     this.episode = episodeNumber
                 })
             }
-            // If no episodes found but it's a series page, it might be an empty season or single season
-             // Sometimes the page IS the season page.
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
