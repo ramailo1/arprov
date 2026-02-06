@@ -210,6 +210,8 @@ class CimaLeekProvider : MainAPI() {
         } else if (data.contains("/movies/") && !data.contains("/watch/")) {
              // Fallback for some themes
             watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
+        } else if (data.contains("/episodes/") && !data.contains("/watch/")) {
+            watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
         }
 
         // 2. Load the actual Watch Page if distinct
@@ -242,7 +244,44 @@ class CimaLeekProvider : MainAPI() {
             }
         }
 
-        // 3. Extract Servers using corrected selectors (.serversList, .nav-tabs)
+        // 3. AJAX Player Support (Dooplay/Lalaplay)
+        val ajaxServers = watchDoc.select(".lalaplay_player_option")
+        if (ajaxServers.isNotEmpty()) {
+            val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
+            
+            for (server in ajaxServers) {
+                val postId = server.attr("data-post")
+                val nume = server.attr("data-nume")
+                val type = server.attr("data-type")
+                val serverName = server.text().trim().ifBlank { "Server $nume" }
+                
+                if (postId.isNotBlank() && nume.isNotBlank()) {
+                    try {
+                        val response = app.post(
+                            ajaxUrl,
+                            headers = requestHeaders,
+                            data = mapOf(
+                                "action" to "doo_player_ajax",
+                                "post" to postId,
+                                "nume" to nume,
+                                "type" to type
+                            )
+                        )
+                        
+                        val json = response.parsedSafe<AjaxResponse>()
+                        val embedUrl = json?.embed_url
+                        
+                        if (!embedUrl.isNullOrBlank()) {
+                            loadLink(embedUrl, serverName)
+                        }
+                    } catch (e: Exception) {
+                        // Silent fail
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback: Extract Servers using old method
         for (element in watchDoc.select(".serversList li, .nav-tabs li, .server-item, [data-server], .watch-links a")) {
             // Check formatted data attributes first
             val url = element.attr("data-link").ifBlank { 
@@ -259,7 +298,7 @@ class CimaLeekProvider : MainAPI() {
             }
         }
         
-        // 4. Try Iframe directly on the watch page
+        // 5. Try Iframe directly on the watch page
         for (iframe in watchDoc.select("iframe")) {
              val src = iframe.attr("src")
              if (src.isNotBlank()) {
@@ -267,7 +306,7 @@ class CimaLeekProvider : MainAPI() {
              }
         }
         
-        // 5. Download Links
+        // 6. Download Links
         for (a in watchDoc.select("a.download, .download-links a, a:contains(تحميل)")) {
              val href = a.attr("href")
              if (href.startsWith("http")) {
@@ -280,4 +319,8 @@ class CimaLeekProvider : MainAPI() {
 
         return true
     }
+    
+    data class AjaxResponse(
+        val embed_url: String?
+    )
 }
