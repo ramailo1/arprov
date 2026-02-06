@@ -11,6 +11,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Collections
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -220,8 +221,8 @@ class CimaLeekProvider : MainAPI() {
 
                 if (epNum != null) {
                     episodes.add(newEpisode(epUrl) {
-                        name = a.text().cleanTitle().ifBlank { "Episode $epNum" }
-                        season = sFromEpUrl ?: seasonNumFromUrl
+                        name = "الحلقة $epNum"
+                        season = sFromEpUrl ?: seasonNumFromUrl ?: 1
                         episode = epNum
                     })
                 }
@@ -235,14 +236,16 @@ class CimaLeekProvider : MainAPI() {
             if (epNum != null) {
                 episodes.add(newEpisode(fixedUrl) {
                     name = title
-                    season = s
+                    season = s ?: 1
                     episode = epNum
                 })
             }
         } else {
             // Series or Season
+            val isSeason = isSeasonUrl(fixedUrl)
+            val seasonFromPage = parseSeasonFromSeasonUrl(fixedUrl)
+            
             // Strategy: Parse episodes from LOCAL page first (often S1 or latest season)
-            // Then fetch other season pages to fill gaps.
             val localEpAnchors = doc.select("""a[href*="/episodes/"]""")
             for (a in localEpAnchors) {
                 val epUrl = normalizeUrl(a.attr("href"))
@@ -250,19 +253,20 @@ class CimaLeekProvider : MainAPI() {
                 val epNum = eFromEpUrl ?: a.text().getIntFromText()
                 if (epNum != null) {
                     episodes.add(newEpisode(epUrl) {
-                        name = a.text().cleanTitle().ifBlank { "Episode $epNum" }
-                        season = sFromEpUrl
+                        name = "الحلقة $epNum"
+                        season = sFromEpUrl ?: seasonFromPage ?: 1
                         episode = epNum
                     })
                 }
             }
 
-            val seasonLinks = doc.select("""a[href*="/seasons/"]""")
-                .map { normalizeUrl(it.attr("href")) }
-                .distinct()
-                .filter { it.startsWith(mainUrl) && it != fixedUrl } // Don't re-fetch current page if it lays in this list
+            // Only fetch other seasons if we are NOT on a specific season page
+            if (!isSeason) {
+                val seasonLinks = doc.select("""a[href*="/seasons/"]""")
+                    .map { normalizeUrl(it.attr("href")) }
+                    .distinct()
+                    .filter { it.startsWith(mainUrl) && it != fixedUrl }
 
-            if (seasonLinks.isNotEmpty()) {
                 for (sUrl in seasonLinks) addEpisodesFromSeasonPage(sUrl)
             }
         }
@@ -272,7 +276,7 @@ class CimaLeekProvider : MainAPI() {
             .sortedWith(compareBy<Episode> { it.season ?: 0 }.thenBy { it.episode ?: 0 })
 
         // Prefer canonical /series/ URL as the "show url" if we came from season/episode page
-        val showUrl = canonicalSeriesUrl ?: fixedUrl
+        val showUrl = canonicalSeriesUrl?.takeIf { it.contains("/series/") } ?: fixedUrl
 
         return newTvSeriesLoadResponse(title, showUrl, TvType.TvSeries, cleanedEpisodes) {
             posterUrl = poster
@@ -312,13 +316,17 @@ class CimaLeekProvider : MainAPI() {
         val watchUrl = if (fixedData.contains("/watch/")) fixedData else ensureWatchUrl(fixedData)
         val watchDoc = app.get(watchUrl).document
 
-        val loaded = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+        val visited = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+        val foundFastLink = AtomicBoolean(false)
 
         suspend fun emitLink(url: String, name: String, quality: Int = Qualities.Unknown.value) {
+            if (foundFastLink.get()) return
+
             val u = normalizeUrl(url)
-            if (!u.startsWith("http") || !loaded.add(u)) return
+            if (!u.startsWith("http") || !visited.add(u)) return
 
             if (u.contains(".m3u8", ignoreCase = true) || u.contains(".mp4", ignoreCase = true)) {
+                foundFastLink.set(true)
                 callback(
                     newExtractorLink(
                         source = this.name,
@@ -345,6 +353,8 @@ class CimaLeekProvider : MainAPI() {
             coroutineScope {
                 ajaxCandidates.map { server ->
                     async {
+                        if (foundFastLink.get()) return@async
+
                         val postId = server.attr("data-post")
                         val nume = server.attr("data-nume")
                         val type = server.attr("data-type")
@@ -382,9 +392,8 @@ class CimaLeekProvider : MainAPI() {
             if (u.isNotBlank()) emitLink(u, el.text().trim().ifBlank { "Server" })
         }
 
-        for (iframe in watchDoc.select("iframe[src]")) {
-            emitLink(iframe.attr("src"), "Embed")
-        }
+        // iframe loop removed per user optimization
+
 
         for (a in watchDoc.select("""a.download, .download-links a, a:contains(تحميل)""")) {
             val href = a.attr("href")
