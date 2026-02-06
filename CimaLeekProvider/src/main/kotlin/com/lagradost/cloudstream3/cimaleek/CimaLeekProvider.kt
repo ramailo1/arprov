@@ -325,14 +325,19 @@ class CimaLeekProvider : MainAPI() {
             val u = normalizeUrl(url)
             if (!u.startsWith("http") || !visited.add(u)) return
 
-            if (u.contains(".m3u8", ignoreCase = true) || u.contains(".mp4", ignoreCase = true)) {
+            // Fix Error 3003: "contains" is too loose (matches embed.php?s=video.mp4).
+            // We must check if the PATH actually ends with a video extension.
+            val cleanPath = u.substringBefore("?")
+            val isDirectVideo = cleanPath.endsWith(".m3u8", true) || cleanPath.endsWith(".mp4", true)
+
+            if (isDirectVideo) {
                 foundFastLink.set(true)
                 callback(
                     newExtractorLink(
                         source = this.name,
                         name = "$name (Direct)",
                         url = u,
-                        type = if (u.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        type = if (cleanPath.endsWith(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) { this.quality = quality }
                 )
             } else {
