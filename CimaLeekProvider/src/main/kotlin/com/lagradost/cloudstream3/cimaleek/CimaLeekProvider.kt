@@ -11,7 +11,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Collections
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -317,11 +316,8 @@ class CimaLeekProvider : MainAPI() {
         val watchDoc = app.get(watchUrl).document
 
         val visited = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
-        val foundFastLink = AtomicBoolean(false)
 
         suspend fun emitLink(url: String, name: String, quality: Int = Qualities.Unknown.value) {
-            if (foundFastLink.get()) return
-
             val u = normalizeUrl(url)
             if (!u.startsWith("http") || !visited.add(u)) return
 
@@ -331,7 +327,6 @@ class CimaLeekProvider : MainAPI() {
             val isDirectVideo = cleanPath.endsWith(".m3u8", true) || cleanPath.endsWith(".mp4", true)
 
             if (isDirectVideo) {
-                foundFastLink.set(true)
                 callback(
                     newExtractorLink(
                         source = this.name,
@@ -358,8 +353,6 @@ class CimaLeekProvider : MainAPI() {
             coroutineScope {
                 ajaxCandidates.map { server ->
                     async {
-                        if (foundFastLink.get()) return@async
-
                         val postId = server.attr("data-post")
                         val nume = server.attr("data-nume")
                         val type = server.attr("data-type")
