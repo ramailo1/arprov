@@ -125,7 +125,6 @@ class CimaLeekProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/b5/" to "الرئيسية",
         "$mainUrl/recent-89541/" to "المضاف حديثاً",
         "$mainUrl/movies-list/" to "أحدث الأفلام",
         "$mainUrl/series-list/" to "أحدث المسلسلات",
