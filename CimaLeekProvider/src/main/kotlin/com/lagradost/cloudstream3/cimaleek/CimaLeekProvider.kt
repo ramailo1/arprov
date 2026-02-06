@@ -7,6 +7,11 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import java.util.concurrent.ConcurrentHashMap
+import java.util.Collections
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -296,8 +301,7 @@ class CimaLeekProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        politeDelay(1200, 2600)
-
+        // Removed politeDelay here to speed up loading (approx -2s)
         val fixedData = normalizeUrl(data)
 
         // Only movies + episodes are playable.
@@ -308,7 +312,7 @@ class CimaLeekProvider : MainAPI() {
         val watchUrl = if (fixedData.contains("/watch/")) fixedData else ensureWatchUrl(fixedData)
         val watchDoc = app.get(watchUrl).document
 
-        val loaded = HashSet<String>()
+        val loaded = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
         suspend fun emitLink(url: String, name: String, quality: Int = Qualities.Unknown.value) {
             val u = normalizeUrl(url)
@@ -332,34 +336,39 @@ class CimaLeekProvider : MainAPI() {
         val ajaxCandidates = watchDoc.select(".lalaplay_player_option, [data-post][data-nume], [id^='player-option-']")
         if (ajaxCandidates.isNotEmpty()) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
+            // X-Requested-With is often required for these AJAX endpoints
             val ajaxHeaders = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
                 "Referer" to watchUrl
             )
 
-            for (server in ajaxCandidates) {
-                val postId = server.attr("data-post")
-                val nume = server.attr("data-nume")
-                val type = server.attr("data-type")
-                val serverName = server.text().trim().ifBlank { "Server $nume" }
+            coroutineScope {
+                ajaxCandidates.map { server ->
+                    async {
+                        val postId = server.attr("data-post")
+                        val nume = server.attr("data-nume")
+                        val type = server.attr("data-type")
+                        val serverName = server.text().trim().ifBlank { "Server $nume" }
 
-                if (postId.isBlank() || nume.isBlank()) continue
-
-                runCatching {
-                    val response = app.post(
-                        url = ajaxUrl,
-                        headers = ajaxHeaders,
-                        data = mapOf(
-                            "action" to "doo_player_ajax",
-                            "post" to postId,
-                            "nume" to nume,
-                            "type" to type
-                        )
-                    )
-                    val json = response.parsedSafe<AjaxResponse>()
-                    val embedUrl = json?.embed_url
-                    if (!embedUrl.isNullOrBlank()) emitLink(embedUrl, serverName)
-                }
+                        if (postId.isNotBlank() && nume.isNotBlank()) {
+                            runCatching {
+                                val response = app.post(
+                                    url = ajaxUrl,
+                                    headers = ajaxHeaders,
+                                    data = mapOf(
+                                        "action" to "doo_player_ajax",
+                                        "post" to postId,
+                                        "nume" to nume,
+                                        "type" to type
+                                    )
+                                )
+                                val json = response.parsedSafe<AjaxResponse>()
+                                val embedUrl = json?.embed_url
+                                if (!embedUrl.isNullOrBlank()) emitLink(embedUrl, serverName)
+                            }
+                        }
+                    }
+                }.awaitAll()
             }
         }
 
