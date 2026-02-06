@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 
 class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://cimalek.art"
+    override var mainUrl = "https://cimalek.art/b5/"
     override var name = "CimaLeek"
     override val usesWebView = false
     override val hasMainPage = true
