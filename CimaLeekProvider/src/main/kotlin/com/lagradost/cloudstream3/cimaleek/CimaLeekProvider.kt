@@ -14,6 +14,10 @@ class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimalek.art"
     override var name = "CimaLeek"
+
+    companion object {
+        const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
@@ -134,8 +138,14 @@ class CimaLeekProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         politeDelay()
         val url = if (page == 1) request.data else "${request.data}page/$page/"
-        val doc = app.get(url, headers = requestHeaders()).document
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        )
+        val doc = app.get(url, headers = headers).document
 
+        // Check if we got a valid page or if we need to warn (logging usually not visible, but relying on doc)
         val cards = doc.select(".item").ifEmpty {
             doc.select(
                 """
@@ -157,7 +167,12 @@ class CimaLeekProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         politeDelay()
-        val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders()).document
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        )
+        val doc = app.get("$mainUrl/search/?s=$query", headers = headers).document
 
         val cards = doc.select(".item").ifEmpty { 
              doc.select("#archive-content > a, article, .post, .result-item")
