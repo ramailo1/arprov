@@ -40,19 +40,23 @@ class CimaLeekProvider : MainAPI() {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
     
-    // Better title cleaning similar to CimaClub
+    // Improved title cleaning
     private fun String.cleanTitle(): String {
         return this.replace("مشاهدة|مترجم|مسلسل|كامل|جميع الحلقات|الموسم|الحلقة|انمي".toRegex(), "")
-            .replace(Regex("\\(.*?\\)"), "") // Remove content in brackets
-            .replace(Regex("\\s+"), " ")   // Remove extra spaces
+            .replace(Regex("\\(.*?\\)"), "") 
+            .replace(Regex("\\s+"), " ")   
             .trim()
     }
     
+    // Phase 2 Fix: Updated selectors based on browser analysis
     private fun Element.toSearchResponse(): SearchResponse? {
-        val titleElement = selectFirst(".data .title, h2.title, h3.title, .video-title") ?: return null
+        // Home page items are inside .item
+        // Title is often in .data .title or just .title
+        val titleElement = selectFirst(".data .title, h3.title, .title, .video-title") ?: return null
         val title = titleElement.text().cleanTitle()
         
-        val posterElement = selectFirst("img.film-poster-img, img")
+        // Poster is usually .film-poster-img or inside .poster
+        val posterElement = selectFirst("img.film-poster-img, .poster img, img")
         val posterUrl = posterElement?.let { 
              it.attr("data-src").ifEmpty { it.attr("src") } 
         }
@@ -83,12 +87,12 @@ class CimaLeekProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
         Thread.sleep((1000..3000).random().toLong())
         
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         
         val document = app.get(url, headers = requestHeaders).document
+        // Phase 2 Fix: Ensure we target .item correctly
         val home = document.select(".item, .video-item, .movie-item, .post-item").mapNotNull {
             it.toSearchResponse()
         }
@@ -100,7 +104,6 @@ class CimaLeekProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
@@ -114,19 +117,21 @@ class CimaLeekProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
         Thread.sleep((1500..3500).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
-        val title = doc.select("h1.title, .video-title").text().cleanTitle()
+        
+        // Phase 2 Fix: Use the new selectors found in analysis
+        val title = doc.select("h1, h1.title, .video-title").text().cleanTitle()
         val isMovie = !url.contains("/series/|/مسلسل/|/season/".toRegex())
 
-        val posterUrl = doc.select(".poster img, .video-poster img").attr("src")
+        val posterUrl = doc.select(".m_poster img, .poster img, .video-poster img").attr("src")
         val rating = doc.select(".rating, .imdb").text().getIntFromText()
-        val synopsis = doc.select(".description, .summary, .plot").text()
-        val year = doc.select(".year, .date").text().getIntFromText()
+        // Phase 2 Fix: Added .story and .text and .m_desc
+        val synopsis = doc.select(".story, .text, .m_desc, .description, .summary, .plot").text()
+        val year = doc.select(".year, .date, .tick-item").text().getIntFromText()
         val tags = doc.select(".genre a, .category a, .tags a").map { it.text() }
-        val recommendations = doc.select(".related-videos .video-item, .similar-videos .video-item").mapNotNull { element ->
+        val recommendations = doc.select(".related-videos .item, .similar-videos .item").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -146,14 +151,14 @@ class CimaLeekProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            // Using for loop instead of forEach
-            for (episode in doc.select(".episodes-list li, .episode-item")) {
-                val epLink = episode.select("a").attr("href")
+            // Phase 2 Fix: Targeted .episodesList (CamelCase) as seen in browser
+            for (episode in doc.select(".episodesList a, .episodes-list a, .episode-item a")) {
+                val epLink = episode.attr("href")
                 if(epLink.isNotBlank()) {
                      episodes.add(newEpisode(epLink) {
-                        this.name = episode.select("a").text().cleanTitle()
+                        this.name = episode.text().cleanTitle()
                         this.season = 0
-                        this.episode = episode.select("a").text().getIntFromText()
+                        this.episode = episode.text().getIntFromText()
                     })
                 }
             }
@@ -189,10 +194,33 @@ class CimaLeekProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
         Thread.sleep((2000..4000).random().toLong())
         
+        // 1. Fetch the data page (Movie or Episode)
         val doc = app.get(data, headers = requestHeaders).document
+        
+        // Phase 2 Fix: Check for Watch Button (.watchBTn) to navigate deeper
+        var watchUrl = data
+        val watchBtn = doc.selectFirst("a.watchBTn, a.watch-btn, a:contains(مشاهدة)")
+        if (watchBtn != null) {
+            val href = watchBtn.attr("href")
+            if (href.isNotBlank()) {
+                watchUrl = fixUrl(href)
+            }
+        } else if (data.contains("/movies/") && !data.contains("/watch/")) {
+             // Fallback for some themes
+            watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
+        }
+
+        // 2. Load the actual Watch Page if distinct
+        val watchDoc = if (watchUrl != data) {
+             try {
+                 app.get(watchUrl, headers = requestHeaders).document
+             } catch(e: Exception) { doc }
+        } else {
+             doc
+        }
+
         val loaded = HashSet<String>()
         
         suspend fun loadLink(url: String, name: String, quality: Int = Qualities.Unknown.value) {
@@ -214,12 +242,14 @@ class CimaLeekProvider : MainAPI() {
             }
         }
 
-        // 1. Try servers list
-        // Using for loop instead of forEach
-        for (element in doc.select(".servers-list li, .watch-links a, .download-links a, .video-servers a")) {
+        // 3. Extract Servers using corrected selectors (.serversList, .nav-tabs)
+        for (element in watchDoc.select(".serversList li, .nav-tabs li, .server-item, [data-server], .watch-links a")) {
+            // Check formatted data attributes first
             val url = element.attr("data-link").ifBlank { 
-                element.attr("data-url").ifBlank { 
-                    element.attr("href") 
+                element.attr("data-url").ifBlank {
+                    element.attr("data-src").ifBlank {
+                         element.attr("href") 
+                    }
                 } 
             }
             val name = element.text().trim().ifBlank { "Server" }
@@ -229,12 +259,22 @@ class CimaLeekProvider : MainAPI() {
             }
         }
         
-        // 2. Try iframe extraction directly
-        // Using for loop instead of forEach
-        for (iframe in doc.select("iframe")) {
+        // 4. Try Iframe directly on the watch page
+        for (iframe in watchDoc.select("iframe")) {
              val src = iframe.attr("src")
              if (src.isNotBlank()) {
                  loadLink(fixUrl(src), "Embed")
+             }
+        }
+        
+        // 5. Download Links
+        for (a in watchDoc.select("a.download, .download-links a, a:contains(تحميل)")) {
+             val href = a.attr("href")
+             if (href.startsWith("http")) {
+                 val name = a.text()
+                 val quality = detectQuality(name)
+                 // Usually download links are direct or link to file hosts
+                 loadLink(href, "Download $name", quality)
              }
         }
 
