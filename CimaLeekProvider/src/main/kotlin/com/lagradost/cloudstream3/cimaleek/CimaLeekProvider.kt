@@ -322,7 +322,7 @@ class CimaLeekProvider : MainAPI() {
         }
 
         // 1) DooPlay AJAX servers (Cloud_V2/V3/V5, doodstream, etc. appear as server names on the watch page)
-        val ajaxCandidates = watchDoc.select(".lalaplay_player_option, [data-post][data-nume]")
+        val ajaxCandidates = watchDoc.select(".lalaplay_player_option, [data-post][data-nume], [id^='player-option-']")
         if (ajaxCandidates.isNotEmpty()) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
             val ajaxHeaders = requestHeaders(
