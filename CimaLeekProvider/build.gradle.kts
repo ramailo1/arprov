@@ -2,15 +2,15 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "CimaLeek Provider - (In Progress)"
+    description = "CimaLeek Provider - Working"
 
     language = "ar"
 	
-    status = 1
+    status = 3
 
     tvTypes = listOf( "TvSeries" , "Movie", "Anime" )
 
-    iconUrl = "https://www.google.com/s2/favicons?domain=m.cimaleek.to&sz=%size%"
+    iconUrl = "https://cimalek.art/wp-content/uploads/2022/11/cropped-fav-2-192x192.png"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimaleek"

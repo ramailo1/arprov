@@ -67,6 +67,7 @@ graph TD
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** (Working) | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** (Working) | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
+| **CimaLeek** (New) | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
@@ -88,7 +89,12 @@ The following providers are currently inaccessible due to high-security Cloudfla
 ## 🔧 Installation & Setup
 
 ### Instant Repositories
-Copy and paste this URL into your CloudStream settings:
+You can use the **shortcode** directly in CloudStream:
+```text
+arprov
+```
+
+Or copy and paste this URL into your CloudStream settings:
 
 ```text
 https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
