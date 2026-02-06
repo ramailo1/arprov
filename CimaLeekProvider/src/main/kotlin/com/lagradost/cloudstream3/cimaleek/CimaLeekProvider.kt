@@ -189,7 +189,12 @@ class CimaLeekProvider : MainAPI() {
     // --- Load details + episodes ---
     override suspend fun load(url: String): LoadResponse {
         politeDelay(1200, 2500)
-        val doc = app.get(url, headers = requestHeaders()).document
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        )
+        val doc = app.get(url, headers = headers).document
 
         val canonicalSeriesUrl = doc.findCanonicalSeriesUrl()
         val fixedUrl = normalizeUrl(url)
@@ -339,7 +344,11 @@ class CimaLeekProvider : MainAPI() {
         }
 
         val watchUrl = if (fixedData.contains("/watch/")) fixedData else ensureWatchUrl(fixedData)
-        val headers = requestHeaders(mapOf("Referer" to fixedData))
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to fixedData,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        )
         val watchDoc = app.get(watchUrl, headers = headers).document
 
         val loaded = HashSet<String>()
@@ -366,11 +375,11 @@ class CimaLeekProvider : MainAPI() {
         val ajaxCandidates = watchDoc.select(".lalaplay_player_option, [data-post][data-nume], [id^='player-option-']")
         if (ajaxCandidates.isNotEmpty()) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-            val ajaxHeaders = requestHeaders(
-                mapOf(
-                    "Referer" to watchUrl,
-                    "X-Requested-With" to "XMLHttpRequest"
-                )
+            val ajaxHeaders = mapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to watchUrl,
+                "X-Requested-With" to "XMLHttpRequest",
+                "Accept" to "application/json, text/javascript, */*; q=0.01"
             )
 
             for (server in ajaxCandidates) {
