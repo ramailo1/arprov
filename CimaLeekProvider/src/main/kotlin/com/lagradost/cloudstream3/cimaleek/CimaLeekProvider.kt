@@ -118,11 +118,11 @@ class CimaLeekProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
+        "$mainUrl/b5/" to "الرئيسية",
+        "$mainUrl/recent-89541/" to "المضاف حديثاً",
         "$mainUrl/movies-list/" to "أحدث الأفلام",
         "$mainUrl/series-list/" to "أحدث المسلسلات",
         "$mainUrl/seasons-list/" to "المواسم",
-        "$mainUrl/episodes-list/" to "الحلقات",
-        "$mainUrl/recent-89541/" to "المضاف حديثاً",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -130,24 +130,24 @@ class CimaLeekProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val doc = app.get(url, headers = requestHeaders()).document
 
-        // Desktop view: .item
-        // Mobile/Archive view: direct links inside #archive-content
-        // Fallback: any link matching patterns
         val cards = doc.select(".item").ifEmpty {
-            doc.select("#archive-content > a, article, .post, .result-item")
+            doc.select(
+                """
+                a[href*="/movies/"],
+                a[href*="/series/"],
+                a[href*="/seasons/"]
+                """
+            )
         }
-        
-        var results = cards.mapNotNull { it.toSearchResponseFallback() }
 
-        if (results.isEmpty()) {
-             // Fallback to searching specifically for content links if main selectors failed
-            results = doc.select("""a[href*="/movies/"],a[href*="/series/"],a[href*="/seasons/"]""")
-                .mapNotNull { it.parent()?.toSearchResponseFallback() ?: it.toSearchResponseFallback() }
-                .distinctBy { it.url }
-        }
+        val results = cards
+            .mapNotNull { it.toSearchResponseFallback() }
+            .distinctBy { it.url }
 
         return newHomePageResponse(request.name, results)
     }
+
+
 
     override suspend fun search(query: String): List<SearchResponse> {
         politeDelay()
