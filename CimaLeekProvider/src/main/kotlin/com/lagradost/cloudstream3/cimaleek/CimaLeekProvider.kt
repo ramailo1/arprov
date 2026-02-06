@@ -18,32 +18,11 @@ class CimaLeekProvider : MainAPI() {
     companion object {
         const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    override val usesWebView = false
+    override val usesWebView = true
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
 
-    private val userAgents = listOf(
-        "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
-        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1"
-    )
-
-    private val baseHeaders = mapOf(
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1",
-    )
-
-    private fun requestHeaders(extra: Map<String, String> = emptyMap()): Map<String, String> {
-        val h = baseHeaders.toMutableMap()
-        h["User-Agent"] = userAgents.random()
-        extra.forEach { (k, v) -> h[k] = v }
-        return h
-    }
+    private fun normalizeUrl(u: String): String = fixUrl(u)
 
     private suspend fun politeDelay(minMs: Long = 900, maxMs: Long = 2000) {
         delay((minMs..maxMs).random())
@@ -65,8 +44,6 @@ class CimaLeekProvider : MainAPI() {
     private fun isSeasonUrl(u: String): Boolean = u.contains("/seasons/")
 
     private fun isMovieUrl(u: String): Boolean = u.contains("/movies/")
-
-    private fun normalizeUrl(u: String): String = fixUrl(u)
 
     private fun ensureWatchUrl(u: String): String {
         if (u.contains("/watch/")) return u
@@ -137,12 +114,7 @@ class CimaLeekProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         politeDelay()
         val url = if (page == 1) request.data else "${request.data}page/$page/"
-        val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$mainUrl/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-        )
-        val doc = app.get(url, headers = headers).document
+        val doc = app.get(url).document
 
         // Check if we got a valid page or if we need to warn (logging usually not visible, but relying on doc)
         val cards = doc.select(".item").ifEmpty {
@@ -166,12 +138,7 @@ class CimaLeekProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         politeDelay()
-        val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$mainUrl/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-        )
-        val doc = app.get("$mainUrl/search/?s=$query", headers = headers).document
+        val doc = app.get("$mainUrl/search/?s=$query").document
 
         val cards = doc.select(".item").ifEmpty { 
              doc.select("#archive-content > a, article, .post, .result-item")
@@ -189,12 +156,7 @@ class CimaLeekProvider : MainAPI() {
     // --- Load details + episodes ---
     override suspend fun load(url: String): LoadResponse {
         politeDelay(1200, 2500)
-        val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$mainUrl/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-        )
-        val doc = app.get(url, headers = headers).document
+        val doc = app.get(url).document
 
         val canonicalSeriesUrl = doc.findCanonicalSeriesUrl()
         val fixedUrl = normalizeUrl(url)
@@ -242,7 +204,7 @@ class CimaLeekProvider : MainAPI() {
 
         suspend fun addEpisodesFromSeasonPage(seasonUrl: String) {
             politeDelay(700, 1400)
-            val sDoc = app.get(seasonUrl, headers = requestHeaders(mapOf("Referer" to fixedUrl))).document
+            val sDoc = app.get(seasonUrl).document
             val seasonNumFromUrl = parseSeasonFromSeasonUrl(seasonUrl)
 
             val epAnchors = sDoc.select("""a[href*="/episodes/"]""")
@@ -344,12 +306,7 @@ class CimaLeekProvider : MainAPI() {
         }
 
         val watchUrl = if (fixedData.contains("/watch/")) fixedData else ensureWatchUrl(fixedData)
-        val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to fixedData,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-        )
-        val watchDoc = app.get(watchUrl, headers = headers).document
+        val watchDoc = app.get(watchUrl).document
 
         val loaded = HashSet<String>()
 
@@ -376,10 +333,8 @@ class CimaLeekProvider : MainAPI() {
         if (ajaxCandidates.isNotEmpty()) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
             val ajaxHeaders = mapOf(
-                "User-Agent" to USER_AGENT,
-                "Referer" to watchUrl,
                 "X-Requested-With" to "XMLHttpRequest",
-                "Accept" to "application/json, text/javascript, */*; q=0.01"
+                "Referer" to watchUrl
             )
 
             for (server in ajaxCandidates) {
