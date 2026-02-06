@@ -58,6 +58,8 @@ class CimaLeekProvider : MainAPI() {
     private fun isTvUrl(u: String): Boolean =
         u.contains("/series/") || u.contains("/seasons/") || u.contains("/episodes/")
 
+    private fun isSeasonUrl(u: String): Boolean = u.contains("/seasons/")
+
     private fun isMovieUrl(u: String): Boolean = u.contains("/movies/")
 
     private fun normalizeUrl(u: String): String = fixUrl(u)
@@ -93,7 +95,12 @@ class CimaLeekProvider : MainAPI() {
         if (a == null) return null
         
         val href = normalizeUrl(a.attr("href"))
-        val tvType = if (isTvUrl(href)) TvType.TvSeries else TvType.Movie
+        val tvType = when {
+            isMovieUrl(href) -> TvType.Movie
+            isSeasonUrl(href) -> TvType.TvSeries
+            isTvUrl(href) -> TvType.TvSeries
+            else -> TvType.Movie
+        }
 
         val title =
             (selectFirst(".data .title")?.text()
