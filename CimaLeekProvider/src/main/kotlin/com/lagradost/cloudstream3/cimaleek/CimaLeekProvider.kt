@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 class CimaLeekProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimalek.art"
-    override var name = "CimaLeek (In Progress)"
+    override var name = "CimaLeek"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
@@ -40,15 +40,24 @@ class CimaLeekProvider : MainAPI() {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
     
+    // Better title cleaning similar to CimaClub
     private fun String.cleanTitle(): String {
         return this.replace("مشاهدة|مترجم|مسلسل|كامل|جميع الحلقات|الموسم|الحلقة|انمي".toRegex(), "")
+            .replace(Regex("\\(.*?\\)"), "") // Remove content in brackets
+            .replace(Regex("\\s+"), " ")   // Remove extra spaces
             .trim()
     }
     
-    private fun Element.toSearchResponse(): SearchResponse {
-        val title = select(".data .title, h2.title, h3.title, .video-title").text().cleanTitle()
-        val posterUrl = select("img.film-poster-img, img").let { it.attr("data-src").ifEmpty { it.attr("src") } }
-        val href = select("a").attr("href")
+    private fun Element.toSearchResponse(): SearchResponse? {
+        val titleElement = selectFirst(".data .title, h2.title, h3.title, .video-title") ?: return null
+        val title = titleElement.text().cleanTitle()
+        
+        val posterElement = selectFirst("img.film-poster-img, img")
+        val posterUrl = posterElement?.let { 
+             it.attr("data-src").ifEmpty { it.attr("src") } 
+        }
+        
+        val href = selectFirst("a")?.attr("href") ?: return null
         val tvType = if (href.contains("/series/|/مسلسل/|/season/".toRegex())) TvType.TvSeries else TvType.Movie
         
         return newMovieSearchResponse(
@@ -77,7 +86,9 @@ class CimaLeekProvider : MainAPI() {
         // Add delay to mimic human behavior
         Thread.sleep((1000..3000).random().toLong())
         
-        val document = app.get(request.data + page, headers = requestHeaders).document
+        val url = if (page == 1) request.data else "${request.data}page/$page/"
+        
+        val document = app.get(url, headers = requestHeaders).document
         val home = document.select(".item, .video-item, .movie-item, .post-item").mapNotNull {
             it.toSearchResponse()
         }
@@ -135,12 +146,16 @@ class CimaLeekProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            doc.select(".episodes-list li, .episode-item").forEach { episode ->
-                episodes.add(newEpisode(episode.select("a").attr("href")) {
-                    this.name = episode.select("a").text().cleanTitle()
-                    this.season = 0
-                    this.episode = episode.select("a").text().getIntFromText()
-                })
+            // Using for loop instead of forEach
+            for (episode in doc.select(".episodes-list li, .episode-item")) {
+                val epLink = episode.select("a").attr("href")
+                if(epLink.isNotBlank()) {
+                     episodes.add(newEpisode(epLink) {
+                        this.name = episode.select("a").text().cleanTitle()
+                        this.season = 0
+                        this.episode = episode.select("a").text().getIntFromText()
+                    })
+                }
             }
             
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
@@ -154,6 +169,16 @@ class CimaLeekProvider : MainAPI() {
         }
     }
     
+    private fun detectQuality(text: String): Int {
+        return when {
+            text.contains("1080") || text.contains("FHD") -> 1080
+            text.contains("720") || text.contains("HD") -> 720
+            text.contains("480") || text.contains("SD") -> 480
+            text.contains("360") -> 360
+            else -> Qualities.Unknown.value
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -168,15 +193,51 @@ class CimaLeekProvider : MainAPI() {
         Thread.sleep((2000..4000).random().toLong())
         
         val doc = app.get(data, headers = requestHeaders).document
+        val loaded = HashSet<String>()
         
-        // Try multiple server selection methods
-        doc.select(".servers-list li, .watch-links a, .download-links a, .video-servers a").forEach { element ->
-            val url = element.attr("href") ?: element.attr("data-link") ?: element.attr("data-url")
-            if (url.isNotEmpty()) {
-                loadExtractor(url, data, subtitleCallback, callback)
+        suspend fun loadLink(url: String, name: String, quality: Int = Qualities.Unknown.value) {
+             if (url.startsWith("http") && loaded.add(url)) {
+                 if (url.contains(".m3u8") || url.contains(".mp4")) {
+                      callback(
+                        newExtractorLink(
+                            this.name,
+                            "$name (Direct)",
+                            url,
+                            if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = quality
+                        }
+                    )
+                 } else {
+                     loadExtractor(url, data, subtitleCallback, callback)
+                 }
+            }
+        }
+
+        // 1. Try servers list
+        // Using for loop instead of forEach
+        for (element in doc.select(".servers-list li, .watch-links a, .download-links a, .video-servers a")) {
+            val url = element.attr("data-link").ifBlank { 
+                element.attr("data-url").ifBlank { 
+                    element.attr("href") 
+                } 
+            }
+            val name = element.text().trim().ifBlank { "Server" }
+            
+            if (url.isNotBlank()) {
+                loadLink(fixUrl(url), name)
             }
         }
         
+        // 2. Try iframe extraction directly
+        // Using for loop instead of forEach
+        for (iframe in doc.select("iframe")) {
+             val src = iframe.attr("src")
+             if (src.isNotBlank()) {
+                 loadLink(fixUrl(src), "Embed")
+             }
+        }
+
         return true
     }
 }
