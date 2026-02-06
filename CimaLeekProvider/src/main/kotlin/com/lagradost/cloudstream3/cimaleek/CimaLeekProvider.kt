@@ -86,7 +86,12 @@ class CimaLeekProvider : MainAPI() {
 
     // --- Search/home extraction ---
     private fun Element.toSearchResponseFallback(): SearchResponse? {
-        val a = selectFirst("a[href]") ?: return null
+        // If the element itself is the anchor (mobile/archive view), use it.
+        // Otherwise search for a nested anchor (desktop/item view).
+        val a = if (this.tagName().equals("a", ignoreCase = true)) this else selectFirst("a[href]")
+        
+        if (a == null) return null
+        
         val href = normalizeUrl(a.attr("href"))
         val tvType = if (isTvUrl(href)) TvType.TvSeries else TvType.Movie
 
@@ -98,7 +103,7 @@ class CimaLeekProvider : MainAPI() {
 
         if (title.isBlank()) return null
 
-        val img = selectFirst("img")
+        val img = selectFirst("img") ?: a.selectFirst("img")
         val poster =
             img?.attr("data-src").orEmpty().ifBlank { img?.attr("src").orEmpty() }.ifBlank { null }
 
@@ -125,14 +130,20 @@ class CimaLeekProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val doc = app.get(url, headers = requestHeaders()).document
 
-        val cards = doc.select(".item").ifEmpty { doc.select("article, .post, .result-item") }
-        val results = cards.mapNotNull { it.toSearchResponseFallback() }
+        // Desktop view: .item
+        // Mobile/Archive view: direct links inside #archive-content
+        // Fallback: any link matching patterns
+        val cards = doc.select(".item").ifEmpty {
+            doc.select("#archive-content > a, article, .post, .result-item")
+        }
+        
+        var results = cards.mapNotNull { it.toSearchResponseFallback() }
 
         if (results.isEmpty()) {
-            val fallbackResults = doc.select("""a[href*="/movies/"],a[href*="/series/"],a[href*="/seasons/"]""")
+             // Fallback to searching specifically for content links if main selectors failed
+            results = doc.select("""a[href*="/movies/"],a[href*="/series/"],a[href*="/seasons/"]""")
                 .mapNotNull { it.parent()?.toSearchResponseFallback() ?: it.toSearchResponseFallback() }
                 .distinctBy { it.url }
-            return newHomePageResponse(request.name, fallbackResults)
         }
 
         return newHomePageResponse(request.name, results)
@@ -142,7 +153,10 @@ class CimaLeekProvider : MainAPI() {
         politeDelay()
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders()).document
 
-        val cards = doc.select(".item").ifEmpty { doc.select("article, .post, .result-item") }
+        val cards = doc.select(".item").ifEmpty { 
+             doc.select("#archive-content > a, article, .post, .result-item")
+        }
+        
         val results = cards.mapNotNull { it.toSearchResponseFallback() }
 
         // Hard fallback: search results sometimes are just links
