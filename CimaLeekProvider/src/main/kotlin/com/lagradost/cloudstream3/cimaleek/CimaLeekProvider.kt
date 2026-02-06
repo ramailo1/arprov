@@ -108,15 +108,14 @@ class CimaLeekProvider : MainAPI() {
 
         val title =
             (selectFirst(".data .title")?.text()
-                ?: selectFirst("h3, h2, .title")?.text()
+                ?: selectFirst(".title")?.text()
                 ?: a.attr("title").ifBlank { a.text() })
                 .cleanTitle()
 
         if (title.isBlank()) return null
 
-        val img = selectFirst("img") ?: a.selectFirst("img")
-        val poster =
-            img?.attr("data-src").orEmpty().ifBlank { img?.attr("src").orEmpty() }.ifBlank { null }
+        val img = selectFirst(".poster img") ?: selectFirst("img") ?: a.selectFirst("img")
+        val poster = img?.attr("data-src").orEmpty().ifBlank { img?.attr("src").orEmpty() }.ifBlank { null }
 
         return when (tvType) {
             TvType.TvSeries -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -196,7 +195,8 @@ class CimaLeekProvider : MainAPI() {
         val fixedUrl = normalizeUrl(url)
 
         val titleRaw =
-            doc.selectFirst("h1")?.text()
+            doc.selectFirst("h1.film-name, h2.film-name")?.text()
+                ?: doc.selectFirst("h1")?.text()
                 ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
                 ?: ""
         val title = titleRaw.cleanTitle().ifBlank { name }
@@ -213,7 +213,7 @@ class CimaLeekProvider : MainAPI() {
             doc.select("""a[href*="/genre/"], a[href*="/category/"]""").map { it.text().trim() }.distinct()
 
         val plot =
-            doc.select(".story, .text, .m_desc, .description, .summary, .plot").text().trim()
+            doc.select(".film-description .text, .story, .text, .m_desc, .description, .summary, .plot").text().trim()
                 .ifBlank { doc.selectFirst("meta[name=description]")?.attr("content")?.trim().orEmpty() }
                 .ifBlank { null }
 
@@ -268,31 +268,30 @@ class CimaLeekProvider : MainAPI() {
                 })
             }
         } else {
-            // Series or Season: try to gather season links first
+            // Series or Season
+            // Strategy: Parse episodes from LOCAL page first (often S1 or latest season)
+            // Then fetch other season pages to fill gaps.
+            val localEpAnchors = doc.select("""a[href*="/episodes/"]""")
+            for (a in localEpAnchors) {
+                val epUrl = normalizeUrl(a.attr("href"))
+                val (sFromEpUrl, eFromEpUrl) = parseSxEFromEpisodeUrl(epUrl)
+                val epNum = eFromEpUrl ?: a.text().getIntFromText()
+                if (epNum != null) {
+                    episodes.add(newEpisode(epUrl) {
+                        name = a.text().cleanTitle().ifBlank { "Episode $epNum" }
+                        season = sFromEpUrl
+                        episode = epNum
+                    })
+                }
+            }
+
             val seasonLinks = doc.select("""a[href*="/seasons/"]""")
                 .map { normalizeUrl(it.attr("href")) }
                 .distinct()
-                // avoid pulling random "related" season links if any
-                .filter { it.startsWith(mainUrl) }
+                .filter { it.startsWith(mainUrl) && it != fixedUrl } // Don't re-fetch current page if it lays in this list
 
             if (seasonLinks.isNotEmpty()) {
-                // Fetch all seasons to build a complete episode list
                 for (sUrl in seasonLinks) addEpisodesFromSeasonPage(sUrl)
-            } else {
-                // Fallback: just parse episodes present on current page
-                val epAnchors = doc.select("""a[href*="/episodes/"]""")
-                for (a in epAnchors) {
-                    val epUrl = normalizeUrl(a.attr("href"))
-                    val (sFromEpUrl, eFromEpUrl) = parseSxEFromEpisodeUrl(epUrl)
-                    val epNum = eFromEpUrl ?: a.text().getIntFromText()
-                    if (epNum != null) {
-                        episodes.add(newEpisode(epUrl) {
-                            name = a.text().cleanTitle().ifBlank { "Episode $epNum" }
-                            season = sFromEpUrl
-                            episode = epNum
-                        })
-                    }
-                }
             }
         }
 
