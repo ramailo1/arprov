@@ -128,6 +128,13 @@ class CimaLeekProvider : MainAPI() {
         val cards = doc.select(".item").ifEmpty { doc.select("article, .post, .result-item") }
         val results = cards.mapNotNull { it.toSearchResponseFallback() }
 
+        if (results.isEmpty()) {
+            val fallbackResults = doc.select("""a[href*="/movies/"],a[href*="/series/"],a[href*="/seasons/"]""")
+                .mapNotNull { it.parent()?.toSearchResponseFallback() ?: it.toSearchResponseFallback() }
+                .distinctBy { it.url }
+            return newHomePageResponse(request.name, fallbackResults)
+        }
+
         return newHomePageResponse(request.name, results)
     }
 
