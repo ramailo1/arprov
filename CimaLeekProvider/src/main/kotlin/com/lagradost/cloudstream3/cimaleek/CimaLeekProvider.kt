@@ -154,14 +154,20 @@ class CimaLeekProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            // Phase 2 Fix: Targeted .episodesList (CamelCase) as seen in browser
+            // Extract episodes with proper season/episode parsing
             for (episode in doc.select(".episodesList a, .episodes-list a, .episode-item a")) {
                 val epLink = episode.attr("href")
                 if(epLink.isNotBlank()) {
-                     episodes.add(newEpisode(epLink) {
+                    // Extract season and episode from URL pattern like "matlock-1x1-654792" or "matlock-12-"
+                    val seasonMatch = Regex("""--(\d+)x(\d+)--""").find(epLink)
+                    val seasonNum = seasonMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    val epNum = seasonMatch?.groupValues?.get(2)?.toIntOrNull() 
+                        ?: episode.text().getIntFromText() ?: 0
+                    
+                    episodes.add(newEpisode(epLink) {
                         this.name = episode.text().cleanTitle()
-                        this.season = 0
-                        this.episode = episode.text().getIntFromText()
+                        this.season = seasonNum
+                        this.episode = epNum
                     })
                 }
             }
@@ -202,19 +208,22 @@ class CimaLeekProvider : MainAPI() {
         // 1. Fetch the data page (Movie or Episode)
         val doc = app.get(data, headers = requestHeaders).document
         
-        // Phase 2 Fix: Check for Watch Button (.watchBTn) to navigate deeper
+        // Determine if this is an episode (already has watch URL) or movie (needs /watch/)
+        val isEpisode = data.contains("/episodes/")
         var watchUrl = data
-        val watchBtn = doc.selectFirst("a.watchBTn, a.watch-btn, a:contains(مشاهدة)")
-        if (watchBtn != null) {
-            val href = watchBtn.attr("href")
-            if (href.isNotBlank()) {
-                watchUrl = fixUrl(href)
+        
+        if (!isEpisode) {
+            // For movies, check for Watch Button (.watchBTn) to navigate deeper
+            val watchBtn = doc.selectFirst("a.watchBTn, a.watch-btn, a:contains(مشاهدة)")
+            if (watchBtn != null) {
+                val href = watchBtn.attr("href")
+                if (href.isNotBlank() && !href.startsWith("#")) {
+                    watchUrl = fixUrl(href)
+                }
+            } else if (data.contains("/movies/") && !data.contains("/watch/")) {
+                // Fallback for some themes
+                watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
             }
-        } else if (data.contains("/movies/") && !data.contains("/watch/")) {
-             // Fallback for some themes
-            watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
-        } else if (data.contains("/episodes/") && !data.contains("/watch/")) {
-            watchUrl = if(data.endsWith("/")) "${data}watch/" else "$data/watch/"
         }
 
         // 2. Load the actual Watch Page if distinct
