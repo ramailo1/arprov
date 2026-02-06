@@ -48,18 +48,20 @@ class CimaLeekProvider : MainAPI() {
             .trim()
     }
     
-    // Phase 2 Fix: Updated selectors based on browser analysis
+    // Verified selectors from browser analysis
     private fun Element.toSearchResponse(): SearchResponse? {
-        // Home page items are inside .item
-        // Title is often in .data .title or just .title
-        val titleElement = selectFirst(".data .title, h3.title, .title, .video-title") ?: return null
+        // Container is .item, title is in .data .title
+        val titleElement = selectFirst(".data .title") ?: return null
         val title = titleElement.text().cleanTitle()
         
-        // Poster is usually .film-poster-img or inside .poster
-        val posterElement = selectFirst("img.film-poster-img, .poster img, img")
+        // Poster uses lazy loading with data-src
+        val posterElement = selectFirst(".film-poster img")
         val posterUrl = posterElement?.let { 
              it.attr("data-src").ifEmpty { it.attr("src") } 
         }
+        
+        // Quality badge for better quality detection
+        val qualityBadge = selectFirst(".quality")?.text() ?: ""
         
         val href = selectFirst("a")?.attr("href") ?: return null
         val tvType = if (href.contains("/series/|/مسلسل/|/season/".toRegex())) TvType.TvSeries else TvType.Movie
@@ -76,6 +78,7 @@ class CimaLeekProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/movies-list/" to "أحدث الأفلام",
         "$mainUrl/series-list/" to "أحدث المسلسلات",
+        "$mainUrl/seasons-list/" to "المواسم",
         "$mainUrl/recent-89541/" to "المضاف حديثاً",
     )
 
@@ -92,8 +95,8 @@ class CimaLeekProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         
         val document = app.get(url, headers = requestHeaders).document
-        // Phase 2 Fix: Ensure we target .item correctly
-        val home = document.select(".item, .video-item, .movie-item, .post-item").mapNotNull {
+        // Verified: Use .item only
+        val home = document.select(".item").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, home)
@@ -107,7 +110,7 @@ class CimaLeekProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
-        return doc.select(".item, .video-item, .movie-item, .search-item").mapNotNull {
+        return doc.select(".item").mapNotNull {
             it.toSearchResponse()
         }
     }
