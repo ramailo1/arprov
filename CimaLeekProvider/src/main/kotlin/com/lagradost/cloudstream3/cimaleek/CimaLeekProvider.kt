@@ -166,6 +166,11 @@ class CimaLeekProvider : MainAPI() {
         val canonicalSeriesUrl = doc.findCanonicalSeriesUrl()
         val fixedUrl = normalizeUrl(url)
 
+        // Smart Redirect: If this is an episode page but we know the series URL, load the full series instead.
+        if (fixedUrl.contains("/episodes/") && canonicalSeriesUrl?.contains("/series/") == true) {
+            return load(canonicalSeriesUrl)
+        }
+
         val titleRaw =
             doc.selectFirst("h1.film-name, h2.film-name")?.text()
                 ?: doc.selectFirst("h1")?.text()
