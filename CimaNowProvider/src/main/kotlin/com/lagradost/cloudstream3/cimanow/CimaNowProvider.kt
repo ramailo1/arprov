@@ -25,7 +25,9 @@ class CimaNowProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = fixUrlNull(attr("href")) ?: return null
+        // Handle both direct anchor elements and article containers
+        val anchor = selectFirst("picture a") ?: selectFirst("a") ?: this
+        val url = fixUrlNull(anchor.attr("href")) ?: fixUrlNull(attr("href")) ?: return null
         val posterUrl = selectFirst("img")?.attr("data-src")
             ?.ifBlank { selectFirst("img")?.attr("src") } ?: ""
         
@@ -72,8 +74,8 @@ class CimaNowProvider : MainAPI() {
                 }
                 if (name.isEmpty()) return@mapNotNull null
                 
-                val list = it.select(".item a, article[aria-label=\"post\"] > a")
-                    .mapNotNull { a -> a.toSearchResponse() }
+                val list = it.select(".item article, article[aria-label=\"post\"]")
+                    .mapNotNull { article -> article.toSearchResponse() }
                 
                 if (list.isEmpty()) return@mapNotNull null
                 HomePageList(name, list)
@@ -86,7 +88,7 @@ class CimaNowProvider : MainAPI() {
         val doc = app.get("$mainUrl/page/1/?s=$query").document
         val paginationElement = doc.selectFirst("ul[aria-label=\"pagination\"]")
         
-        doc.select(".item a, article[aria-label=\"post\"] > a").forEach {
+        doc.select(".item article, article[aria-label=\"post\"]").forEach {
             it.toSearchResponse()?.let { res -> result.add(res) }
         }
         
@@ -96,7 +98,7 @@ class CimaNowProvider : MainAPI() {
             if (max != null && max <= 5) {
                 (2..max).forEach { pageNum ->
                     app.get("$mainUrl/page/$pageNum/?s=$query").document
-                        .select(".item a, article[aria-label=\"post\"] > a").forEach { element ->
+                        .select(".item article, article[aria-label=\"post\"]").forEach { element ->
                             element.toSearchResponse()?.let { res -> result.add(res) }
                         }
                 }
