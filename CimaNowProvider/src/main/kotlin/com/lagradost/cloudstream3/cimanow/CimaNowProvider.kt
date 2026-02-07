@@ -113,9 +113,29 @@ class CimaNowProvider : MainAPI() {
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
             
-        val isMovie = url.contains(Regex("فيلم|مسرحية|حفلات")) || 
-                      select("li[aria-label=\"tab\"]").text().contains("افلام")
-        val tvType = if (isMovie) TvType.Movie else TvType.TvSeries
+        // Robust Type Detection
+        val isSeries = 
+            title.contains("مسلسل") || 
+            title.contains("برنامج") ||
+            url.contains("مسلسل") ||
+            url.contains("برنامج") ||
+            select("li[aria-label=\"tab\"]").text().let { t -> 
+                t.contains("مسلسلات") || t.contains("برامج")
+            }
+
+        val isMovie = !isSeries && (
+            url.contains(Regex("فيلم|مسرحية|حفلات")) || 
+            select("li[aria-label=\"tab\"]").text().contains("افلام")
+        )
+        
+        val tvType = if (isSeries) TvType.TvSeries else if (isMovie) TvType.Movie else TvType.Movie // Default to Movie if unsure, previously was Series which caused issues? User said "detected as movies" so maybe default was Movie and Series check failed.
+
+        // If it looks like an Episode (has "الحلقة"), force Series
+        val finalTvType = if (title.contains("الحلقة") || select("li[aria-label=\"episode\"]").isNotEmpty()) {
+             TvType.TvSeries
+        } else {
+             tvType
+        }
 
         val qualityText = select("li[aria-label=\"ribbon\"]").firstOrNull()?.text()
         
@@ -128,7 +148,7 @@ class CimaNowProvider : MainAPI() {
         return newMovieSearchResponse(
             title,
             url,
-            tvType,
+            finalTvType,
         ) {
             this.posterUrl = posterUrl
             this.year = year
@@ -143,6 +163,12 @@ class CimaNowProvider : MainAPI() {
         // 1. Episodes list = Series
         if (doc.select("ul#eps li").isNotEmpty()) {
             return TvType.TvSeries
+        }
+        
+        // 2. Title/Breadcrumbs check
+        val pageTitle = doc.select("title").text()
+        if (pageTitle.contains("مسلسل") || pageTitle.contains("برنامج")) {
+             return TvType.TvSeries
         }
 
         // 2. URL patterns
@@ -288,6 +314,9 @@ class CimaNowProvider : MainAPI() {
 
                 val homeDoc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
                 val latestDoc = app.get("$mainUrl/الاحدث/", headers = mapOf("user-agent" to "MONKE")).document
+                // Explicitly fetch Movies and Series to guarantee content
+                val moviesDoc = app.get("$mainUrl/category/%d8%a7%d9%81%d9%84%d8%a7%d9%85/", headers = mapOf("user-agent" to "MONKE")).document // /category/افلام/
+                val seriesDoc = app.get("$mainUrl/category/%d9%85%d8%b3%d9%84%d8%b3%d9%84%d8%a7%d8%aa/", headers = mapOf("user-agent" to "MONKE")).document // /category/مسلسلات/
 
                 sectionPaginationMap.clear()
                 sectionPageCache.clear()
@@ -296,9 +325,10 @@ class CimaNowProvider : MainAPI() {
                 val distinctItems = mutableSetOf<String>()
                 val homePageLists = mutableListOf<HomePageList>()
 
-                // 1. Process "Latest Additions" from proper page (Robust)
+                // 1. Process "Latest Additions"
                 latestDoc.select("section[aria-label='posts']").let { section ->
-                     val items = section.select("article[aria-label='post']")
+                     // Select the 'a' tag specifically to ensure href is found
+                     val items = section.select("article[aria-label='post'] > a")
                         .mapNotNull { it.toSearchResponse() }
                         .distinctBy { it.url }
                     
@@ -310,36 +340,70 @@ class CimaNowProvider : MainAPI() {
                             )
                         )
                         items.forEach { distinctItems.add(it.url) }
-                        
-                        // Map pagination for this custom section
-                        // The /latest/ page pagination usually looks like /الاحدث/page/2/
                         sectionPaginationMap["أحدث الإضافات"] = "$mainUrl/الاحدث"
                     }
                 }
 
-                // 2. Process Home Page Sections
+                // 2. Process "Latest Movies" (Explicit Fetch)
+                moviesDoc.select("section[aria-label='posts']").let { section ->
+                     val items = section.select("article[aria-label='post'] > a")
+                        .mapNotNull { it.toSearchResponse() }
+                        .distinctBy { it.url }
+                        .filter { !distinctItems.contains(it.url) }
+                    
+                    if (items.isNotEmpty()) {
+                        homePageLists.add(
+                            HomePageList(
+                                "أحدث الافلام",
+                                items
+                            )
+                        )
+                        items.forEach { distinctItems.add(it.url) }
+                        sectionPaginationMap["أحدث الافلام"] = "$mainUrl/category/افلام"
+                    }
+                }
+                
+                // 3. Process "Latest Series" (Explicit Fetch)
+                seriesDoc.select("section[aria-label='posts']").let { section ->
+                     val items = section.select("article[aria-label='post'] > a")
+                        .mapNotNull { it.toSearchResponse() }
+                        .distinctBy { it.url }
+                        .filter { !distinctItems.contains(it.url) }
+                    
+                    if (items.isNotEmpty()) {
+                        homePageLists.add(
+                            HomePageList(
+                                "أحدث المسلسلات",
+                                items
+                            )
+                        )
+                        items.forEach { distinctItems.add(it.url) }
+                        sectionPaginationMap["أحدث المسلسلات"] = "$mainUrl/category/مسلسلات"
+                    }
+                }
+
+                // 4. Process Remaining Home Page Sections (if any work)
                 val allSections = homeDoc.select("section")
                 
                 val otherSections = allSections.mapNotNull { section ->
-                    // Extract section title
                     val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
                         ?.text()?.trim() 
 
                     if (sectionName == null) return@mapNotNull null
                     
-                    // Skip if it's "Latest Additions" (since we added it manually)
-                    if (sectionName.contains("احدث الاضافات") || sectionName.contains("أحدث الإضافات")) {
+                    // Skip if matches our manual sections
+                    if (sectionName.contains("احدث الاضافات") || 
+                        sectionName.contains("الافلام") || 
+                        sectionName.contains("المسلسلات")) {
                         return@mapNotNull null
                     }
                     
-                    // News Filter
                     if (sectionName.contains("إقرا الخبر") || 
                         sectionName.contains("الأخبار") || 
                         section.select("a[href*='/news/']").isNotEmpty()) {
                         return@mapNotNull null
                     }
                     
-                    // Pagination Base
                     val paginationBase = section
                         .selectFirst("a[href*='/page/'], a[href*='/category/']")
                         ?.attr("href")
@@ -350,15 +414,12 @@ class CimaNowProvider : MainAPI() {
                         sectionPaginationMap[sectionName] = paginationBase
                     }
 
-                    // Select items
                     val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
                         .mapNotNull { it.toSearchResponse() }
                         .distinctBy { it.url }
-                        // Optional: dedup against Latest? 
-                        // .filter { !distinctItems.contains(it.url) } 
-                        // Better to show them again if they are in specific categories
 
                     if (items.isEmpty()) return@mapNotNull null
+
 
                     // Cache page 1
                     val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
