@@ -6,6 +6,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
@@ -133,6 +136,107 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
+    private fun detectTvType(
+        url: String,
+        doc: Document
+    ): TvType {
+        // 1. Episodes list = Series
+        if (doc.select("ul#eps li").isNotEmpty()) {
+            return TvType.TvSeries
+        }
+
+        // 2. URL patterns
+        if (
+            url.contains("/selary/") ||
+            url.contains("/episode/")
+        ) {
+            return TvType.TvSeries
+        }
+
+        // 3. Category breadcrumbs
+        val categories = doc.select("article ul li a")
+            .joinToString(" ") { it.text() }
+
+        if (categories.contains("مسلسلات")) {
+            return TvType.TvSeries
+        }
+
+        // 4. Explicit movie categories
+        if (
+            categories.contains("افلام") ||
+            categories.contains("مسرحيات") ||
+            categories.contains("حفلات")
+        ) {
+            return TvType.Movie
+        }
+
+        // 5. Safe fallback
+        return TvType.Movie
+    }
+
+    private fun extractSeasons(
+        doc: Document
+    ): List<Pair<Int, String>> {
+        return doc.select("section[aria-label='seasons'] ul li a")
+            .mapNotNull { a ->
+                val url = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+
+                val seasonNum = Regex("""الموسم\s*(\d+)""")
+                    .find(a.text())
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toIntOrNull()
+                    ?: return@mapNotNull null
+
+                seasonNum to url
+            }
+            .distinctBy { it.first }
+            .sortedBy { it.first }
+    }
+
+    private suspend fun loadSeasonEpisodes(
+        seasonNumber: Int,
+        seasonUrl: String
+    ): List<Episode> {
+        val doc = app.get(seasonUrl).document
+
+        return doc.select("ul#eps li").mapNotNull { episode ->
+            val epUrl = fixUrlNull(
+                episode.selectFirst("a")?.attr("href")
+            ) ?: return@mapNotNull null
+
+            val epNum = episode.select("a em")
+                .text()
+                .toIntOrNull()
+
+            val epName = episode.select("a img:nth-child(2)")
+                .attr("alt")
+                .ifBlank { "Episode $epNum" }
+
+            val epPoster = episode.select("a img:nth-child(2)")
+                .attr("src")
+
+            newEpisode("$epUrl/watching/") {
+                this.name = epName
+                this.episode = epNum
+                this.season = seasonNumber
+                this.posterUrl = epPoster
+            }
+        }
+    }
+
+    private fun preloadNextPage(
+        sectionName: String,
+        baseUrl: String
+    ) {
+        GlobalScope.launch {
+            try {
+                loadSectionPage(sectionName, baseUrl, 2)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private suspend fun loadSectionPage(
         sectionName: String,
         baseUrl: String,
@@ -174,75 +278,88 @@ class CimaNowProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Page 1 Logic
-        if (page == 1) {
-            val doc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
-            sectionPaginationMap.clear()
-            sectionPageCache.clear()
-            sectionLastPage.clear()
+        try {
+            // Page 1 Logic
+            if (page == 1) {
+                val doc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
+                sectionPaginationMap.clear()
+                sectionPageCache.clear()
+                sectionLastPage.clear()
 
-            val allSections = doc.select("section")
+                val allSections = doc.select("section")
+                println("DEBUG CimaNow: Found ${allSections.size} sections")
+                
+                val homePageLists = allSections.mapNotNull { section ->
+                    // Extract section title
+                    val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
+                        ?.text()?.trim() ?: return@mapNotNull null
+                    
+                    // News Filter
+                    if (sectionName.contains("إقرا الخبر") || 
+                        sectionName.contains("الأخبار") || 
+                        section.select("a[href*='/news/']").isNotEmpty()) {
+                        return@mapNotNull null
+                    }
+                    
+                    // Pagination Base Extraction
+                    val paginationBase = section
+                        .selectFirst("a[href*='/page/'], a[href*='/category/'], a[href*='/الاحدث/']")
+                        ?.attr("href")
+                        ?.substringBefore("/page/")
+                        ?.let { fixUrl(it) }
+
+                    if (paginationBase != null) {
+                        sectionPaginationMap[sectionName] = paginationBase
+                        // DEBUG: Commenting out preloading to isolate black screen issue
+                        // preloadNextPage(sectionName, paginationBase)
+                    }
+
+                    val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
+                        .mapNotNull { it.toSearchResponse() }
+                        .distinctBy { it.url }
+
+                    if (items.isEmpty()) return@mapNotNull null
+
+                    // Cache page 1
+                    val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
+                    sectionCache[1] = items
+
+                    HomePageList(
+                        sectionName,
+                        items
+                    )
+                }.toList()
+
+                if (homePageLists.isEmpty()) {
+                    println("DEBUG CimaNow: Warning - HomePageList is empty!")
+                }
+
+                return newHomePageResponse(homePageLists)
+            }
             
-            val homePageLists = allSections.mapNotNull { section ->
-                // Extract section title
-                val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
-                    ?.text()?.trim() ?: return@mapNotNull null
-                
-                // News Filter
-                if (sectionName.contains("إقرا الخبر") || 
-                    sectionName.contains("الأخبار") || 
-                    section.select("a[href*='/news/']").isNotEmpty()) {
-                    return@mapNotNull null
-                }
-                
-                // Pagination Base Extraction
-                val paginationBase = section
-                    .selectFirst("a[href*='/page/'], a[href*='/category/'], a[href*='/الاحدث/']")
-                    ?.attr("href")
-                    ?.substringBefore("/page/")
-                    ?.let { fixUrl(it) }
+            // Page > 1 Logic
+            val base = sectionPaginationMap[request.name]
+                ?: return newHomePageResponse(emptyList())
 
-                if (paginationBase != null) {
-                    sectionPaginationMap[sectionName] = paginationBase
-                }
+            val items = loadSectionPage(
+                sectionName = request.name,
+                baseUrl = base,
+                page = page
+            )
 
-                val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
-                    .mapNotNull { it.toSearchResponse() }
-                    .distinctBy { it.url }
-
-                if (items.isEmpty()) return@mapNotNull null
-
-                // Cache page 1
-                val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
-                sectionCache[1] = items
-
-                HomePageList(
-                    sectionName,
-                    items
-                )
-            }.toList()
-
-            return newHomePageResponse(homePageLists)
-        }
-        
-        // Page > 1 Logic
-        val base = sectionPaginationMap[request.name]
-            ?: return newHomePageResponse(emptyList())
-
-        val items = loadSectionPage(
-            sectionName = request.name,
-            baseUrl = base,
-            page = page
-        )
-
-        return newHomePageResponse(
-            listOf(
-                HomePageList(
-                    request.name,
-                    items
+            return newHomePageResponse(
+                listOf(
+                    HomePageList(
+                        request.name,
+                        items
+                    )
                 )
             )
-        )
+        } catch (e: Exception) {
+            println("DEBUG CimaNow: Error in getMainPage: ${e.message}")
+            e.printStackTrace()
+            return newHomePageResponse(emptyList())
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -274,8 +391,10 @@ class CimaNowProvider : MainAPI() {
         val posterUrl = doc.select("meta[property=\"og:image\"]").attr("content")
         val year = doc.select("article ul:nth-child(1) li a").lastOrNull()?.text()?.toIntOrNull()
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val isMovie = !url.contains("/selary/") && title.contains(Regex("فيلم|حفلات|مسرحية"))
-        val youtubeTrailer = doc.select("iframe[src*='youtube']").attr("src")
+        
+        val tvType = detectTvType(url, doc)
+        
+        // val youtubeTrailer = doc.select("iframe[src*='youtube']").attr("src")
 
         val synopsis = doc.select("ul#details li:contains(لمحة) p").text()
         val tags = doc.selectFirst("article ul")?.select("li")?.map { it.text() }
@@ -289,8 +408,41 @@ class CimaNowProvider : MainAPI() {
             }
         }
 
-        return if (isMovie) {
-            newMovieLoadResponse(
+        if (tvType == TvType.TvSeries) {
+            val seasons = extractSeasons(doc)
+            val episodes = mutableListOf<Episode>()
+
+            if (seasons.isNotEmpty()) {
+                // Proper multi-season series
+                for ((seasonNum, seasonUrl) in seasons) {
+                    episodes += loadSeasonEpisodes(
+                        seasonNum,
+                        seasonUrl
+                    )
+                }
+            } else {
+                // Fallback: single-season series or current page
+                episodes += loadSeasonEpisodes(1, url)
+            }
+
+            return newTvSeriesLoadResponse(
+                title,
+                url,
+                TvType.TvSeries,
+                episodes.distinctBy { it.data }
+                    .sortedWith(
+                        compareBy<Episode> { it.season ?: 1 }
+                            .thenBy { it.episode ?: 0 }
+                    )
+            ) {
+                this.posterUrl = posterUrl
+                this.plot = synopsis
+                this.year = year
+                this.tags = tags
+                this.recommendations = recommendations
+            }
+        } else {
+            return newMovieLoadResponse(
                 title,
                 url,
                 TvType.Movie,
@@ -301,29 +453,6 @@ class CimaNowProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.plot = synopsis
                 this.tags = tags
-                // if (youtubeTrailer.isNotEmpty()) addTrailer(youtubeTrailer)
-            }
-        } else {
-            val episodes = doc.select("ul#eps li").mapNotNull { episode ->
-                val epUrl = fixUrlNull(episode.select("a").attr("href")) ?: return@mapNotNull null
-                val epName = episode.select("a img:nth-child(2)").attr("alt")
-                val epNum = episode.select("a em").text().toIntOrNull()
-                val epPoster = episode.select("a img:nth-child(2)").attr("src")
-                
-                newEpisode("$epUrl/watching/") {
-                    this.name = epName
-                    this.episode = epNum
-                    this.posterUrl = epPoster
-                }
-            }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, 
-                episodes.distinctBy { it.data }.sortedBy { it.episode }) {
-                this.posterUrl = posterUrl
-                this.tags = tags
-                this.year = year
-                this.plot = synopsis
-                this.recommendations = recommendations
-                // if (youtubeTrailer.isNotEmpty()) addTrailer(youtubeTrailer)
             }
         }
     }
