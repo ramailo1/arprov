@@ -281,35 +281,67 @@ class CimaNowProvider : MainAPI() {
         try {
             // Page 1 Logic
             if (page == 1) {
-                val doc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
+                // Fetch Home and Latest concurrently
+                // Note: We use async logic implicitly by making two requests. 
+                // Since we are in a suspend function, we can just do them sequentially or use apmap if available.
+                // For simplicity and stability, we fetch sequentially but order them for UX.
+
+                val homeDoc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
+                val latestDoc = app.get("$mainUrl/الاحدث/", headers = mapOf("user-agent" to "MONKE")).document
+
                 sectionPaginationMap.clear()
                 sectionPageCache.clear()
                 sectionLastPage.clear()
 
-                val allSections = doc.select("section")
-                println("DEBUG CimaNow: Found ${allSections.size} sections")
+                val distinctItems = mutableSetOf<String>()
+                val homePageLists = mutableListOf<HomePageList>()
+
+                // 1. Process "Latest Additions" from proper page (Robust)
+                latestDoc.select("section[aria-label='posts']").let { section ->
+                     val items = section.select("article[aria-label='post']")
+                        .mapNotNull { it.toSearchResponse() }
+                        .distinctBy { it.url }
+                    
+                    if (items.isNotEmpty()) {
+                        homePageLists.add(
+                            HomePageList(
+                                "أحدث الإضافات",
+                                items
+                            )
+                        )
+                        items.forEach { distinctItems.add(it.url) }
+                        
+                        // Map pagination for this custom section
+                        // The /latest/ page pagination usually looks like /الاحدث/page/2/
+                        sectionPaginationMap["أحدث الإضافات"] = "$mainUrl/الاحدث"
+                    }
+                }
+
+                // 2. Process Home Page Sections
+                val allSections = homeDoc.select("section")
                 
-                val homePageLists = allSections.mapNotNull { section ->
+                val otherSections = allSections.mapNotNull { section ->
                     // Extract section title
                     val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
                         ?.text()?.trim() 
 
-                    if (sectionName == null) {
-                         println("DEBUG CimaNow: Skipping section - No Name Found")
-                         return@mapNotNull null
+                    if (sectionName == null) return@mapNotNull null
+                    
+                    // Skip if it's "Latest Additions" (since we added it manually)
+                    if (sectionName.contains("احدث الاضافات") || sectionName.contains("أحدث الإضافات")) {
+                        return@mapNotNull null
                     }
                     
                     // News Filter
                     if (sectionName.contains("إقرا الخبر") || 
                         sectionName.contains("الأخبار") || 
                         section.select("a[href*='/news/']").isNotEmpty()) {
-                        println("DEBUG CimaNow: Skipping section '$sectionName' - News Filter")
                         return@mapNotNull null
                     }
                     
-                    // Pagination Base Extraction
+                    // Pagination Base
                     val paginationBase = section
-                        .selectFirst("a[href*='/page/'], a[href*='/category/'], a[href*='/الاحدث/']")
+                        .selectFirst("a[href*='/page/'], a[href*='/category/']")
                         ?.attr("href")
                         ?.substringBefore("/page/")
                         ?.let { fixUrl(it) }
@@ -318,29 +350,27 @@ class CimaNowProvider : MainAPI() {
                         sectionPaginationMap[sectionName] = paginationBase
                     }
 
-                    val rawItems = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
-                    println("DEBUG CimaNow: Section '$sectionName' - Raw Items found: ${rawItems.size}")
-
-                    val items = rawItems
+                    // Select items
+                    val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
                         .mapNotNull { it.toSearchResponse() }
                         .distinctBy { it.url }
-                    
-                    println("DEBUG CimaNow: Section '$sectionName' - Valid Items: ${items.size}")
+                        // Optional: dedup against Latest? 
+                        // .filter { !distinctItems.contains(it.url) } 
+                        // Better to show them again if they are in specific categories
 
-                    if (items.isEmpty()) {
-                        println("DEBUG CimaNow: Skipping section '$sectionName' - No Valid Items")
-                        return@mapNotNull null
-                    }
+                    if (items.isEmpty()) return@mapNotNull null
 
                     // Cache page 1
                     val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
-                    sectionCache[1] = items
+                    sectionCache[1] = items.toMutableList()
 
                     HomePageList(
                         sectionName,
                         items
                     )
-                }.toList()
+                }
+                
+                homePageLists.addAll(otherSections)
 
                 if (homePageLists.isEmpty()) {
                     println("DEBUG CimaNow: Warning - HomePageList is empty!")
