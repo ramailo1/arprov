@@ -292,12 +292,18 @@ class CimaNowProvider : MainAPI() {
                 val homePageLists = allSections.mapNotNull { section ->
                     // Extract section title
                     val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
-                        ?.text()?.trim() ?: return@mapNotNull null
+                        ?.text()?.trim() 
+
+                    if (sectionName == null) {
+                         println("DEBUG CimaNow: Skipping section - No Name Found")
+                         return@mapNotNull null
+                    }
                     
                     // News Filter
                     if (sectionName.contains("إقرا الخبر") || 
                         sectionName.contains("الأخبار") || 
                         section.select("a[href*='/news/']").isNotEmpty()) {
+                        println("DEBUG CimaNow: Skipping section '$sectionName' - News Filter")
                         return@mapNotNull null
                     }
                     
@@ -310,15 +316,21 @@ class CimaNowProvider : MainAPI() {
 
                     if (paginationBase != null) {
                         sectionPaginationMap[sectionName] = paginationBase
-                        // DEBUG: Commenting out preloading to isolate black screen issue
-                        // preloadNextPage(sectionName, paginationBase)
                     }
 
-                    val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
+                    val rawItems = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
+                    println("DEBUG CimaNow: Section '$sectionName' - Raw Items found: ${rawItems.size}")
+
+                    val items = rawItems
                         .mapNotNull { it.toSearchResponse() }
                         .distinctBy { it.url }
+                    
+                    println("DEBUG CimaNow: Section '$sectionName' - Valid Items: ${items.size}")
 
-                    if (items.isEmpty()) return@mapNotNull null
+                    if (items.isEmpty()) {
+                        println("DEBUG CimaNow: Skipping section '$sectionName' - No Valid Items")
+                        return@mapNotNull null
+                    }
 
                     // Cache page 1
                     val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
