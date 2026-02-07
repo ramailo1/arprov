@@ -33,25 +33,60 @@ class CimaNowProvider : MainAPI() {
             // Element is a container (article, div), find anchor inside
             fixUrlNull(selectFirst("a")?.attr("href"))
         } ?: run {
-            println("DEBUG toSearchResponse: No URL found, isAnchor=$isAnchor, href='${attr("href")}'")
             return null
         }
         
-        // For poster, check data-src first (lazy loading), then src
-        val posterUrl = selectFirst("img")?.attr("data-src")
-            ?.ifBlank { selectFirst("img")?.attr("src") } ?: ""
+        // Skip news articles
+        if (url.contains("/news/")) {
+            return null
+        }
+        
+        // Get all images in order
+        val allImages = select("img")
+        
+        // For poster and title: Many sections have TWO images:
+        // - First image is often "logo" overlay
+        // - Second image is the actual poster with title in alt
+        // We need to find the correct image that's NOT the logo
+        var posterUrl = ""
+        var altTitle = ""
+        
+        for (img in allImages) {
+            val alt = img.attr("alt")?.trim() ?: ""
+            // Skip logo images
+            if (alt.equals("logo", ignoreCase = true) || alt.isEmpty()) {
+                continue
+            }
+            // Found a non-logo image with an alt text
+            // Check data-src first (lazy loading), then src
+            posterUrl = img.attr("data-src")?.ifBlank { null } ?: img.attr("src") ?: ""
+            altTitle = alt
+            break
+        }
+        
+        // Fallback: if no good image found, use first image anyway
+        if (posterUrl.isEmpty() && allImages.isNotEmpty()) {
+            val firstImg = allImages.first()
+            posterUrl = firstImg?.attr("data-src")?.ifBlank { null } ?: firstImg?.attr("src") ?: ""
+        }
         
         // Title extraction with multiple fallbacks
         var title = select("li[aria-label=\"title\"]").text().trim()
         if (title.isEmpty()) {
-            title = selectFirst("img")?.attr("alt") ?: ""
+            title = altTitle
+        }
+        if (title.isEmpty()) {
+            // Last resort: first non-logo image's alt
+            title = allImages.firstOrNull()?.attr("alt")?.takeIf { !it.equals("logo", ignoreCase = true) } ?: ""
         }
         if (title.isEmpty()) {
             title = text().cleanHtml().trim()
         }
         
-        println("DEBUG toSearchResponse: url=$url, title='${title.take(30)}', poster=${posterUrl.take(50)}'")
-        
+        // Skip items with no meaningful title
+        if (title.isEmpty() || title.equals("logo", ignoreCase = true)) {
+            return null
+        }
         
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
@@ -84,8 +119,8 @@ class CimaNowProvider : MainAPI() {
         val pages = allSections
             .filter { 
                 val text = it.text()
-                val shouldFilter = text.contains(Regex("أختر وجهتك المفضلة|تم اضافته حديثاً"))
-                if (shouldFilter) println("DEBUG CimaNow: Filtering section with text: ${text.take(50)}")
+                // Filter out navigation sections and news section
+                val shouldFilter = text.contains(Regex("أختر وجهتك المفضلة|تم اضافته حديثاً|إقرا الخبر"))
                 !shouldFilter
             }
             .mapNotNull { section ->
