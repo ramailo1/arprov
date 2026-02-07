@@ -254,18 +254,6 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
-    private fun preloadNextPage(
-        sectionName: String,
-        baseUrl: String
-    ) {
-        GlobalScope.launch {
-            try {
-                loadSectionPage(sectionName, baseUrl, 2)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
     private suspend fun loadSectionPage(
         sectionName: String,
         baseUrl: String,
@@ -290,11 +278,17 @@ class CimaNowProvider : MainAPI() {
             it.toSearchResponse()
         }.distinctBy { it.url }
 
-        // If empty → this is the LAST page
-        if (items.isEmpty()) {
+        // V8: Harden Pagination Logic
+        // Check if there is physically a 'next page' button or link to page+1
+        val hasNextPage = doc.select("ul[aria-label='pagination'] li a")
+            .any { it.text().toIntOrNull() == page + 1 || it.attr("aria-label").contains("Next") }
+
+        if (items.isEmpty() && !hasNextPage) {
             sectionLastPage[sectionName] = page - 1
             return emptyList()
         }
+
+        println("DEBUG CimaNow: Page=$page | Section=$sectionName | Items=${items.size} | NextPage=$hasNextPage")
 
         // Cache result
         val sectionCache =
@@ -341,15 +335,20 @@ class CimaNowProvider : MainAPI() {
                         async {
                             try {
                                 val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
-                                val items = doc.select("article[aria-label='post'] > a")
+                                // V8: Unify Selector (Match loadSectionPage)
+                                val items = doc.select(
+                                    ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
+                                )
                                     .mapNotNull { it.toSearchResponse() }
                                     .distinctBy { it.url }
 
                                 if (items.isNotEmpty()) {
                                     // Map pagination: The base URL IS the category URL
                                     sectionPaginationMap[name] = url
+                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=${items.size}")
                                     HomePageList(name, items)
                                 } else {
+                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=0 (Empty)")
                                     null
                                 }
                             } catch (e: Exception) {
