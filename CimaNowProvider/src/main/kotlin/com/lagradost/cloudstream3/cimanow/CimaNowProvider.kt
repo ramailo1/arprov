@@ -223,46 +223,101 @@ class CimaNowProvider : MainAPI() {
     ): Boolean {
         try {
             println("DEBUG loadLinks: Loading URL: $data")
-            val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
             
-            // Try multiple selectors for iframes - website may use different structures
-            val iframeSelectors = listOf(
-                "ul#watch li[aria-label=\"embed\"] iframe",
-                "ul#watch li iframe",
-                "ul#watch iframe",
-                "#watch iframe",
-                "iframe[src*='embed']",
-                "iframe[data-src*='embed']",
-                "iframe[src*='player']",
-                "iframe[data-src*='player']"
-            )
+            // Remove /watching/ suffix to get the main page URL
+            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
+                .replace("https:/", "https://")
+            println("DEBUG loadLinks: Main page URL: $mainPageUrl")
+            
+            // Fetch the main page to get the post ID from shortlink
+            val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
+            
+            // Extract post ID from shortlink: <link rel='shortlink' href='https://cimanow.cc/?p=123456' />
+            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")
+                ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
+            
+            // Fallback: try to find postid from body class like "postid-123456"
+            if (postId == null) {
+                postId = mainDoc.selectFirst("body")?.className()
+                    ?.split(" ")?.find { it.startsWith("postid-") }
+                    ?.substringAfter("postid-")
+            }
+            
+            println("DEBUG loadLinks: Found post ID: $postId")
             
             var foundLinks = 0
             
-            // Extract streaming servers from #watch tab
-            for (selector in iframeSelectors) {
-                val iframes = doc.select(selector)
-                println("DEBUG loadLinks: Selector '$selector' found ${iframes.size} iframes")
+            if (postId != null) {
+                // AJAX endpoint for getting server iframes
+                val ajaxBaseUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php"
                 
-                iframes.forEach { iframe ->
-                    // Handle lazy-loaded iframes: prioritize data-src over src
-                    val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
-                    println("DEBUG loadLinks: Found iframe src: $src")
-                    if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
-                        val fullSrc = if (src.startsWith("//")) "https:$src" else src
-                        println("DEBUG loadLinks: Calling loadExtractor with: $fullSrc")
-                        loadExtractor(fullSrc, subtitleCallback, callback)
-                        foundLinks++
+                // Try multiple server indices (common servers: 00=CimaNow, 7=OK, 12=Uqload, 30=VK, 31=Vidguard, 32=Filemoon)
+                val serverIndices = listOf("00", "31", "32", "7", "30", "12", "33", "34", "35")
+                
+                for (index in serverIndices) {
+                    try {
+                        val ajaxUrl = "$ajaxBaseUrl?action=switch&index=$index&id=$postId"
+                        println("DEBUG loadLinks: Calling AJAX: $ajaxUrl")
+                        
+                        val response = app.get(
+                            ajaxUrl,
+                            headers = mapOf(
+                                "Referer" to mainPageUrl,
+                                "X-Requested-With" to "XMLHttpRequest"
+                            )
+                        ).text
+                        
+                        // Parse iframe src from response: <iframe src="https://..." ...>
+                        val iframeSrcMatch = Regex("""(?:src|data-src)=["']([^"']+)["']""").find(response)
+                        val iframeSrc = iframeSrcMatch?.groupValues?.getOrNull(1)
+                        
+                        if (!iframeSrc.isNullOrBlank() && (iframeSrc.startsWith("http") || iframeSrc.startsWith("//"))) {
+                            val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                            println("DEBUG loadLinks: Found iframe from AJAX (index $index): $fullSrc")
+                            loadExtractor(fullSrc, subtitleCallback, callback)
+                            foundLinks++
+                        }
+                    } catch (e: Exception) {
+                        println("DEBUG loadLinks: AJAX error for index $index: ${e.message}")
                     }
                 }
-                if (foundLinks > 0) break // Stop if we found iframes with this selector
             }
             
-            println("DEBUG loadLinks: Found $foundLinks streaming iframes")
+            println("DEBUG loadLinks: Found $foundLinks streaming links via AJAX")
             
-            // Extract download links from #download tab
+            // If AJAX failed, try the original iframe scraping approach as fallback
+            if (foundLinks == 0) {
+                println("DEBUG loadLinks: AJAX failed, trying fallback iframe scraping...")
+                val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
+                
+                val iframeSelectors = listOf(
+                    "ul#watch li[aria-label=\"embed\"] iframe",
+                    "ul#watch li iframe", 
+                    "ul#watch iframe",
+                    "#watch iframe",
+                    "iframe[src*='embed']",
+                    "iframe[data-src*='embed']",
+                    "iframe[src*='player']",
+                    "iframe[data-src*='player']"
+                )
+                
+                for (selector in iframeSelectors) {
+                    val iframes = doc.select(selector)
+                    iframes.forEach { iframe ->
+                        val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
+                        if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
+                            val fullSrc = if (src.startsWith("//")) "https:$src" else src
+                            loadExtractor(fullSrc, subtitleCallback, callback)
+                            foundLinks++
+                        }
+                    }
+                    if (foundLinks > 0) break
+                }
+            }
+            
+            // Extract download links from the watching page
+            val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
             val downloadBlocks = doc.select("ul#download li[aria-label=\"quality\"].box")
-            println("DEBUG loadLinks: Found ${downloadBlocks.size} download quality blocks")
             downloadBlocks.forEach { qualityBlock ->
                 val serverName = qualityBlock.selectFirst("span")?.text()?.trim() ?: "Download"
                 
@@ -287,7 +342,6 @@ class CimaNowProvider : MainAPI() {
                 }
             }
             
-            // Extract additional download servers from li[aria-label="download"]
             doc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
                 val url = link.attr("href")
                 if (url.isBlank()) return@forEach
@@ -307,8 +361,9 @@ class CimaNowProvider : MainAPI() {
                 )
             }
             
-            return true
+            return foundLinks > 0
         } catch (e: Exception) {
+            println("DEBUG loadLinks: Exception: ${e.message}")
             return false
         }
     }

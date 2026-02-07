@@ -68,7 +68,7 @@ graph TD
 | **Cima4U** (Working) | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** (Working) | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
 | **CimaLeek** (New) | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
-| **QisatTv** (Working) | Movies & Series | `com.lagradost.cloudstream3.qisat` |
+| **QisatTv** (Development) | Movies & Series | `com.lagradost.cloudstream3.qisat` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
