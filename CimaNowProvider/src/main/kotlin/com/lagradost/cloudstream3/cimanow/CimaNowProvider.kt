@@ -310,19 +310,30 @@ class CimaNowProvider : MainAPI() {
             val serverIndices = listOf("00", "33", "34", "35", "31", "32", "7", "12")
             var foundLinks = 0
 
-            // Try AJAX servers
-            for (index in serverIndices) {
-                try {
-                    val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                    val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
-                    val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                    if (iframeSrc.isNotBlank()) {
-                        val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                        loadExtractor(fullSrc, subtitleCallback, callback)
-                        foundLinks++
+            // Try AJAX servers in parallel
+            // V10: Parallel Execution
+            val ajaxResults = coroutineScope {
+                serverIndices.map { index ->
+                    async {
+                        try {
+                            val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                            val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                            val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
+                            if (iframeSrc.isNotBlank()) {
+                                val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                                loadExtractor(fullSrc, subtitleCallback, callback)
+                                true
+                            } else {
+                                false
+                            }
+                        } catch (_: Exception) {
+                            false
+                        }
                     }
-                } catch (_: Exception) {}
+                }.awaitAll()
             }
+            
+            foundLinks += ajaxResults.count { it }
 
             // Fallback: Scrape iframe directly from page
             if (foundLinks == 0) {
