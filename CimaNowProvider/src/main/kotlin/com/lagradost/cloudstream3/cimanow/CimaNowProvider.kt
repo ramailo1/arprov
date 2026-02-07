@@ -7,6 +7,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -280,8 +283,9 @@ class CimaNowProvider : MainAPI() {
         val url = "$baseUrl/page/$page/"
         val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
 
+        // FIXED: Expanded selector to support Page 2+ structure where .owl-item might be missing
         val items = doc.select(
-            ".owl-item a, .owl-body a, .item article, article[aria-label='post']"
+            ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
         ).mapNotNull {
             it.toSearchResponse()
         }.distinctBy { it.url }
@@ -307,142 +311,70 @@ class CimaNowProvider : MainAPI() {
         try {
             // Page 1 Logic
             if (page == 1) {
-                // Fetch Home and Latest concurrently
-                // Note: We use async logic implicitly by making two requests. 
-                // Since we are in a suspend function, we can just do them sequentially or use apmap if available.
-                // For simplicity and stability, we fetch sequentially but order them for UX.
-
-                val homeDoc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
-                val latestDoc = app.get("$mainUrl/الاحدث/", headers = mapOf("user-agent" to "MONKE")).document
-                // Explicitly fetch Movies and Series to guarantee content
-                val moviesDoc = app.get("$mainUrl/category/%d8%a7%d9%81%d9%84%d8%a7%d9%85/", headers = mapOf("user-agent" to "MONKE")).document // /category/افلام/
-                val seriesDoc = app.get("$mainUrl/category/%d9%85%d8%b3%d9%84%d8%b3%d9%84%d8%a7%d8%aa/", headers = mapOf("user-agent" to "MONKE")).document // /category/مسلسلات/
+                // V7: Explicit Section Mapping
+                // FIXED: Naming consistency (using "أحدث" with Hamza) to match UI requests
+                val sections = listOf(
+                    "أحدث الإضافات" to "$mainUrl/الاحدث",
+                    "أحدث المسلسلات العربية" to "$mainUrl/category/مسلسلات-عربية",
+                    "أحدث المسلسلات الاجنبية" to "$mainUrl/category/مسلسلات-اجنبية",
+                    "أحدث المسلسلات التركية" to "$mainUrl/category/مسلسلات-تركية",
+                    "أحدث الافلام العربية" to "$mainUrl/category/افلام-عربية",
+                    "أحدث الافلام الاجنبية" to "$mainUrl/category/افلام-اجنبية",
+                    "أحدث الافلام التركية" to "$mainUrl/category/افلام-تركية",
+                    "أحدث الافلام الهندية" to "$mainUrl/category/افلام-هندية",
+                    "أحدث الافلام الانيميشن" to "$mainUrl/category/افلام-انيميشن",
+                    "أحدث البرامج التلفزيونية" to "$mainUrl/category/البرامج-التلفزيونية",
+                    "أحدث المسرحيات" to "$mainUrl/category/مسرحيات",
+                    "أحدث الحفلات" to "$mainUrl/category/حفلات"
+                )
 
                 sectionPaginationMap.clear()
                 sectionPageCache.clear()
                 sectionLastPage.clear()
 
-                val distinctItems = mutableSetOf<String>()
                 val homePageLists = mutableListOf<HomePageList>()
 
-                // 1. Process "Latest Additions"
-                latestDoc.select("section[aria-label='posts']").let { section ->
-                     // Select the 'a' tag specifically to ensure href is found
-                     val items = section.select("article[aria-label='post'] > a")
-                        .mapNotNull { it.toSearchResponse() }
-                        .distinctBy { it.url }
-                    
-                    if (items.isNotEmpty()) {
-                        homePageLists.add(
-                            HomePageList(
-                                "أحدث الإضافات",
-                                items
-                            )
-                        )
-                        items.forEach { distinctItems.add(it.url) }
-                        sectionPaginationMap["أحدث الإضافات"] = "$mainUrl/الاحدث"
+                // Concurrent Fetching
+                // We use coroutineScope to allow parallel requests
+                coroutineScope {
+                    val deferredLists = sections.map { (name, url) ->
+                        async {
+                            try {
+                                val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
+                                val items = doc.select("article[aria-label='post'] > a")
+                                    .mapNotNull { it.toSearchResponse() }
+                                    .distinctBy { it.url }
+
+                                if (items.isNotEmpty()) {
+                                    // Map pagination: The base URL IS the category URL
+                                    sectionPaginationMap[name] = url
+                                    HomePageList(name, items)
+                                } else {
+                                    null
+                                }
+                            } catch (e: Exception) {
+                                println("DEBUG CimaNow: Failed to fetch section '$name': ${e.message}")
+                                null
+                            }
+                        }
                     }
+                    // Await all and filter nulls
+                    homePageLists.addAll(deferredLists.awaitAll().filterNotNull())
                 }
-
-                // 2. Process "Latest Movies" (Explicit Fetch)
-                moviesDoc.select("section[aria-label='posts']").let { section ->
-                     val items = section.select("article[aria-label='post'] > a")
-                        .mapNotNull { it.toSearchResponse() }
-                        .distinctBy { it.url }
-                        .filter { !distinctItems.contains(it.url) }
-                    
-                    if (items.isNotEmpty()) {
-                        homePageLists.add(
-                            HomePageList(
-                                "أحدث الافلام",
-                                items
-                            )
-                        )
-                        items.forEach { distinctItems.add(it.url) }
-                        sectionPaginationMap["أحدث الافلام"] = "$mainUrl/category/افلام"
-                    }
-                }
-                
-                // 3. Process "Latest Series" (Explicit Fetch)
-                seriesDoc.select("section[aria-label='posts']").let { section ->
-                     val items = section.select("article[aria-label='post'] > a")
-                        .mapNotNull { it.toSearchResponse() }
-                        .distinctBy { it.url }
-                        .filter { !distinctItems.contains(it.url) }
-                    
-                    if (items.isNotEmpty()) {
-                        homePageLists.add(
-                            HomePageList(
-                                "أحدث المسلسلات",
-                                items
-                            )
-                        )
-                        items.forEach { distinctItems.add(it.url) }
-                        sectionPaginationMap["أحدث المسلسلات"] = "$mainUrl/category/مسلسلات"
-                    }
-                }
-
-                // 4. Process Remaining Home Page Sections (if any work)
-                val allSections = homeDoc.select("section")
-                
-                val otherSections = allSections.mapNotNull { section ->
-                    val sectionName = section.selectFirst("div.title h1, h2, h3, h4, span.title, .section-title, .title, h1")
-                        ?.text()?.trim() 
-
-                    if (sectionName == null) return@mapNotNull null
-                    
-                    // Skip if matches our manual sections
-                    if (sectionName.contains("احدث الاضافات") || 
-                        sectionName.contains("الافلام") || 
-                        sectionName.contains("المسلسلات")) {
-                        return@mapNotNull null
-                    }
-                    
-                    if (sectionName.contains("إقرا الخبر") || 
-                        sectionName.contains("الأخبار") || 
-                        section.select("a[href*='/news/']").isNotEmpty()) {
-                        return@mapNotNull null
-                    }
-                    
-                    val paginationBase = section
-                        .selectFirst("a[href*='/page/'], a[href*='/category/']")
-                        ?.attr("href")
-                        ?.substringBefore("/page/")
-                        ?.let { fixUrl(it) }
-
-                    if (paginationBase != null) {
-                        sectionPaginationMap[sectionName] = paginationBase
-                    }
-
-                    val items = section.select(".owl-item a, .owl-body a, .item article, article[aria-label='post']")
-                        .mapNotNull { it.toSearchResponse() }
-                        .distinctBy { it.url }
-
-                    if (items.isEmpty()) return@mapNotNull null
-
-
-                    // Cache page 1
-                    val sectionCache = sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
-                    sectionCache[1] = items.toMutableList()
-
-                    HomePageList(
-                        sectionName,
-                        items
-                    )
-                }
-                
-                homePageLists.addAll(otherSections)
 
                 if (homePageLists.isEmpty()) {
-                    println("DEBUG CimaNow: Warning - HomePageList is empty!")
+                    println("DEBUG CimaNow: Warning - HomePageList is empty after V7 explicit fetch!")
                 }
 
                 return newHomePageResponse(homePageLists)
             }
             
             // Page > 1 Logic
+            println("DEBUG Request name = ${request.name}")
             val base = sectionPaginationMap[request.name]
-                ?: return newHomePageResponse(emptyList())
+            println("DEBUG Pagination Map = $sectionPaginationMap")
+            
+            if (base == null) return newHomePageResponse(emptyList())
 
             val items = loadSectionPage(
                 sectionName = request.name,
