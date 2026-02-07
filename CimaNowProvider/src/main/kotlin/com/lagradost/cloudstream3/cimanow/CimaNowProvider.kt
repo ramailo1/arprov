@@ -13,6 +13,8 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
+import kotlinx.coroutines.withTimeout
+
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
@@ -53,21 +55,30 @@ class CimaNowProvider : MainAPI() {
         
         if (url == null || url.contains("/news/") || url.contains("coming-soon", true) || url.contains("قريبا")) return null
 
+        // V11: Strict Poster Selection
         val images = select("img")
-        // Find first image that isn't "logo"
+        // Find first image that isn't "logo" (check alt, class, src)
         val posterImg = images.firstOrNull { 
             val alt = it.attr("alt")
-            alt.isNotBlank() && !alt.equals("logo", true) 
+            val cls = it.className()
+            val src = it.attr("src")
+            !alt.contains("logo", true) && 
+            !cls.contains("logo", true) && 
+            !src.contains("logo", true) &&
+            alt.isNotBlank()
         }
         
-        // Priority: data-src -> src
+        // Priority: data-src -> src (Lazy Loading Support)
         val posterUrl = posterImg?.attr("data-src")?.ifBlank { null } 
             ?: posterImg?.attr("src")?.ifBlank { null }
-            ?: images.firstOrNull()?.attr("src") 
+            ?: images.firstOrNull { !it.attr("src").contains("logo", true) }?.attr("src") 
             ?: ""
             
-        // Title: Aria Label -> Alt -> Text
+        // V11: Relaxed Title Extraction
         val title = select("li[aria-label=\"title\"]").text().takeIf { it.isNotBlank() } 
+            ?: attr("aria-label").takeIf { it.isNotBlank() } // Fallback to article label
+            ?: selectFirst("h3")?.text()?.cleanHtml()
+            ?: selectFirst("strong")?.text()?.cleanHtml()
             ?: posterImg?.attr("alt") 
             ?: text().cleanHtml()
 
@@ -316,15 +327,18 @@ class CimaNowProvider : MainAPI() {
                 serverIndices.map { index ->
                     async {
                         try {
-                            val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                            val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
-                            val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                            if (iframeSrc.isNotBlank()) {
-                                val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                                loadExtractor(fullSrc, subtitleCallback, callback)
-                                true
-                            } else {
-                                false
+                            // V11: Speed Fix - Timeout after 15s to prevent hanging
+                            withTimeout(15000L) {
+                                val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                                val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                                val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
+                                if (iframeSrc.isNotBlank()) {
+                                    val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                                    loadExtractor(fullSrc, subtitleCallback, callback)
+                                    true
+                                } else {
+                                    false
+                                }
                             }
                         } catch (_: Exception) {
                             false
