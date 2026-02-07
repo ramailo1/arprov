@@ -6,14 +6,12 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import org.jsoup.Jsoup
 
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
@@ -23,228 +21,222 @@ class CimaNowProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
+    /** --- Modular Section Config --- */
+    private val homeSections = mapOf(
+        "أحدث الإضافات" to "$mainUrl/الاحدث",
+        "أحدث المسلسلات العربية" to "$mainUrl/category/مسلسلات-عربية",
+        "أحدث المسلسلات الاجنبية" to "$mainUrl/category/مسلسلات-اجنبية",
+        "أحدث المسلسلات التركية" to "$mainUrl/category/مسلسلات-تركية",
+        "أحدث الافلام العربية" to "$mainUrl/category/افلام-عربية",
+        "أحدث الافلام الاجنبية" to "$mainUrl/category/افلام-اجنبية",
+        "أحدث الافلام التركية" to "$mainUrl/category/افلام-تركية",
+        "أحدث الافلام الهندية" to "$mainUrl/category/افلام-هندية",
+        "أحدث الافلام الانيميشن" to "$mainUrl/category/افلام-انيميشن",
+        "أحدث البرامج التلفزيونية" to "$mainUrl/category/البرامج-التلفزيونية",
+        "أحدث المسرحيات" to "$mainUrl/category/مسرحيات",
+        "أحدث الحفلات" to "$mainUrl/category/حفلات"
+    )
 
-
-    // Cache loaded pages per section
+    /** --- Cache for Pagination --- */
     private val sectionPageCache = mutableMapOf<String, MutableMap<Int, List<SearchResponse>>>()
-
-    // Track last page per section (auto stop)
     private val sectionLastPage = mutableMapOf<String, Int>()
-
     private val sectionPaginationMap = mutableMapOf<String, String>()
 
-    private fun String.getIntFromText(): Int? {
-        return Regex("""\d+""").find(this)?.value?.toIntOrNull()
-    }
+    /** --- Utils --- */
+    private fun String.getIntFromText(): Int? = Regex("""\d+""").find(this)?.value?.toIntOrNull()
+    private fun String.cleanHtml(): String = this.replace(Regex("<[^>]*>"), "").trim()
 
-    private fun String.cleanHtml(): String {
-        return this.replace(Regex("<[^>]*>"), "").trim()
-    }
-
+    /** --- Convert HTML element to SearchResponse --- */
     private fun Element.toSearchResponse(): SearchResponse? {
-        // FIXED: When element is already an <a> tag (from .owl-item a selector), use it directly
-        val isAnchor = this.tagName().equals("a", ignoreCase = true)
-        val url = if (isAnchor) {
-            fixUrlNull(attr("href"))
-        } else {
-            // Element is a container (article, div), find anchor inside
-            fixUrlNull(selectFirst("a")?.attr("href"))
-        } ?: run {
-            return null
-        }
+        val isAnchor = tagName().equals("a", ignoreCase = true)
+        val url = if (isAnchor) fixUrlNull(attr("href")) else fixUrlNull(selectFirst("a")?.attr("href"))
         
-        // Skip news articles
-        if (url.contains("/news/")) {
-            return null
-        }
+        if (url == null || url.contains("/news/") || url.contains("coming-soon", true) || url.contains("قريبا")) return null
 
-        // Skip coming soon & placeholder pages
-        if (
-            url.contains("coming-soon", true) ||
-            url.contains("قريبا", true)
-        ) {
-            return null
+        val images = select("img")
+        // Find first image that isn't "logo"
+        val posterImg = images.firstOrNull { 
+            val alt = it.attr("alt")
+            alt.isNotBlank() && !alt.equals("logo", true) 
         }
         
-        // Get all images in order
-        val allImages = select("img")
-        
-        // For poster and title: Many sections have TWO images:
-        // - First image is often "logo" overlay
-        // - Second image is the actual poster with title in alt
-        // We need to find the correct image that's NOT the logo
-        var posterUrl = ""
-        var altTitle = ""
-        
-        for (img in allImages) {
-            val alt = img.attr("alt")?.trim() ?: ""
-            // Skip logo images
-            if (alt.equals("logo", ignoreCase = true) || alt.isEmpty()) {
-                continue
-            }
-            // Found a non-logo image with an alt text
-            // Check data-src first (lazy loading), then src
-            posterUrl = img.attr("data-src")?.ifBlank { null } ?: img.attr("src") ?: ""
-            altTitle = alt
-            break
-        }
-        
-        // Fallback: if no good image found, use first image anyway
-        if (posterUrl.isEmpty() && allImages.isNotEmpty()) {
-            val firstImg = allImages.first()
-            posterUrl = firstImg?.attr("data-src")?.ifBlank { null } ?: firstImg?.attr("src") ?: ""
-        }
-        
-        // Title extraction with multiple fallbacks
-        var title = select("li[aria-label=\"title\"]").text().trim()
-        if (title.isEmpty()) {
-            title = altTitle
-        }
-        if (title.isEmpty()) {
-            // Last resort: first non-logo image's alt
-            title = allImages.firstOrNull()?.attr("alt")?.takeIf { !it.equals("logo", ignoreCase = true) } ?: ""
-        }
-        if (title.isEmpty()) {
-            title = text().cleanHtml().trim()
-        }
-        
-        // Skip items with no meaningful title
-        if (title.isEmpty() || title.equals("logo", ignoreCase = true)) {
-            return null
-        }
-        
+        // Priority: data-src -> src
+        val posterUrl = posterImg?.attr("data-src")?.ifBlank { null } 
+            ?: posterImg?.attr("src")?.ifBlank { null }
+            ?: images.firstOrNull()?.attr("src") 
+            ?: ""
+            
+        // Title: Aria Label -> Alt -> Text
+        val title = select("li[aria-label=\"title\"]").text().takeIf { it.isNotBlank() } 
+            ?: posterImg?.attr("alt") 
+            ?: text().cleanHtml()
+
+        if (title.isBlank() || title.equals("logo", true)) return null
+
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
-            
-        // Robust Type Detection
-        val isSeries = 
-            title.contains("مسلسل") || 
-            title.contains("برنامج") ||
-            url.contains("مسلسل") ||
-            url.contains("برنامج") ||
-            select("li[aria-label=\"tab\"]").text().let { t -> 
-                t.contains("مسلسلات") || t.contains("برامج")
-            }
 
-        val isMovie = !isSeries && (
-            url.contains(Regex("فيلم|مسرحية|حفلات")) || 
-            select("li[aria-label=\"tab\"]").text().contains("افلام")
-        )
+        // Type Detection Logic
+        val isSeries = title.contains("مسلسل") || title.contains("برنامج") ||
+                url.contains("مسلسل") || url.contains("برنامج") ||
+                select("li[aria-label=\"tab\"]").text().let { t -> t.contains("مسلسلات") || t.contains("برامج") }
         
-        val tvType = if (isSeries) TvType.TvSeries else if (isMovie) TvType.Movie else TvType.Movie // Default to Movie if unsure, previously was Series which caused issues? User said "detected as movies" so maybe default was Movie and Series check failed.
-
-        // If it looks like an Episode (has "الحلقة"), force Series
-        val finalTvType = if (title.contains("الحلقة") || select("li[aria-label=\"episode\"]").isNotEmpty()) {
-             TvType.TvSeries
+        val isEpisodes = title.contains("الحلقة") || select("li[aria-label=\"episode\"]").isNotEmpty()
+        
+        val finalType = if (isEpisodes) {
+            TvType.TvSeries
+        } else if (isSeries) {
+            TvType.TvSeries
         } else {
-             tvType
+            TvType.Movie
         }
+        
+        val quality = getQualityFromString(select("li[aria-label=\"ribbon\"]").text())
 
-        val qualityText = select("li[aria-label=\"ribbon\"]").firstOrNull()?.text()
-        
-        // Block posts that don't contain watching or eps check by badge text
-        val statusText = select("li[aria-label=\"status\"]").text()
-        if (statusText.contains("قريبا")) return null
-        
-        val quality = getQualityFromString(qualityText)
-        
-        return newMovieSearchResponse(
-            title,
-            url,
-            finalTvType,
-        ) {
+        return newMovieSearchResponse(title, url, finalType) {
             this.posterUrl = posterUrl
             this.year = year
             this.quality = quality
         }
     }
 
-    private fun detectTvType(
-        url: String,
-        doc: Document
-    ): TvType {
-        // 1. Episodes list = Series
-        if (doc.select("ul#eps li").isNotEmpty()) {
-            return TvType.TvSeries
+    /** --- Load a single section page --- */
+    private suspend fun loadSectionPage(sectionName: String, baseUrl: String, page: Int): List<SearchResponse> {
+        val last = sectionLastPage[sectionName]
+        if (last != null && page > last) return emptyList()
+        sectionPageCache[sectionName]?.get(page)?.let { return it }
+
+        val url = "$baseUrl/page/$page/"
+        val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
+
+        // Unified Selector (V8)
+        val items = doc.select(
+            ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
+        ).mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
+
+        // V8: Harden Pagination Logic (Check for Next Page)
+        val hasNextPage = doc.select("ul[aria-label='pagination'] li a")
+            .any { it.text().toIntOrNull() == page + 1 || it.attr("aria-label").contains("Next") }
+
+        if (items.isEmpty() && !hasNextPage) {
+            sectionLastPage[sectionName] = page - 1
+            return emptyList()
         }
         
-        // 2. Title/Breadcrumbs check
-        val pageTitle = doc.select("title").text()
-        if (pageTitle.contains("مسلسل") || pageTitle.contains("برنامج")) {
-             return TvType.TvSeries
-        }
+        println("DEBUG CimaNow: Page=$page | Section=$sectionName | Items=${items.size} | NextPage=$hasNextPage")
 
-        // 2. URL patterns
-        if (
-            url.contains("/selary/") ||
-            url.contains("/episode/")
-        ) {
-            return TvType.TvSeries
-        }
-
-        // 3. Category breadcrumbs
-        val categories = doc.select("article ul li a")
-            .joinToString(" ") { it.text() }
-
-        if (categories.contains("مسلسلات")) {
-            return TvType.TvSeries
-        }
-
-        // 4. Explicit movie categories
-        if (
-            categories.contains("افلام") ||
-            categories.contains("مسرحيات") ||
-            categories.contains("حفلات")
-        ) {
-            return TvType.Movie
-        }
-
-        // 5. Safe fallback
-        return TvType.Movie
+        sectionPageCache.getOrPut(sectionName) { mutableMapOf() }[page] = items
+        return items
     }
 
-    private fun extractSeasons(
-        doc: Document
-    ): List<Pair<Int, String>> {
-        return doc.select("section[aria-label='seasons'] ul li a")
+    /** --- Main Page --- */
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        return try {
+            if (page == 1) {
+                sectionPaginationMap.clear()
+                sectionPageCache.clear()
+                sectionLastPage.clear()
+
+                val homePageLists = mutableListOf<HomePageList>()
+
+                coroutineScope {
+                    val deferredLists = homeSections.map { (name, url) ->
+                        async {
+                            try {
+                                val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
+                                // Unified selector matching loadSectionPage
+                                val items = doc.select(
+                                    ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
+                                )
+                                .mapNotNull { it.toSearchResponse() }
+                                .distinctBy { it.url }
+                                
+                                if (items.isNotEmpty()) {
+                                    sectionPaginationMap[name] = url
+                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=${items.size}")
+                                    HomePageList(name, items)
+                                } else {
+                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=0 (Empty)")
+                                    null
+                                }
+                            } catch (e: Exception) { 
+                                println("DEBUG CimaNow: Failed to fetch section '$name': ${e.message}")
+                                null 
+                            }
+                        }
+                    }
+                    homePageLists.addAll(deferredLists.awaitAll().filterNotNull())
+                }
+                newHomePageResponse(homePageLists)
+            } else {
+                val base = sectionPaginationMap[request.name] ?: return newHomePageResponse(emptyList())
+                val items = loadSectionPage(request.name, base, page)
+                newHomePageResponse(listOf(HomePageList(request.name, items)))
+            }
+        } catch (e: Exception) {
+            println("DEBUG getMainPage error: ${e.message}")
+            newHomePageResponse(emptyList())
+        }
+    }
+
+    /** --- Search --- */
+    override suspend fun search(query: String): List<SearchResponse> {
+        val result = arrayListOf<SearchResponse>()
+        val doc = app.get("$mainUrl/page/1/?s=$query").document
+        
+        doc.select(".owl-item a, .owl-body a, .item article, article[aria-label='post'] > a")
+            .forEach { it.toSearchResponse()?.let(result::add) }
+
+        val maxPage = doc.selectFirst("ul[aria-label='pagination']")?.select("li")?.not("li.active")?.lastOrNull()?.text()?.toIntOrNull() ?: 1
+        
+        if (maxPage > 1) {
+             val limit = maxPage.coerceAtMost(5)
+             (2..limit).forEach { i ->
+                val pDoc = app.get("$mainUrl/page/$i/?s=$query").document
+                pDoc.select(".owl-item a, .owl-body a, .item article, article[aria-label='post'] > a")
+                    .forEach { it.toSearchResponse()?.let(result::add) }
+            }
+        }
+
+        return result.distinctBy { it.url }.sortedBy { it.name }
+    }
+
+    /** --- Detect if URL is a Movie or Series --- */
+    private fun detectTvType(url: String, doc: Document): TvType {
+        if (doc.select("ul#eps li").isNotEmpty()) return TvType.TvSeries
+        
+        val pageTitle = doc.select("title").text()
+        if (pageTitle.contains("مسلسل") || pageTitle.contains("برنامج")) return TvType.TvSeries
+        
+        val categories = doc.select("article ul li a").joinToString(" ") { it.text() }
+        
+        return when {
+            categories.contains("مسلسلات") -> TvType.TvSeries
+            categories.contains("افلام") || categories.contains("مسرحيات") || categories.contains("حفلات") -> TvType.Movie
+            url.contains("/selary/") || url.contains("/episode/") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+    }
+
+    /** --- Extract Seasons for Series --- */
+    private fun extractSeasons(doc: Document): List<Pair<Int, String>> =
+        doc.select("section[aria-label='seasons'] ul li a")
             .mapNotNull { a ->
-                val url = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
-
-                val seasonNum = Regex("""الموسم\s*(\d+)""")
-                    .find(a.text())
-                    ?.groupValues
-                    ?.get(1)
-                    ?.toIntOrNull()
-                    ?: return@mapNotNull null
-
-                seasonNum to url
+                val seasonUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+                val seasonNum = Regex("""الموسم\s*(\d+)""").find(a.text())?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null
+                seasonNum to seasonUrl
             }
             .distinctBy { it.first }
             .sortedBy { it.first }
-    }
 
-    private suspend fun loadSeasonEpisodes(
-        seasonNumber: Int,
-        seasonUrl: String
-    ): List<Episode> {
+    /** --- Load Episodes for a Season --- */
+    private suspend fun loadSeasonEpisodes(seasonNumber: Int, seasonUrl: String): List<Episode> {
         val doc = app.get(seasonUrl).document
-
-        return doc.select("ul#eps li").mapNotNull { episode ->
-            val epUrl = fixUrlNull(
-                episode.selectFirst("a")?.attr("href")
-            ) ?: return@mapNotNull null
-
-            val epNum = episode.select("a em")
-                .text()
-                .toIntOrNull()
-
-            val epName = episode.select("a img:nth-child(2)")
-                .attr("alt")
-                .ifBlank { "Episode $epNum" }
-
-            val epPoster = episode.select("a img:nth-child(2)")
-                .attr("src")
-
+        return doc.select("ul#eps li").mapNotNull { ep ->
+            val epUrl = fixUrlNull(ep.selectFirst("a")?.attr("href")) ?: return@mapNotNull null
+            val epNum = ep.select("a em").text().toIntOrNull()
+            val epName = ep.select("a img:nth-child(2)").attr("alt").ifBlank { "Episode $epNum" }
+            val epPoster = ep.select("a img:nth-child(2)").attr("src")
             newEpisode("$epUrl/watching/") {
                 this.name = epName
                 this.episode = epNum
@@ -254,221 +246,34 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
-    private suspend fun loadSectionPage(
-        sectionName: String,
-        baseUrl: String,
-        page: Int
-    ): List<SearchResponse> {
-        // Stop if we already know this is beyond last page
-        val last = sectionLastPage[sectionName]
-        if (last != null && page > last) return emptyList()
-
-        // Return cached page if exists
-        sectionPageCache[sectionName]?.get(page)?.let {
-            return it
-        }
-
-        val url = "$baseUrl/page/$page/"
-        val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
-
-        // FIXED: Expanded selector to support Page 2+ structure where .owl-item might be missing
-        val items = doc.select(
-            ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
-        ).mapNotNull {
-            it.toSearchResponse()
-        }.distinctBy { it.url }
-
-        // V8: Harden Pagination Logic
-        // Check if there is physically a 'next page' button or link to page+1
-        val hasNextPage = doc.select("ul[aria-label='pagination'] li a")
-            .any { it.text().toIntOrNull() == page + 1 || it.attr("aria-label").contains("Next") }
-
-        if (items.isEmpty() && !hasNextPage) {
-            sectionLastPage[sectionName] = page - 1
-            return emptyList()
-        }
-
-        println("DEBUG CimaNow: Page=$page | Section=$sectionName | Items=${items.size} | NextPage=$hasNextPage")
-
-        // Cache result
-        val sectionCache =
-            sectionPageCache.getOrPut(sectionName) { mutableMapOf() }
-        sectionCache[page] = items
-
-        return items
-    }
-
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        try {
-            // Page 1 Logic
-            if (page == 1) {
-                // V7: Explicit Section Mapping
-                // FIXED: Naming consistency (using "أحدث" with Hamza) to match UI requests
-                val sections = listOf(
-                    "أحدث الإضافات" to "$mainUrl/الاحدث",
-                    "أحدث المسلسلات العربية" to "$mainUrl/category/مسلسلات-عربية",
-                    "أحدث المسلسلات الاجنبية" to "$mainUrl/category/مسلسلات-اجنبية",
-                    "أحدث المسلسلات التركية" to "$mainUrl/category/مسلسلات-تركية",
-                    "أحدث الافلام العربية" to "$mainUrl/category/افلام-عربية",
-                    "أحدث الافلام الاجنبية" to "$mainUrl/category/افلام-اجنبية",
-                    "أحدث الافلام التركية" to "$mainUrl/category/افلام-تركية",
-                    "أحدث الافلام الهندية" to "$mainUrl/category/افلام-هندية",
-                    "أحدث الافلام الانيميشن" to "$mainUrl/category/افلام-انيميشن",
-                    "أحدث البرامج التلفزيونية" to "$mainUrl/category/البرامج-التلفزيونية",
-                    "أحدث المسرحيات" to "$mainUrl/category/مسرحيات",
-                    "أحدث الحفلات" to "$mainUrl/category/حفلات"
-                )
-
-                sectionPaginationMap.clear()
-                sectionPageCache.clear()
-                sectionLastPage.clear()
-
-                val homePageLists = mutableListOf<HomePageList>()
-
-                // Concurrent Fetching
-                // We use coroutineScope to allow parallel requests
-                coroutineScope {
-                    val deferredLists = sections.map { (name, url) ->
-                        async {
-                            try {
-                                val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
-                                // V8: Unify Selector (Match loadSectionPage)
-                                val items = doc.select(
-                                    ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
-                                )
-                                    .mapNotNull { it.toSearchResponse() }
-                                    .distinctBy { it.url }
-
-                                if (items.isNotEmpty()) {
-                                    // Map pagination: The base URL IS the category URL
-                                    sectionPaginationMap[name] = url
-                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=${items.size}")
-                                    HomePageList(name, items)
-                                } else {
-                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=0 (Empty)")
-                                    null
-                                }
-                            } catch (e: Exception) {
-                                println("DEBUG CimaNow: Failed to fetch section '$name': ${e.message}")
-                                null
-                            }
-                        }
-                    }
-                    // Await all and filter nulls
-                    homePageLists.addAll(deferredLists.awaitAll().filterNotNull())
-                }
-
-                if (homePageLists.isEmpty()) {
-                    println("DEBUG CimaNow: Warning - HomePageList is empty after V7 explicit fetch!")
-                }
-
-                return newHomePageResponse(homePageLists)
-            }
-            
-            // Page > 1 Logic
-            println("DEBUG Request name = ${request.name}")
-            val base = sectionPaginationMap[request.name]
-            println("DEBUG Pagination Map = $sectionPaginationMap")
-            
-            if (base == null) return newHomePageResponse(emptyList())
-
-            val items = loadSectionPage(
-                sectionName = request.name,
-                baseUrl = base,
-                page = page
-            )
-
-            return newHomePageResponse(
-                listOf(
-                    HomePageList(
-                        request.name,
-                        items
-                    )
-                )
-            )
-        } catch (e: Exception) {
-            println("DEBUG CimaNow: Error in getMainPage: ${e.message}")
-            e.printStackTrace()
-            return newHomePageResponse(emptyList())
-        }
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        val result = arrayListOf<SearchResponse>()
-        val doc = app.get("$mainUrl/page/1/?s=$query").document
-        val paginationElement = doc.selectFirst("ul[aria-label=\"pagination\"]")
-        
-        doc.select(".owl-item a, .owl-body a, .item article, article[aria-label=\"post\"]").forEach {
-            it.toSearchResponse()?.let { res -> result.add(res) }
-        }
-        
-        if (paginationElement != null) {
-            val max = paginationElement.select("li").not("li.active")
-                .lastOrNull()?.text()?.toIntOrNull()
-            if (max != null && max <= 5) {
-                (2..max).forEach { pageNum ->
-                    app.get("$mainUrl/page/$pageNum/?s=$query").document
-                        .select(".owl-item a, .owl-body a, .item article, article[aria-label=\"post\"]").forEach { element ->
-                            element.toSearchResponse()?.let { res -> result.add(res) }
-                        }
-                }
-            }
-        }
-        return result.distinctBy { it.url }.sortedBy { it.name }
-    }
-
+    /** --- Load Movie or Series Page --- */
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         val posterUrl = doc.select("meta[property=\"og:image\"]").attr("content")
         val year = doc.select("article ul:nth-child(1) li a").lastOrNull()?.text()?.toIntOrNull()
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        
-        val tvType = detectTvType(url, doc)
-        
-        // val youtubeTrailer = doc.select("iframe[src*='youtube']").attr("src")
-
         val synopsis = doc.select("ul#details li:contains(لمحة) p").text()
         val tags = doc.selectFirst("article ul")?.select("li")?.map { it.text() }
-
-        val recommendations = doc.select("ul#related li").mapNotNull { element ->
-            val recUrl = fixUrlNull(element.select("a").attr("href")) ?: return@mapNotNull null
-            val recPoster = element.select("img:nth-child(2)").attr("src")
-            val recName = element.select("img:nth-child(2)").attr("alt")
-            newMovieSearchResponse(recName, recUrl, TvType.Movie) {
-                this.posterUrl = recPoster
-            }
+        val recommendations = doc.select("ul#related li").mapNotNull { el ->
+            val recUrl = fixUrlNull(el.select("a").attr("href")) ?: return@mapNotNull null
+            val recPoster = el.select("img:nth-child(2)").attr("src")
+            val recName = el.select("img:nth-child(2)").attr("alt")
+            newMovieSearchResponse(recName, recUrl, TvType.Movie) { this.posterUrl = recPoster }
         }
 
-        if (tvType == TvType.TvSeries) {
+        val tvType = detectTvType(url, doc)
+
+        return if (tvType == TvType.TvSeries) {
             val seasons = extractSeasons(doc)
             val episodes = mutableListOf<Episode>()
-
             if (seasons.isNotEmpty()) {
-                // Proper multi-season series
                 for ((seasonNum, seasonUrl) in seasons) {
-                    episodes += loadSeasonEpisodes(
-                        seasonNum,
-                        seasonUrl
-                    )
+                    episodes += loadSeasonEpisodes(seasonNum, seasonUrl)
                 }
             } else {
-                // Fallback: single-season series or current page
                 episodes += loadSeasonEpisodes(1, url)
             }
-
-            return newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                episodes.distinctBy { it.data }
-                    .sortedWith(
-                        compareBy<Episode> { it.season ?: 1 }
-                            .thenBy { it.episode ?: 0 }
-                    )
-            ) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedWith(compareBy<Episode> { it.season ?: 1 }.thenBy { it.episode ?: 0 })) {
                 this.posterUrl = posterUrl
                 this.plot = synopsis
                 this.year = year
@@ -476,22 +281,17 @@ class CimaNowProvider : MainAPI() {
                 this.recommendations = recommendations
             }
         } else {
-            return newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                "$url/watching/"
-            ) {
+            newMovieLoadResponse(title, url, TvType.Movie, "$url/watching/") {
                 this.posterUrl = posterUrl
-                this.year = year
-                this.recommendations = recommendations
                 this.plot = synopsis
+                this.year = year
                 this.tags = tags
+                this.recommendations = recommendations
             }
         }
     }
 
-    @Suppress("DEPRECATION")
+    /** --- Load Streaming Links Modular --- */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -499,144 +299,37 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            println("DEBUG loadLinks: Loading URL: $data")
-            
-            // Remove /watching/ suffix to get the main page URL
-            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
-                .replace("https:/", "https://")
-            println("DEBUG loadLinks: Main page URL: $mainPageUrl")
-            
-            // Fetch the main page to get the post ID from shortlink
+            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/").replace("https:/", "https://")
             val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
-            
-            // Extract post ID from shortlink: <link rel='shortlink' href='https://cimanow.cc/?p=123456' />
-            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")
-                ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
-            
-            // Fallback: try to find postid from body class like "postid-123456"
-            if (postId == null) {
-                postId = mainDoc.selectFirst("body")?.className()
-                    ?.split(" ")?.find { it.startsWith("postid-") }
-                    ?.substringAfter("postid-")
-            }
-            
-            println("DEBUG loadLinks: Found post ID: $postId")
-            
+
+            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
+                ?: mainDoc.selectFirst("body")?.className()?.split(" ")?.find { it.startsWith("postid-") }?.substringAfter("postid-")
+
+            if (postId.isNullOrBlank()) return false
+
+            val serverIndices = listOf("00", "33", "34", "35", "31", "32", "7", "12")
             var foundLinks = 0
-            
-            if (postId != null) {
-                // Server indices to try via AJAX
-                val serverIndices = listOf(
-                    "00", // CimaNow main (first priority)
-                    "33",
-                    "34",
-                    "35",
-                    "31", // Vidguard
-                    "32", // Filemoon
-                    "7",  // OK
-                    "12"  // Uqload (last)
-                )
-                
-                for (index in serverIndices) {
-                    try {
-                        val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                        println("DEBUG loadLinks: Calling AJAX: $ajaxUrl")
-                        
-                        val response = app.get(
-                            ajaxUrl,
-                            headers = mapOf(
-                                "Referer" to mainPageUrl,
-                                "X-Requested-With" to "XMLHttpRequest"
-                            )
-                        ).text
-                        
-                        // Parse iframe src from response
-                        val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                        
-                        if (iframeSrc.isNotEmpty()) {
-                            println("DEBUG loadLinks: Found iframe from AJAX (index $index): $iframeSrc")
-                            
-                            var fullSrc = iframeSrc
-                            if (fullSrc.startsWith("//")) {
-                                fullSrc = "https:$iframeSrc"
-                            }
-                            
-                            // Priority extraction for CimaNowTV
-                            if (fullSrc.contains("cimanowtv.com")) {
-                                val tempLinks = mutableListOf<ExtractorLink>()
-                                loadExtractor(
-                                    fullSrc,
-                                    subtitleCallback
-                                ) { link ->
-                                    tempLinks.add(link)
-                                }
-                                
-                                tempLinks.forEach { link ->
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            "CimaNow (Main)",
-                                            "CimaNow (Main)",
-                                            link.url,
-                                            if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                        ) {
-                                            this.referer = link.referer
-                                            this.quality = link.quality
-                                        }
-                                    )
-                                }
-                                foundLinks++
-                                continue
-                            }
 
-                            loadExtractor(fullSrc, subtitleCallback, callback)
-                            foundLinks++
-                        } else {
-                            // Fallback: Extract CPM links directly (no iframe) for CimaNowTV
-                            val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
-                                .find(response)?.value
-
-                            if (cpmMatch != null) {
-                                println("DEBUG loadLinks: Found CPM match from AJAX (index $index): $cpmMatch")
-                                val tempLinks = mutableListOf<ExtractorLink>()
-                                loadExtractor(
-                                    cpmMatch,
-                                    subtitleCallback
-                                ) { link ->
-                                    tempLinks.add(link)
-                                }
-                                
-                                tempLinks.forEach { link ->
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            "CimaNow (Main)",
-                                            "CimaNow (Main)",
-                                            link.url,
-                                            if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                        ) {
-                                            this.referer = link.referer
-                                            this.quality = link.quality
-                                        }
-                                    )
-                                }
-                                foundLinks++
-                            }
-                        }
-                    } catch (e: Exception) {
-                        println("DEBUG loadLinks: AJAX error for index $index: ${e.message}")
+            // Try AJAX servers
+            for (index in serverIndices) {
+                try {
+                    val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                    val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                    val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
+                    if (iframeSrc.isNotBlank()) {
+                        val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                        loadExtractor(fullSrc, subtitleCallback, callback)
+                        foundLinks++
                     }
-                }
+                } catch (_: Exception) {}
             }
-            
-            println("DEBUG loadLinks: Found $foundLinks streaming links via AJAX")
-            
-            // If AJAX failed, try the original iframe scraping approach as fallback
+
+            // Fallback: Scrape iframe directly from page
             if (foundLinks == 0) {
-                println("DEBUG loadLinks: AJAX failed, trying fallback iframe scraping...")
                 val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-                
                 val iframeSelectors = listOf(
                     "ul#watch li[aria-label=\"embed\"] iframe",
-                    "ul#watch li iframe", 
+                    "ul#watch li iframe",
                     "ul#watch iframe",
                     "#watch iframe",
                     "iframe[src*='embed']",
@@ -644,12 +337,11 @@ class CimaNowProvider : MainAPI() {
                     "iframe[src*='player']",
                     "iframe[data-src*='player']"
                 )
-                
-                for (selector in iframeSelectors) {
-                    val iframes = doc.select(selector)
+                for (sel in iframeSelectors) {
+                    val iframes = doc.select(sel)
                     iframes.forEach { iframe ->
                         val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
-                        if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
+                        if (src.isNotBlank()) {
                             val fullSrc = if (src.startsWith("//")) "https:$src" else src
                             loadExtractor(fullSrc, subtitleCallback, callback)
                             foundLinks++
@@ -658,56 +350,22 @@ class CimaNowProvider : MainAPI() {
                     if (foundLinks > 0) break
                 }
             }
-            
-            // Extract download links from the watching page
+
+            // Download links
             val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-            val downloadBlocks = doc.select("ul#download li[aria-label=\"quality\"].box")
-            downloadBlocks.forEach { qualityBlock ->
-                val serverName = qualityBlock.selectFirst("span")?.text()?.trim() ?: "Download"
-                
-                qualityBlock.select("a").forEach { link ->
+            doc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label=\"download\"] a").forEach { block ->
+                block.select("a").forEach { link ->
                     val url = link.attr("href")
                     if (url.isBlank()) return@forEach
-                    
                     val qualityText = link.selectFirst("i")?.nextSibling()?.toString()?.trim() ?: ""
                     val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-                    
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "$serverName - $qualityText",
-                            url,
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = data
-                            this.quality = quality
-                        }
-                    )
+                    callback.invoke(newExtractorLink(this.name, qualityText.ifBlank { "Download" }, url, ExtractorLinkType.VIDEO) { this.referer = data; this.quality = quality })
                 }
             }
-            
-            doc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
-                val url = link.attr("href")
-                if (url.isBlank()) return@forEach
-                
-                val serverName = link.text().trim()
-                
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        "Download - $serverName",
-                        url,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = data
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-            
+
             return foundLinks > 0
         } catch (e: Exception) {
-            println("DEBUG loadLinks: Exception: ${e.message}")
+            println("DEBUG loadLinks Exception: ${e.message}")
             return false
         }
     }
