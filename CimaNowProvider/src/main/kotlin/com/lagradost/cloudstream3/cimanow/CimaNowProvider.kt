@@ -25,16 +25,23 @@ class CimaNowProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        // Handle both direct anchor elements and article containers
-        val anchor = selectFirst("picture a") ?: selectFirst("a") ?: this
-        val url = fixUrlNull(anchor.attr("href")) ?: fixUrlNull(attr("href")) ?: run {
-            println("DEBUG toSearchResponse: No URL found, anchor.href='${anchor.attr("href")}', this.href='${attr("href")}'")
+        // FIXED: When element is already an <a> tag (from .owl-item a selector), use it directly
+        val isAnchor = this.tagName().equals("a", ignoreCase = true)
+        val url = if (isAnchor) {
+            fixUrlNull(attr("href"))
+        } else {
+            // Element is a container (article, div), find anchor inside
+            fixUrlNull(selectFirst("a")?.attr("href"))
+        } ?: run {
+            println("DEBUG toSearchResponse: No URL found, isAnchor=$isAnchor, href='${attr("href")}'")
             return null
         }
         
+        // For poster, check data-src first (lazy loading), then src
         val posterUrl = selectFirst("img")?.attr("data-src")
             ?.ifBlank { selectFirst("img")?.attr("src") } ?: ""
         
+        // Title extraction with multiple fallbacks
         var title = select("li[aria-label=\"title\"]").text().trim()
         if (title.isEmpty()) {
             title = selectFirst("img")?.attr("alt") ?: ""
@@ -43,7 +50,8 @@ class CimaNowProvider : MainAPI() {
             title = text().cleanHtml().trim()
         }
         
-        println("DEBUG toSearchResponse: url=$url, title='${title.take(30)}', poster=${posterUrl.take(50)}")
+        println("DEBUG toSearchResponse: url=$url, title='${title.take(30)}', poster=${posterUrl.take(50)}'")
+        
         
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
@@ -214,18 +222,48 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
+            println("DEBUG loadLinks: Loading URL: $data")
             val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
             
+            // Try multiple selectors for iframes - website may use different structures
+            val iframeSelectors = listOf(
+                "ul#watch li[aria-label=\"embed\"] iframe",
+                "ul#watch li iframe",
+                "ul#watch iframe",
+                "#watch iframe",
+                "iframe[src*='embed']",
+                "iframe[data-src*='embed']",
+                "iframe[src*='player']",
+                "iframe[data-src*='player']"
+            )
+            
+            var foundLinks = 0
+            
             // Extract streaming servers from #watch tab
-            doc.select("ul#watch li[aria-label=\"embed\"] iframe").forEach { iframe ->
-                val src = iframe.attr("src")
-                if (src.isNotBlank()) {
-                    loadExtractor(src, subtitleCallback, callback)
+            for (selector in iframeSelectors) {
+                val iframes = doc.select(selector)
+                println("DEBUG loadLinks: Selector '$selector' found ${iframes.size} iframes")
+                
+                iframes.forEach { iframe ->
+                    // Handle lazy-loaded iframes: prioritize data-src over src
+                    val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
+                    println("DEBUG loadLinks: Found iframe src: $src")
+                    if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
+                        val fullSrc = if (src.startsWith("//")) "https:$src" else src
+                        println("DEBUG loadLinks: Calling loadExtractor with: $fullSrc")
+                        loadExtractor(fullSrc, subtitleCallback, callback)
+                        foundLinks++
+                    }
                 }
+                if (foundLinks > 0) break // Stop if we found iframes with this selector
             }
             
+            println("DEBUG loadLinks: Found $foundLinks streaming iframes")
+            
             // Extract download links from #download tab
-            doc.select("ul#download li[aria-label=\"quality\"].box").forEach { qualityBlock ->
+            val downloadBlocks = doc.select("ul#download li[aria-label=\"quality\"].box")
+            println("DEBUG loadLinks: Found ${downloadBlocks.size} download quality blocks")
+            downloadBlocks.forEach { qualityBlock ->
                 val serverName = qualityBlock.selectFirst("span")?.text()?.trim() ?: "Download"
                 
                 qualityBlock.select("a").forEach { link ->
