@@ -27,7 +27,11 @@ class CimaNowProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         // Handle both direct anchor elements and article containers
         val anchor = selectFirst("picture a") ?: selectFirst("a") ?: this
-        val url = fixUrlNull(anchor.attr("href")) ?: fixUrlNull(attr("href")) ?: return null
+        val url = fixUrlNull(anchor.attr("href")) ?: fixUrlNull(attr("href")) ?: run {
+            println("DEBUG toSearchResponse: No URL found, anchor.href='${anchor.attr("href")}', this.href='${attr("href")}'")
+            return null
+        }
+        
         val posterUrl = selectFirst("img")?.attr("data-src")
             ?.ifBlank { selectFirst("img")?.attr("src") } ?: ""
         
@@ -38,6 +42,8 @@ class CimaNowProvider : MainAPI() {
         if (title.isEmpty()) {
             title = text().cleanHtml().trim()
         }
+        
+        println("DEBUG toSearchResponse: url=$url, title='${title.take(30)}', poster=${posterUrl.take(50)}")
         
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
@@ -62,24 +68,59 @@ class CimaNowProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get("$mainUrl/home/", headers = mapOf("user-agent" to "MONKE")).document
-        val pages = doc.select("section")
-            .filter { !it.text().contains(Regex("أختر وجهتك المفضلة|تم اضافته حديثاً")) }
-            .mapNotNull {
-                val rawNameElement = it.selectFirst("span") ?: it.selectFirst("h2, h3, .title") ?: return@mapNotNull null
+        
+        // DEBUG: Log total sections found
+        val allSections = doc.select("section")
+        println("DEBUG CimaNow: Total sections found: ${allSections.size}")
+        
+        val pages = allSections
+            .filter { 
+                val text = it.text()
+                val shouldFilter = text.contains(Regex("أختر وجهتك المفضلة|تم اضافته حديثاً"))
+                if (shouldFilter) println("DEBUG CimaNow: Filtering section with text: ${text.take(50)}")
+                !shouldFilter
+            }
+            .mapNotNull { section ->
+                val rawNameElement = section.selectFirst("span") ?: section.selectFirst("h2, h3, .title") ?: run {
+                    println("DEBUG CimaNow: No name element found in section")
+                    return@mapNotNull null
+                }
                 val nameElement = rawNameElement.clone()
                 nameElement.select("img, em, i, a, svg, picture").remove()
                 var name = nameElement.text().trim().cleanHtml()
                 if (name.isEmpty()) {
                     name = rawNameElement.ownText().trim().cleanHtml()
                 }
-                if (name.isEmpty()) return@mapNotNull null
+                if (name.isEmpty()) {
+                    println("DEBUG CimaNow: Empty name after cleaning")
+                    return@mapNotNull null
+                }
                 
-                val list = it.select(".item article, article[aria-label=\"post\"]")
-                    .mapNotNull { article -> article.toSearchResponse() }
+                println("DEBUG CimaNow: Processing section: $name")
                 
-                if (list.isEmpty()) return@mapNotNull null
+                // Items are in Owl Carousel: .owl-item a or .owl-body a
+                val itemSelector = ".owl-item a, .owl-body a, .item article, article[aria-label=\"post\"]"
+                val items = section.select(itemSelector)
+                println("DEBUG CimaNow: Found ${items.size} items with selector: $itemSelector")
+                
+                val list = items.mapNotNull { element -> 
+                    val result = element.toSearchResponse()
+                    if (result == null) {
+                        println("DEBUG CimaNow: toSearchResponse returned null for element: ${element.tagName()}")
+                    }
+                    result
+                }
+                
+                println("DEBUG CimaNow: Created ${list.size} SearchResponse objects for section: $name")
+                
+                if (list.isEmpty()) {
+                    println("DEBUG CimaNow: Empty list for section: $name")
+                    return@mapNotNull null
+                }
                 HomePageList(name, list)
             }
+        
+        println("DEBUG CimaNow: Total pages to return: ${pages.size}")
         return newHomePageResponse(pages)
     }
 
@@ -88,7 +129,7 @@ class CimaNowProvider : MainAPI() {
         val doc = app.get("$mainUrl/page/1/?s=$query").document
         val paginationElement = doc.selectFirst("ul[aria-label=\"pagination\"]")
         
-        doc.select(".item article, article[aria-label=\"post\"]").forEach {
+        doc.select(".owl-item a, .owl-body a, .item article, article[aria-label=\"post\"]").forEach {
             it.toSearchResponse()?.let { res -> result.add(res) }
         }
         
@@ -98,7 +139,7 @@ class CimaNowProvider : MainAPI() {
             if (max != null && max <= 5) {
                 (2..max).forEach { pageNum ->
                     app.get("$mainUrl/page/$pageNum/?s=$query").document
-                        .select(".item article, article[aria-label=\"post\"]").forEach { element ->
+                        .select(".owl-item a, .owl-body a, .item article, article[aria-label=\"post\"]").forEach { element ->
                             element.toSearchResponse()?.let { res -> result.add(res) }
                         }
                 }
