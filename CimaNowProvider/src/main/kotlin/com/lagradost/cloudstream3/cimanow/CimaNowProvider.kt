@@ -20,6 +20,10 @@ class CimaNowProvider : MainAPI() {
         return Regex("""\d+""").find(this)?.value?.toIntOrNull()
     }
 
+    private fun String.cleanHtml(): String {
+        return this.replace(Regex("<[^>]*>"), "").trim()
+    }
+
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = fixUrlNull(attr("href")) ?: return null
         val posterUrl = selectFirst("img")?.attr("data-src")
@@ -30,7 +34,7 @@ class CimaNowProvider : MainAPI() {
             title = selectFirst("img")?.attr("alt") ?: ""
         }
         if (title.isEmpty()) {
-            title = text().trim()
+            title = text().cleanHtml().trim()
         }
         
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
@@ -59,9 +63,13 @@ class CimaNowProvider : MainAPI() {
         val pages = doc.select("section")
             .filter { !it.text().contains(Regex("أختر وجهتك المفضلة|تم اضافته حديثاً")) }
             .mapNotNull {
-                val nameElement = it.selectFirst("span") ?: return@mapNotNull null
-                nameElement.select("img, em, i").remove()
-                val name = nameElement.text().trim()
+                val rawNameElement = it.selectFirst("span") ?: it.selectFirst("h2, h3, .title") ?: return@mapNotNull null
+                val nameElement = rawNameElement.clone()
+                nameElement.select("img, em, i, a, svg, picture").remove()
+                var name = nameElement.text().trim().cleanHtml()
+                if (name.isEmpty()) {
+                    name = rawNameElement.ownText().trim().cleanHtml()
+                }
                 if (name.isEmpty()) return@mapNotNull null
                 
                 val list = it.select(".item a, article[aria-label=\"post\"] > a")
