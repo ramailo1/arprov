@@ -314,65 +314,70 @@ class CimaNowProvider : MainAPI() {
             var foundLinks = 0
             
             // JavaScript to interact with the page and extract sources
-            // Includes click logic for "watch" servers
+            // Includes "Super Probe" logic to dump DOM structure
             val extractionScript = """
                 (function() {
                     var urls = [];
                     var clicked = false;
                     
                     try {
-                        // Log current title
-                        urls.push('DEBUG|||Page Title: ' + document.title);
+                        function log(msg) { urls.push('DEBUG|||' + msg); }
                         
-                        // --- CLICK LOGIC ---
-                        // CimaNow usually requires clicking a server in ul#watch to load the iframe
-                        var serverList = document.querySelectorAll('ul#watch li, .server-btn');
-                        if (serverList.length > 0) {
-                            urls.push('DEBUG|||Found ' + serverList.length + ' servers. Clicking first available...');
-                            
-                            // Try to click the first one that looks interactive
-                            for (var i = 0; i < serverList.length; i++) {
-                                var btn = serverList[i];
-                                if (btn.offsetParent !== null) { // Check visibility
-                                    btn.click();
-                                    urls.push('DEBUG|||Clicked server index ' + i);
+                        log('Page Title: ' + document.title);
+                        log('URL: ' + window.location.href);
+                        
+                        // --- PROBE: Dump Page Structure ---
+                        var uls = document.querySelectorAll('ul');
+                        log('Found ' + uls.length + ' UL elements');
+                        for(var i=0; i<uls.length; i++) {
+                            var u = uls[i];
+                            var info = 'UL[' + i + '] id="' + (u.id||'') + '" class="' + (u.className||'') + '"';
+                            if (u.id || u.className) log(info);
+                        }
+                        
+                        var divs = document.querySelectorAll('div[id*="server"], div[class*="server"], div[id*="watch"], div[class*="watch"]');
+                        for(var i=0; i<divs.length; i++) {
+                             log('Div Candidate: id="' + divs[i].id + '" class="' + divs[i].className + '"');
+                        }
+
+                        // --- ACTIVE: Text-based Click (Fallback) ---
+                        if (!clicked) {
+                            var allItems = document.querySelectorAll('li, span, a, div');
+                            for(var i=0; i<allItems.length; i++) {
+                                var txt = allItems[i].innerText || '';
+                                if ((txt.includes('Server') || txt.includes('سيرفر') || txt.includes('مشاهدة')) && allItems[i].offsetParent !== null) {
+                                    // Avoid clicking giant containers
+                                    if (allItems[i].tagName === 'DIV' && allItems[i].innerHTML.length > 500) continue;
+                                    
+                                    log('Found potential server button via text: ' + allItems[i].tagName + ' "' + txt.substring(0,20) + '..."');
+                                    allItems[i].click();
                                     clicked = true;
+                                    log('CLICKED element with text-match');
                                     break;
                                 }
                             }
-                        } else {
-                            urls.push('DEBUG|||No server list (ul#watch li) found.');
-                        }
-                        
-                        // If we clicked, we technically might need to wait, but the WebViewResolver
-                        // will keep running this script periodically or we rely on network interception.
-                        if (clicked) {
-                            urls.push('DEBUG|||Server clicked, waiting for iframe...');
                         }
 
                         // --- EXTRACTION LOGIC ---
                         
                         // 1. Iframes
                         var iframes = document.querySelectorAll('iframe');
-                        urls.push('DEBUG|||Iframes count: ' + iframes.length);
+                        log('Iframes count: ' + iframes.length);
                         for (var i = 0; i < iframes.length; i++) {
                             var src = iframes[i].src || iframes[i].getAttribute('src');
-                            if (src && src.length > 0 && !src.includes('facebook') && !src.includes('twitter')) {
-                                urls.push('Iframe|||' + src);
-                            }
+                            if (src) urls.push('Iframe|||' + src);
                         }
                         
                         // 2. Video Tags
                         var videos = document.querySelectorAll('video');
-                        urls.push('DEBUG|||Videos count: ' + videos.length);
+                        log('Videos count: ' + videos.length);
                         for (var i = 0; i < videos.length; i++) {
                             var src = videos[i].src || videos[i].currentSrc;
                             if (src) urls.push('Video|||' + src);
                         }
                         
-                        // 3. Global Variables (custom player vars)
+                        // 3. Global Variables
                         if (window.playerSrc) urls.push('Player|||' + window.playerSrc);
-                        if (window.videoSrc) urls.push('Video|||' + window.videoSrc);
                         
                     } catch(e) {
                         urls.push('DEBUG|||Script Error: ' + e.toString());
