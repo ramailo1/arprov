@@ -12,7 +12,6 @@ import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-
 import kotlinx.coroutines.withTimeout
 
 class CimaNowProvider : MainAPI() {
@@ -55,52 +54,42 @@ class CimaNowProvider : MainAPI() {
         
         if (url == null || url.contains("/news/") || url.contains("coming-soon", true) || url.contains("قريبا")) return null
 
-        // V11: Strict Poster Selection
+        // V12: Smart Poster Selection
         val images = select("img")
-        // Find first image that isn't "logo" (check alt, class, src)
-        val posterImg = images.firstOrNull { 
-            val alt = it.attr("alt")
-            val cls = it.className()
-            val src = it.attr("src")
-            !alt.contains("logo", true) && 
-            !cls.contains("logo", true) && 
-            !src.contains("logo", true) &&
-            alt.isNotBlank()
-        }
-        
-        // Priority: data-src -> src (Lazy Loading Support)
+        val posterImg = images.filter { 
+            val src = it.attr("src").lowercase()
+            val alt = it.attr("alt").lowercase()
+            !src.contains("logo") && !src.contains("user") && 
+            !alt.contains("logo") && !alt.contains("user")
+        }.sortedByDescending { 
+            it.attr("src").contains("cover", ignoreCase = true) || 
+            it.attr("data-src").contains("cover", ignoreCase = true) 
+        }.firstOrNull() ?: images.firstOrNull()
+
         val posterUrl = posterImg?.attr("data-src")?.ifBlank { null } 
             ?: posterImg?.attr("src")?.ifBlank { null }
-            ?: images.firstOrNull { !it.attr("src").contains("logo", true) }?.attr("src") 
             ?: ""
             
         // V11: Relaxed Title Extraction
         val title = select("li[aria-label=\"title\"]").text().takeIf { it.isNotBlank() } 
-            ?: attr("aria-label").takeIf { it.isNotBlank() } // Fallback to article label
+            ?: attr("aria-label").takeIf { it.isNotBlank() }
             ?: selectFirst("h3")?.text()?.cleanHtml()
             ?: selectFirst("strong")?.text()?.cleanHtml()
             ?: posterImg?.attr("alt") 
             ?: text().cleanHtml()
 
-        if (title.isBlank() || title.equals("logo", true)) return null
+        if (title.isNullOrBlank() || title.equals("logo", true)) return null
 
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
 
-        // Type Detection Logic
         val isSeries = title.contains("مسلسل") || title.contains("برنامج") ||
                 url.contains("مسلسل") || url.contains("برنامج") ||
                 select("li[aria-label=\"tab\"]").text().let { t -> t.contains("مسلسلات") || t.contains("برامج") }
         
         val isEpisodes = title.contains("الحلقة") || select("li[aria-label=\"episode\"]").isNotEmpty()
         
-        val finalType = if (isEpisodes) {
-            TvType.TvSeries
-        } else if (isSeries) {
-            TvType.TvSeries
-        } else {
-            TvType.Movie
-        }
+        val finalType = if (isEpisodes || isSeries) TvType.TvSeries else TvType.Movie
         
         val quality = getQualityFromString(select("li[aria-label=\"ribbon\"]").text())
 
@@ -120,12 +109,10 @@ class CimaNowProvider : MainAPI() {
         val url = "$baseUrl/page/$page/"
         val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
 
-        // Unified Selector (V8)
-        val items = doc.select(
-            ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
-        ).mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
+        // V12: Strict Content Selector (section > article[aria-label='post'])
+        val items = doc.select("section > article[aria-label='post']")
+            .mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
 
-        // V8: Harden Pagination Logic (Check for Next Page)
         val hasNextPage = doc.select("ul[aria-label='pagination'] li a")
             .any { it.text().toIntOrNull() == page + 1 || it.attr("aria-label").contains("Next") }
 
@@ -134,8 +121,6 @@ class CimaNowProvider : MainAPI() {
             return emptyList()
         }
         
-        println("DEBUG CimaNow: Page=$page | Section=$sectionName | Items=${items.size} | NextPage=$hasNextPage")
-
         sectionPageCache.getOrPut(sectionName) { mutableMapOf() }[page] = items
         return items
     }
@@ -155,23 +140,18 @@ class CimaNowProvider : MainAPI() {
                         async {
                             try {
                                 val doc = app.get(url, headers = mapOf("user-agent" to "MONKE")).document
-                                // Unified selector matching loadSectionPage
-                                val items = doc.select(
-                                    ".owl-item a, .owl-body a, .item article, article[aria-label='post'], article[aria-label='post'] a"
-                                )
-                                .mapNotNull { it.toSearchResponse() }
-                                .distinctBy { it.url }
+                                // V12: Strict Content Selector
+                                val items = doc.select("section > article[aria-label='post']")
+                                    .mapNotNull { it.toSearchResponse() }
+                                    .distinctBy { it.url }
                                 
                                 if (items.isNotEmpty()) {
                                     sectionPaginationMap[name] = url
-                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=${items.size}")
                                     HomePageList(name, items)
                                 } else {
-                                    println("DEBUG CimaNow: Page=1 | Section=$name | Items=0 (Empty)")
                                     null
                                 }
                             } catch (e: Exception) { 
-                                println("DEBUG CimaNow: Failed to fetch section '$name': ${e.message}")
                                 null 
                             }
                         }
@@ -185,7 +165,6 @@ class CimaNowProvider : MainAPI() {
                 newHomePageResponse(listOf(HomePageList(request.name, items)))
             }
         } catch (e: Exception) {
-            println("DEBUG getMainPage error: ${e.message}")
             newHomePageResponse(emptyList())
         }
     }
@@ -195,8 +174,10 @@ class CimaNowProvider : MainAPI() {
         val result = arrayListOf<SearchResponse>()
         val doc = app.get("$mainUrl/page/1/?s=$query").document
         
-        doc.select(".owl-item a, .owl-body a, .item article, article[aria-label='post'] > a")
-            .forEach { it.toSearchResponse()?.let(result::add) }
+        // V12: Strict Selector for Search too
+        doc.select("section > article[aria-label='post']")
+            .mapNotNull { it.toSearchResponse() }
+            .forEach { result.add(it) }
 
         val maxPage = doc.selectFirst("ul[aria-label='pagination']")?.select("li")?.not("li.active")?.lastOrNull()?.text()?.toIntOrNull() ?: 1
         
@@ -204,8 +185,9 @@ class CimaNowProvider : MainAPI() {
              val limit = maxPage.coerceAtMost(5)
              (2..limit).forEach { i ->
                 val pDoc = app.get("$mainUrl/page/$i/?s=$query").document
-                pDoc.select(".owl-item a, .owl-body a, .item article, article[aria-label='post'] > a")
-                    .forEach { it.toSearchResponse()?.let(result::add) }
+                pDoc.select("section > article[aria-label='post']")
+                    .mapNotNull { it.toSearchResponse() }
+                    .forEach { result.add(it) }
             }
         }
 
@@ -284,7 +266,7 @@ class CimaNowProvider : MainAPI() {
             } else {
                 episodes += loadSeasonEpisodes(1, url)
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedWith(compareBy<Episode> { it.season ?: 1 }.thenBy { it.episode ?: 0 })) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.season ?: 1 }.sortedWith(compareBy<Episode> { it.season ?: 1 }.thenBy { it.episode ?: 0 })) {
                 this.posterUrl = posterUrl
                 this.plot = synopsis
                 this.year = year
@@ -310,27 +292,41 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/").replace("https:/", "https://")
-            val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
+            val doc = app.get(data).document
+            
+            // V12: Dynamic Server Parsing & Priority
+            val servers = doc.select("ul#watch li, .servers-list li").mapNotNull { li ->
+                val index = li.attr("data-index")
+                val name = li.text().trim()
+                if (index.isNotBlank()) Pair(index, name) else null
+            }.sortedByDescending { (_, name) -> 
+                // Prioritize "Cima Now" or "Main" servers
+                name.contains("Cima Now", ignoreCase = true) || name.contains("Main", ignoreCase = true)
+            }
 
-            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
-                ?: mainDoc.selectFirst("body")?.className()?.split(" ")?.find { it.startsWith("postid-") }?.substringAfter("postid-")
+            // Fallback indices if dynamic parsing failed
+            val serverIndices = if (servers.isNotEmpty()) {
+                servers.map { it.first }
+            } else {
+                listOf("00", "01", "02", "03")
+            }
 
-            if (postId.isNullOrBlank()) return false
-
-            val serverIndices = listOf("00", "33", "34", "35", "31", "32", "7", "12")
             var foundLinks = 0
 
-            // Try AJAX servers in parallel
-            // V10: Parallel Execution
+            // Extract Post ID
+            val postId = doc.select("link[rel='shortlink']").attr("href").substringAfter("p=")
+                .takeIf { it.all { c -> c.isDigit() } }
+                ?: doc.select("body").attr("class").split(" ").find { it.startsWith("postid-") }
+                    ?.substringAfter("postid-")
+                ?: return false
+
             val ajaxResults = coroutineScope {
                 serverIndices.map { index ->
                     async {
                         try {
-                            // V11: Speed Fix - Timeout after 15s to prevent hanging
                             withTimeout(15000L) {
                                 val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                                val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                                val response = app.get(ajaxUrl, headers = mapOf("Referer" to data, "X-Requested-With" to "XMLHttpRequest")).text
                                 val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
                                 if (iframeSrc.isNotBlank()) {
                                     val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
@@ -346,51 +342,34 @@ class CimaNowProvider : MainAPI() {
                     }
                 }.awaitAll()
             }
-            
             foundLinks += ajaxResults.count { it }
 
-            // Fallback: Scrape iframe directly from page
+            // Fallback to static iframes
             if (foundLinks == 0) {
-                val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-                val iframeSelectors = listOf(
-                    "ul#watch li[aria-label=\"embed\"] iframe",
-                    "ul#watch li iframe",
-                    "ul#watch iframe",
-                    "#watch iframe",
-                    "iframe[src*='embed']",
-                    "iframe[data-src*='embed']",
-                    "iframe[src*='player']",
-                    "iframe[data-src*='player']"
-                )
-                for (sel in iframeSelectors) {
-                    val iframes = doc.select(sel)
-                    iframes.forEach { iframe ->
-                        val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
-                        if (src.isNotBlank()) {
-                            val fullSrc = if (src.startsWith("//")) "https:$src" else src
-                            loadExtractor(fullSrc, subtitleCallback, callback)
-                            foundLinks++
-                        }
+                doc.select("iframe").forEach { iframe ->
+                    val src = iframe.attr("src")
+                    if (src.isNotBlank() && !src.contains("facebook") && !src.contains("twitter")) {
+                        loadExtractor(src, subtitleCallback, callback)
+                        foundLinks++
                     }
-                    if (foundLinks > 0) break
                 }
             }
 
             // Download links
-            val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-            doc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label=\"download\"] a").forEach { block ->
+            val downloadDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
+            downloadDoc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label=\"download\"] a").forEach { block ->
                 block.select("a").forEach { link ->
                     val url = link.attr("href")
-                    if (url.isBlank()) return@forEach
-                    val qualityText = link.selectFirst("i")?.nextSibling()?.toString()?.trim() ?: ""
-                    val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-                    callback.invoke(newExtractorLink(this.name, qualityText.ifBlank { "Download" }, url, ExtractorLinkType.VIDEO) { this.referer = data; this.quality = quality })
+                    if (url.isNotBlank()) {
+                         val qualityText = link.selectFirst("i")?.nextSibling()?.toString()?.trim() ?: ""
+                         val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
+                         callback.invoke(newExtractorLink(this.name, qualityText.ifBlank { "Download" }, url, ExtractorLinkType.VIDEO) { this.referer = data; this.quality = quality })
+                    }
                 }
             }
 
             return foundLinks > 0
         } catch (e: Exception) {
-            println("DEBUG loadLinks Exception: ${e.message}")
             return false
         }
     }
