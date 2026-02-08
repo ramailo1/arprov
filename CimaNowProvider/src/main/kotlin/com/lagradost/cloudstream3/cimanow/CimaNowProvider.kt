@@ -1,6 +1,8 @@
 package com.lagradost.cloudstream3.cimanow
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -16,7 +18,7 @@ class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
     override var name = "CimaNow"
-    override val usesWebView = false
+    override val usesWebView = true
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
@@ -174,64 +176,149 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
-    /** Clean loadLinks: Pure HTTP/DOM extraction */
+    /** 
+     * loadLinks using WebViewResolver
+     * 
+     * CimaNow Flow:
+     * 1. Watch page loads with server list (ul#watch li)
+     * 2. Clicking a server triggers AJAX that loads iframe
+     * 3. Iframe contains embed URL (e.g., cimanowtv.com/e/xxx)
+     * 4. We intercept the iframe src or video URL
+     */
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
-        var foundLinks = false
+        // JavaScript to click the first server (Cima Now) and extract iframe
+        val extractionScript = """
+            (function() {
+                var attempts = 0;
+                var maxAttempts = 15;
+                var clickedServer = false;
+                
+                function checkAndAct() {
+                    attempts++;
+                    if (attempts > maxAttempts) return;
+                    
+                    // Step 1: Look for timer/watch button (middle page)
+                    var timerBtn = document.querySelector('a[href*="watching"], button:contains("مشاهدة"), a:contains("شاهد")');
+                    if (!timerBtn) {
+                        var allLinks = document.querySelectorAll('a, button');
+                        for (var i = 0; i < allLinks.length; i++) {
+                            var txt = allLinks[i].innerText || '';
+                            if (txt.includes('مشاهدة وتحميل') || txt.includes('شاهد وحمل')) {
+                                timerBtn = allLinks[i];
+                                break;
+                            }
+                        }
+                    }
+                    if (timerBtn && !timerBtn.clicked) {
+                        timerBtn.clicked = true;
+                        timerBtn.click();
+                        setTimeout(checkAndAct, 1000);
+                        return;
+                    }
+                    
+                    // Step 2: Click first server in ul#watch (prioritize Cima Now)
+                    var serverList = document.querySelectorAll('ul#watch > li[data-index]');
+                    if (serverList.length > 0 && !clickedServer) {
+                        clickedServer = true;
+                        // Find Cima Now server (data-index="00") or first server
+                        var cimaServer = document.querySelector('ul#watch > li[data-index="00"]');
+                        var targetServer = cimaServer || serverList[0];
+                        if (targetServer) {
+                            targetServer.click();
+                        }
+                        setTimeout(checkAndAct, 2000);
+                        return;
+                    }
+                    
+                    // Step 3: Check if iframe appeared after click
+                    var iframe = document.querySelector('ul#watch li[aria-label="embed"] iframe[src]');
+                    if (iframe) {
+                        var src = iframe.src || iframe.getAttribute('src');
+                        if (src && src.includes('http')) {
+                            // Navigate to iframe to trigger interception
+                            window.location.href = src;
+                            return;
+                        }
+                    }
+                    
+                    // Keep checking
+                    setTimeout(checkAndAct, 1000);
+                }
+                
+                // Start after page settles
+                setTimeout(checkAndAct, 1500);
+            })();
+        """.trimIndent()
 
-        // Method 1: Extract embed URLs from server list attributes
-        val serverSelectors = listOf(
-            "ul#servers li[data-link]",
-            "ul#servers li[data-url]",
-            "ul.tabcontent li[data-link]",
-            "ul.tabcontent li[data-url]",
-            "li[data-server]"
+        val resolver = WebViewResolver(
+            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|cimanowtv|/e/|/embed/|filemoon|bysetayico|listeamed|dood|ok\.ru|vk\.com|uqload)"""),
+            additionalUrls = listOf(
+                Regex("""\.m3u8(\?|$)"""),
+                Regex("""\.mp4(\?|$)"""),
+                Regex("""cimanowtv\.com/e/"""),
+                Regex("""master\.m3u8""")
+            ),
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            script = extractionScript,
+            timeout = 35000L
         )
-        for (selector in serverSelectors) {
-            doc.select(selector).forEach { server ->
-                val embedUrl = server.attr("data-link").ifBlank { server.attr("data-url") }.ifBlank { server.attr("data-server") }
-                if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {
-                    loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
-                    foundLinks = true
+
+        val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
+
+        try {
+            val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
+                requestCreator("GET", safeUrl, headers = mapOf(
+                    "Referer" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                ))
+            )
+
+            val candidates = mutableSetOf<String>()
+            mainRequest?.url?.toString()?.let { candidates.add(it) }
+            candidates.addAll(additionalRequests.map { it.url.toString() })
+
+            var foundLinks = false
+
+            for (url in candidates) {
+                if (url.contains("favicon") || url.contains(".css") || url.contains(".js")) continue
+
+                when {
+                    // Direct video files
+                    url.contains(".m3u8") || url.contains(".mp4") -> {
+                        val isM3u8 = url.contains(".m3u8")
+                        callback.invoke(
+                            newExtractorLink(
+                                this.name,
+                                "$name سيرفر سيما ناو",
+                                url,
+                                if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.P1080.value
+                            }
+                        )
+                        foundLinks = true
+                    }
+                    // Embed pages - pass to extractors
+                    url.contains("cimanowtv") || url.contains("/e/") || 
+                    url.contains("filemoon") || url.contains("bysetayico") ||
+                    url.contains("dood") || url.contains("uqload") ||
+                    url.contains("ok.ru") || url.contains("vk.com") -> {
+                        loadExtractor(url, mainUrl, subtitleCallback, callback)
+                        foundLinks = true
+                    }
                 }
             }
-        }
 
-        // Method 2: Extract iframes directly visible on page
-        doc.select("iframe[src]").forEach { iframe ->
-            val src = fixUrlNull(iframe.attr("src"))
-            if (src != null && !src.contains("google") && !src.contains("facebook")) {
-                loadExtractor(src, mainUrl, subtitleCallback, callback)
-                foundLinks = true
-            }
-        }
+            return foundLinks
 
-        // Method 3: Regex for direct .m3u8 / .mp4 links in page HTML
-        val pageHtml = doc.html()
-        val directLinkPattern = Regex("""https?://[^\s"'<>]+\.(m3u8|mp4)(\?[^\s"'<>]*)?""")
-        directLinkPattern.findAll(pageHtml).forEach { match ->
-            val url = match.value
-            if (!url.contains("logo") && !url.contains("thumbnail")) {
-                val isM3u8 = url.contains(".m3u8")
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        if (isM3u8) "$name HLS" else "$name MP4",
-                        url,
-                        if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) { this.referer = mainUrl }
-                )
-                foundLinks = true
-            }
+        } catch (e: Exception) {
+            return false
         }
-
-        return foundLinks
     }
 }
-
-
