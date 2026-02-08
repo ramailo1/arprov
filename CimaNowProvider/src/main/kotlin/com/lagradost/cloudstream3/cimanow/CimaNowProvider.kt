@@ -14,6 +14,11 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import kotlinx.coroutines.withTimeout
 import android.util.Base64
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
+import kotlinx.coroutines.delay
+import com.lagradost.cloudstream3.CommonActivity.showToast
+import android.widget.Toast
 
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
@@ -354,142 +359,180 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         println("CimaNow: " + "========================================")
-        println("CimaNow: " + "[LOADLINKS] Starting for URL: $data")
+        println("CimaNow: " + "[LOADLINKS] Starting WebView extraction for URL: $data")
         println("CimaNow: " + "========================================")
         
         try {
-            // Step 1: Fetch raw HTML
-            println("CimaNow: " + "[STEP 1] Fetching raw HTML...")
-            val rawHtml = app.get(data).text
-            println("CimaNow: " + "[STEP 1] Raw HTML length: ${rawHtml.length}")
-            println("CimaNow: " + "[STEP 1] First 300 chars: ${rawHtml.take(300)}")
+            showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
             
-            // Step 2: Deobfuscate HTML if needed
-            println("CimaNow: " + "[STEP 2] Attempting deobfuscation...")
-            val html = deobfuscateHtml(rawHtml)
-            val doc = Jsoup.parse(html)
-            println("CimaNow: " + "[STEP 2] Final HTML length after deobfuscation: ${html.length}")
-            
-            // Step 3: Parse server buttons
-            println("CimaNow: " + "[STEP 3] Looking for server buttons (ul#watch li, .servers-list li)...")
-            val servers = doc.select("ul#watch li, .servers-list li").mapNotNull { li ->
-                val index = li.attr("data-index")
-                val name = li.text().trim()
-                if (index.isNotBlank()) {
-                    println("CimaNow: " + "[STEP 3] Found server: name='$name', index='$index'")
-                    Pair(index, name)
-                } else null
-            }.sortedByDescending { (_, name) -> 
-                name.contains("Cima Now", ignoreCase = true) || name.contains("Main", ignoreCase = true)
-            }
-            println("CimaNow: " + "[STEP 3] Total servers found: ${servers.size}")
-
-            // Fallback indices if dynamic parsing failed
-            val serverIndices = if (servers.isNotEmpty()) {
-                servers.map { it.first }
-            } else {
-                println("CimaNow: " + "[STEP 3] No servers found, using fallback indices: 00, 01, 02, 03")
-                listOf("00", "01", "02", "03")
-            }
-            println("CimaNow: " + "[STEP 3] Server indices to try: $serverIndices")
-
+            val extractedUrls = mutableSetOf<String>()
             var foundLinks = 0
-
-            // Step 4: Extract Post ID
-            println("CimaNow: " + "[STEP 4] Extracting Post ID...")
-            val shortlinkHref = doc.select("link[rel='shortlink']").attr("href")
-            println("CimaNow: " + "[STEP 4] Shortlink href: '$shortlinkHref'")
             
-            val dataIdFromButton = doc.selectFirst("ul#watch li")?.attr("data-id") ?: ""
-            println("CimaNow: " + "[STEP 4] data-id from button: '$dataIdFromButton'")
-            
-            val bodyClass = doc.select("body").attr("class")
-            println("CimaNow: " + "[STEP 4] Body class: '${bodyClass.take(200)}'")
-            
-            val postId = shortlinkHref.substringAfter("p=")
-                .takeIf { it.all { c -> c.isDigit() } && it.isNotBlank() }
-                ?: dataIdFromButton
-                    .takeIf { it.isNotBlank() && it.all { c -> c.isDigit() } }
-                ?: bodyClass.split(" ").find { it.startsWith("postid-") }
-                    ?.substringAfter("postid-")
-            
-            if (postId.isNullOrBlank()) {
-                println("CimaNow ERROR: " + "[STEP 4] FAILED - Could not extract Post ID!")
-                return false
-            }
-            println("CimaNow: " + "[STEP 4] Post ID extracted: '$postId'")
-
-            // Step 5: Make AJAX calls for each server
-            println("CimaNow: " + "[STEP 5] Starting AJAX calls for ${serverIndices.size} servers...")
-            val ajaxResults = coroutineScope {
-                serverIndices.map { index ->
-                    async {
-                        try {
-                            withTimeout(15000L) {
-                                val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                                println("CimaNow: " + "[STEP 5] AJAX call for index=$index, URL: $ajaxUrl")
-                                
-                                val response = app.get(ajaxUrl, headers = mapOf("Referer" to data, "X-Requested-With" to "XMLHttpRequest")).text
-                                println("CimaNow: " + "[STEP 5] AJAX response for index=$index, length: ${response.length}")
-                                println("CimaNow: " + "[STEP 5] AJAX response content: ${response.take(300)}")
-                                
-                                val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                                println("CimaNow: " + "[STEP 5] Iframe src found: '$iframeSrc'")
-                                
-                                if (iframeSrc.isNotBlank()) {
-                                    val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                                    println("CimaNow: " + "[STEP 5] Calling loadExtractor with: $fullSrc")
-                                    loadExtractor(fullSrc, subtitleCallback, callback)
-                                    true
-                                } else {
-                                    println("CimaNow: " + "[STEP 5] No iframe found for index=$index")
-                                    false
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("CimaNow ERROR: " + "[STEP 5] AJAX error for index=$index: ${e.message}")
-                            false
+            // JavaScript to extract video sources from the player after JS executes
+            val extractionScript = """
+                (function() {
+                    var urls = [];
+                    
+                    // Method 1: Look for video/source elements
+                    var videos = document.querySelectorAll('video source, video');
+                    for (var i = 0; i < videos.length; i++) {
+                        var src = videos[i].src || videos[i].getAttribute('src');
+                        if (src && src.length > 0) urls.push('Video|||' + src);
+                    }
+                    
+                    // Method 2: Look for iframe sources
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var i = 0; i < iframes.length; i++) {
+                        var src = iframes[i].src || iframes[i].getAttribute('src');
+                        if (src && src.length > 0 && !src.includes('facebook') && !src.includes('twitter')) {
+                            urls.push('Iframe|||' + src);
                         }
                     }
-                }.awaitAll()
+                    
+                    // Method 3: Look for quality buttons with data-url
+                    var buttons = document.querySelectorAll('[data-url], .quality-btn, .server-btn, ul#watch li');
+                    for (var i = 0; i < buttons.length; i++) {
+                        var url = buttons[i].getAttribute('data-url') || buttons[i].getAttribute('data-src');
+                        var quality = buttons[i].innerText.trim() || 'Auto';
+                        if (url) urls.push(quality + '|||' + url);
+                    }
+                    
+                    // Method 4: Check for global player variables
+                    if (window.playerSrc) urls.push('Player|||' + window.playerSrc);
+                    if (window.videoSrc) urls.push('Video|||' + window.videoSrc);
+                    if (window.hlsUrl) urls.push('HLS|||' + window.hlsUrl);
+                    
+                    return JSON.stringify(urls);
+                })()
+            """.trimIndent()
+            
+            // Create WebViewResolver that intercepts video URLs
+            val resolver = WebViewResolver(
+                interceptUrl = Regex("""\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop"""),
+                additionalUrls = listOf(
+                    Regex("""\.m3u8(\?|$)"""),
+                    Regex("""\.mp4(\?|$)"""),
+                    Regex("""master\.m3u8"""),
+                    Regex("""playlist\.m3u8""")
+                ),
+                userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                script = extractionScript,
+                scriptCallback = { result ->
+                    try {
+                        println("CimaNow: " + "[WEBVIEW] Script result: ${result.take(500)}")
+                        val cleaned = result.trim('"').replace("\\\"", "\"")
+                        if (cleaned.startsWith("[")) {
+                            val urlList = cleaned.removeSurrounding("[", "]")
+                                .split("\",\"")
+                                .map { it.trim('"') }
+                                .filter { it.contains("|||") }
+                            
+                            for (entry in urlList) {
+                                extractedUrls.add(entry)
+                                println("CimaNow: " + "[WEBVIEW] Extracted from DOM: $entry")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("CimaNow ERROR: " + "[WEBVIEW] Script parse error: ${e.message}")
+                    }
+                },
+                timeout = 20000L
+            )
+            
+            println("CimaNow: " + "[WEBVIEW] Starting WebView resolution...")
+            
+            // Resolve using WebView
+            val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
+                requestCreator("GET", data, headers = mapOf(
+                    "Referer" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                ))
+            )
+            
+            println("CimaNow: " + "[WEBVIEW] Resolution complete. Main request: ${mainRequest?.url}, Additional: ${additionalRequests.size}")
+            
+            // Process intercepted URLs from network requests
+            val allRequests = listOfNotNull(mainRequest) + additionalRequests
+            for (request in allRequests) {
+                val videoUrl = request.url.toString()
+                println("CimaNow: " + "[WEBVIEW] Intercepted URL: $videoUrl")
+                
+                if (videoUrl.contains(".m3u8") || videoUrl.contains(".mp4")) {
+                    val qualityText = when {
+                        videoUrl.contains("1080") -> "1080p"
+                        videoUrl.contains("720") -> "720p"
+                        videoUrl.contains("480") -> "480p"
+                        videoUrl.contains("360") -> "360p"
+                        else -> "Auto"
+                    }
+                    
+                    val linkType = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            "$name - $qualityText",
+                            videoUrl,
+                            linkType
+                        ) {
+                            this.referer = data
+                            this.quality = getQualityFromText(qualityText)
+                        }
+                    )
+                    foundLinks++
+                    println("CimaNow: " + "[WEBVIEW] Added direct link: $qualityText - $videoUrl")
+                } else if (videoUrl.contains("vidstream") || videoUrl.contains("embedsito") || 
+                           videoUrl.contains("dood") || videoUrl.contains("upstream") ||
+                           videoUrl.contains("streamtape") || videoUrl.contains("mixdrop")) {
+                    // These are embed URLs, use loadExtractor
+                    println("CimaNow: " + "[WEBVIEW] Loading extractor for: $videoUrl")
+                    loadExtractor(videoUrl, data, subtitleCallback, callback)
+                    foundLinks++
+                }
             }
-            foundLinks += ajaxResults.count { it }
-            println("CimaNow: " + "[STEP 5] AJAX calls complete. Found links from AJAX: $foundLinks")
-
-            // Step 6: Fallback to static iframes
+            
+            // Give a small delay for script execution
+            delay(500)
+            
+            // Process URLs extracted from DOM via script
+            for (entry in extractedUrls) {
+                val parts = entry.split("|||")
+                if (parts.size == 2) {
+                    val qualityText = parts[0]
+                    val videoUrl = parts[1]
+                    
+                    if (videoUrl.startsWith("http")) {
+                        if (videoUrl.contains(".m3u8") || videoUrl.contains(".mp4")) {
+                            val linkType = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            callback.invoke(
+                                newExtractorLink(
+                                    this.name,
+                                    "$name - $qualityText",
+                                    videoUrl,
+                                    linkType
+                                ) {
+                                    this.referer = data
+                                    this.quality = getQualityFromText(qualityText)
+                                }
+                            )
+                            foundLinks++
+                            println("CimaNow: " + "[WEBVIEW] Added from script: $qualityText - $videoUrl")
+                        } else if (qualityText == "Iframe" || videoUrl.contains("embed") || videoUrl.contains("player")) {
+                            // Iframe source - use loadExtractor
+                            println("CimaNow: " + "[WEBVIEW] Loading extractor for iframe: $videoUrl")
+                            val fullUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
+                            loadExtractor(fullUrl, data, subtitleCallback, callback)
+                            foundLinks++
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: Try original AJAX method if WebView didn't find anything
             if (foundLinks == 0) {
-                println("CimaNow: " + "[STEP 6] No AJAX links found, trying static iframes...")
-                val iframes = doc.select("iframe")
-                println("CimaNow: " + "[STEP 6] Found ${iframes.size} iframes in document")
-                for (iframe in iframes) {
-                    val src = iframe.attr("src")
-                    println("CimaNow: " + "[STEP 6] Iframe src: '$src'")
-                    if (src.isNotBlank() && !src.contains("facebook") && !src.contains("twitter")) {
-                        println("CimaNow: " + "[STEP 6] Loading extractor for static iframe: $src")
-                        loadExtractor(src, subtitleCallback, callback)
-                        foundLinks++
-                    }
-                }
+                println("CimaNow: " + "[FALLBACK] WebView found nothing, trying AJAX fallback...")
+                foundLinks += tryAjaxFallback(data, subtitleCallback, callback)
             }
-
-            // Step 7: Download links
-            println("CimaNow: " + "[STEP 7] Looking for download links...")
-            val downloadDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-            val downloadBlocks = downloadDoc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label=\"download\"] a")
-            println("CimaNow: " + "[STEP 7] Found ${downloadBlocks.size} download blocks")
-            for (block in downloadBlocks) {
-                val links = block.select("a")
-                for (link in links) {
-                    val url = link.attr("href")
-                    if (url.isNotBlank()) {
-                         val qualityText = link.selectFirst("i")?.nextSibling()?.toString()?.trim() ?: ""
-                         val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-                         println("CimaNow: " + "[STEP 7] Download link: $url, quality: $qualityText")
-                         callback.invoke(newExtractorLink(this.name, qualityText.ifBlank { "Download" }, url, ExtractorLinkType.VIDEO) { this.referer = data; this.quality = quality })
-                    }
-                }
-            }
-
+            
             println("CimaNow: " + "========================================")
             println("CimaNow: " + "[LOADLINKS] COMPLETE. Total links found: $foundLinks")
             println("CimaNow: " + "========================================")
@@ -500,4 +543,71 @@ class CimaNowProvider : MainAPI() {
             return false
         }
     }
+    
+    private fun getQualityFromText(quality: String): Int {
+        return when {
+            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
+            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
+            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
+            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
+            else -> Qualities.Unknown.value
+        }
+    }
+    
+    private suspend fun tryAjaxFallback(
+        data: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Int {
+        var foundLinks = 0
+        try {
+            val rawHtml = app.get(data).text
+            val html = deobfuscateHtml(rawHtml)
+            val doc = Jsoup.parse(html)
+            
+            // Try to extract Post ID
+            val shortlinkHref = doc.select("link[rel='shortlink']").attr("href")
+            val dataIdFromButton = doc.selectFirst("ul#watch li")?.attr("data-id") ?: ""
+            val bodyClass = doc.select("body").attr("class")
+            
+            val postId = shortlinkHref.substringAfter("p=")
+                .takeIf { it.all { c -> c.isDigit() } && it.isNotBlank() }
+                ?: dataIdFromButton.takeIf { it.isNotBlank() && it.all { c -> c.isDigit() } }
+                ?: bodyClass.split(" ").find { it.startsWith("postid-") }?.substringAfter("postid-")
+            
+            if (!postId.isNullOrBlank()) {
+                for (index in listOf("00", "01", "02", "03")) {
+                    try {
+                        withTimeout(15000L) {
+                            val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                            val response = app.get(ajaxUrl, headers = mapOf("Referer" to data, "X-Requested-With" to "XMLHttpRequest")).text
+                            val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
+                            
+                            if (iframeSrc.isNotBlank()) {
+                                val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                                loadExtractor(fullSrc, subtitleCallback, callback)
+                                foundLinks++
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Continue to next index
+                    }
+                }
+            }
+            
+            // Try static iframes
+            val iframes = doc.select("iframe")
+            for (iframe in iframes) {
+                val src = iframe.attr("src")
+                if (src.isNotBlank() && !src.contains("facebook") && !src.contains("twitter")) {
+                    loadExtractor(src, subtitleCallback, callback)
+                    foundLinks++
+                }
+            }
+        } catch (e: Exception) {
+            println("CimaNow ERROR: " + "[FALLBACK] Exception: ${e.message}")
+        }
+        return foundLinks
+    }
 }
+
