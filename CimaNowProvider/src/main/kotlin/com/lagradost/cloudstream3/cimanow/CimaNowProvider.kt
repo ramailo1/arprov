@@ -24,7 +24,7 @@ class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
     override var name = "CimaNow"
-    override val usesWebView = true
+    override val usesWebView = false // Disabled to prevent double-WebView issues with WebViewResolver
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
@@ -240,7 +240,8 @@ class CimaNowProvider : MainAPI() {
             val epNum = ep.select("a em").text().toIntOrNull()
             val epName = ep.select("a img:nth-child(2)").attr("alt").ifBlank { "Episode $epNum" }
             val epPoster = ep.select("a img:nth-child(2)").attr("src")
-            newEpisode("$epUrl/watching/") {
+            // Fixed URL double-slash issue
+            newEpisode("${epUrl.trimEnd('/')}/watching/") {
                 this.name = epName
                 this.episode = epNum
                 this.season = seasonNumber
@@ -284,7 +285,8 @@ class CimaNowProvider : MainAPI() {
                 this.recommendations = recommendations
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, "$url/watching/") {
+            // Fixed URL double-slash issue
+            newMovieLoadResponse(title, url, TvType.Movie, "${url.trimEnd('/')}/watching/") {
                 this.posterUrl = posterUrl
                 this.plot = synopsis
                 this.year = year
@@ -292,63 +294,6 @@ class CimaNowProvider : MainAPI() {
                 this.recommendations = recommendations
             }
         }
-    }
-
-    /** --- Deobfuscate CimaNow HTML --- */
-    private fun deobfuscateHtml(html: String): String {
-        println("CimaNow: " + "[DEOBFUSCATE] Starting deobfuscation, raw HTML length: ${html.length}")
-        
-        // CimaNow obfuscates HTML using Base64-encoded char codes with a shift
-        // Note: The value can be split across multiple lines with '+' concatenation
-        // Pattern matches: hide_my_HTML_ = 'data' + 'data' + ... or multiline single quotes
-        val scriptPattern = Regex("""hide_my_HTML_\s*=\s*[\r\n\s]*'([^']+)'""")
-        val match = scriptPattern.find(html)
-        if (match == null) {
-            println("CimaNow: " + "[DEOBFUSCATE] No obfuscation detected (hide_my_HTML_ not found)")
-            return html // Not obfuscated
-        }
-        
-        // Check if there are additional concatenated parts ('+' followed by more data)
-        // Gather all parts from concatenated string literal
-        var fullData = match.groupValues[1]
-        val continuationPattern = Regex("""'\s*\+\s*[\r\n\s]*'([^']+)'""")
-        var searchStart = match.range.last + 1
-        while (searchStart < html.length) {
-            val continuation = continuationPattern.find(html, searchStart)
-            if (continuation != null && continuation.range.first <= searchStart + 10) {
-                fullData += continuation.groupValues[1]
-                searchStart = continuation.range.last + 1
-            } else {
-                break
-            }
-        }
-        
-        println("CimaNow: " + "[DEOBFUSCATE] Found obfuscated data pattern!")
-        val parts = fullData.split(".")
-        println("CimaNow: " + "[DEOBFUSCATE] Split into ${parts.size} parts")
-        
-        val decoded = StringBuilder()
-        var successCount = 0
-        var failCount = 0
-        
-        for (part in parts) {
-            try {
-                val decodedBytes = Base64.decode(part, Base64.DEFAULT)
-                val numericStr = String(decodedBytes)
-                val charCode = numericStr.toIntOrNull() ?: continue
-                decoded.append((charCode - 87653).toChar())
-                successCount++
-            } catch (_: Exception) {
-                failCount++
-                continue
-            }
-        }
-        
-        val result = decoded.toString()
-        println("CimaNow: " + "[DEOBFUSCATE] Decoded ${successCount} chars, failed ${failCount}")
-        println("CimaNow: " + "[DEOBFUSCATE] Result length: ${result.length}, first 200 chars: ${result.take(200)}")
-        
-        return result.ifBlank { html }
     }
 
     /** --- Load Streaming Links Modular --- */
@@ -368,64 +313,79 @@ class CimaNowProvider : MainAPI() {
             val extractedUrls = mutableSetOf<String>()
             var foundLinks = 0
             
-            // JavaScript to extract video sources from the player after JS executes
+            // JavaScript to interact with the page and extract sources
+            // Includes click logic for "watch" servers
             val extractionScript = """
                 (function() {
                     var urls = [];
+                    var clicked = false;
                     
                     try {
-                        // DEBUG: Log initial state
+                        // Log current title
                         urls.push('DEBUG|||Page Title: ' + document.title);
-                        urls.push('DEBUG|||HTML Length: ' + document.body.innerHTML.length);
-                        urls.push('DEBUG|||Iframes found: ' + document.querySelectorAll('iframe').length);
-                        urls.push('DEBUG|||Videos found: ' + document.querySelectorAll('video').length);
-                        urls.push('DEBUG|||Quality Buttons found: ' + document.querySelectorAll('[data-url], .quality-btn, .server-btn, ul#watch li').length);
                         
-                        // DEBUG: Dump iframes src
+                        // --- CLICK LOGIC ---
+                        // CimaNow usually requires clicking a server in ul#watch to load the iframe
+                        var serverList = document.querySelectorAll('ul#watch li, .server-btn');
+                        if (serverList.length > 0) {
+                            urls.push('DEBUG|||Found ' + serverList.length + ' servers. Clicking first available...');
+                            
+                            // Try to click the first one that looks interactive
+                            for (var i = 0; i < serverList.length; i++) {
+                                var btn = serverList[i];
+                                if (btn.offsetParent !== null) { // Check visibility
+                                    btn.click();
+                                    urls.push('DEBUG|||Clicked server index ' + i);
+                                    clicked = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            urls.push('DEBUG|||No server list (ul#watch li) found.');
+                        }
+                        
+                        // If we clicked, we technically might need to wait, but the WebViewResolver
+                        // will keep running this script periodically or we rely on network interception.
+                        if (clicked) {
+                            urls.push('DEBUG|||Server clicked, waiting for iframe...');
+                        }
+
+                        // --- EXTRACTION LOGIC ---
+                        
+                        // 1. Iframes
                         var iframes = document.querySelectorAll('iframe');
+                        urls.push('DEBUG|||Iframes count: ' + iframes.length);
                         for (var i = 0; i < iframes.length; i++) {
-                            urls.push('DEBUG|||Iframe[' + i + '] src: ' + (iframes[i].src || 'none'));
+                            var src = iframes[i].src || iframes[i].getAttribute('src');
+                            if (src && src.length > 0 && !src.includes('facebook') && !src.includes('twitter')) {
+                                urls.push('Iframe|||' + src);
+                            }
                         }
+                        
+                        // 2. Video Tags
+                        var videos = document.querySelectorAll('video');
+                        urls.push('DEBUG|||Videos count: ' + videos.length);
+                        for (var i = 0; i < videos.length; i++) {
+                            var src = videos[i].src || videos[i].currentSrc;
+                            if (src) urls.push('Video|||' + src);
+                        }
+                        
+                        // 3. Global Variables (custom player vars)
+                        if (window.playerSrc) urls.push('Player|||' + window.playerSrc);
+                        if (window.videoSrc) urls.push('Video|||' + window.videoSrc);
+                        
                     } catch(e) {
-                        urls.push('DEBUG|||Error in probe script: ' + e.toString());
+                        urls.push('DEBUG|||Script Error: ' + e.toString());
                     }
-                    
-                    // Method 1: Look for video/source elements
-                    var videos = document.querySelectorAll('video source, video');
-                    for (var i = 0; i < videos.length; i++) {
-                        var src = videos[i].src || videos[i].getAttribute('src');
-                        if (src && src.length > 0) urls.push('Video|||' + src);
-                    }
-                    
-                    // Method 2: Look for iframe sources
-                    var iframes = document.querySelectorAll('iframe');
-                    for (var i = 0; i < iframes.length; i++) {
-                        var src = iframes[i].src || iframes[i].getAttribute('src');
-                        if (src && src.length > 0 && !src.includes('facebook') && !src.includes('twitter')) {
-                            urls.push('Iframe|||' + src);
-                        }
-                    }
-                    
-                    // Method 3: Look for quality buttons with data-url
-                    var buttons = document.querySelectorAll('[data-url], .quality-btn, .server-btn, ul#watch li');
-                    for (var i = 0; i < buttons.length; i++) {
-                        var url = buttons[i].getAttribute('data-url') || buttons[i].getAttribute('data-src');
-                        var quality = buttons[i].innerText.trim() || 'Auto';
-                        if (url) urls.push(quality + '|||' + url);
-                    }
-                    
-                    // Method 4: Check for global player variables
-                    if (window.playerSrc) urls.push('Player|||' + window.playerSrc);
-                    if (window.videoSrc) urls.push('Video|||' + window.videoSrc);
-                    if (window.hlsUrl) urls.push('HLS|||' + window.hlsUrl);
                     
                     return JSON.stringify(urls);
                 })()
             """.trimIndent()
             
-            // Create WebViewResolver that intercepts video URLs
+            // Relaxed Regex to catch more potential streams
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop"""),
+                // Catch m3u8, mp4, common embeds, and php player endpoints
+                interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player\.php|/embed/)"""),
                 additionalUrls = listOf(
                     Regex("""\.m3u8(\?|$)"""),
                     Regex("""\.mp4(\?|$)"""),
@@ -436,7 +396,6 @@ class CimaNowProvider : MainAPI() {
                 script = extractionScript,
                 scriptCallback = { result ->
                     try {
-                        println("CimaNow: " + "[WEBVIEW PROBE] Script result length: ${result.length}")
                         val cleaned = result.trim('"').replace("\\\"", "\"")
                         if (cleaned.startsWith("[")) {
                             val urlList = cleaned.removeSurrounding("[", "]")
@@ -448,118 +407,80 @@ class CimaNowProvider : MainAPI() {
                                 if (entry.startsWith("DEBUG|||")) {
                                     println("CimaNow: " + "[WEBVIEW PROBE] $entry")
                                 } else {
-                                    extractedUrls.add(entry)
-                                    println("CimaNow: " + "[WEBVIEW] Extracted: $entry")
+                                    val parts = entry.split("|||")
+                                    if (parts.size == 2 && !extractedUrls.contains(parts[1])) {
+                                        extractedUrls.add(parts[1])
+                                        println("CimaNow: " + "[WEBVIEW] Script Found: ${parts[1]} (${parts[0]})")
+                                    }
                                 }
                             }
                         }
-                    } catch (e: Exception) {
-                        println("CimaNow ERROR: " + "[WEBVIEW] Script parse error: ${e.message}")
-                    }
+                    } catch (e: Exception) { }
                 },
-                timeout = 60000L
+                timeout = 60000L // 60s timeout to allow for click + load
             )
             
-            println("CimaNow: " + "[WEBVIEW] Starting WebView resolution...")
+            println("CimaNow: " + "[WEBVIEW] Starting resolution active...")
             
-            // Resolve using WebView
+            // Fix double slashes in URL just in case
+            val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
+            
             val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
-                requestCreator("GET", data, headers = mapOf(
+                requestCreator("GET", safeUrl, headers = mapOf(
                     "Referer" to mainUrl,
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
                 ))
             )
             
-            println("CimaNow: " + "[WEBVIEW] Resolution complete. Main request: ${mainRequest?.url}, Additional: ${additionalRequests.size}")
+            // Collect all potential URLs (intercepted + extracted by script)
+            val candidates = mutableSetOf<String>()
+            if (mainRequest != null) candidates.add(mainRequest.url.toString())
+            candidates.addAll(additionalRequests.map { it.url.toString() })
+            candidates.addAll(extractedUrls)
             
-            // Process intercepted URLs from network requests
-            val allRequests = listOfNotNull(mainRequest) + additionalRequests
-            for (request in allRequests) {
-                val videoUrl = request.url.toString()
-                println("CimaNow: " + "[WEBVIEW] Intercepted URL: $videoUrl")
+            println("CimaNow: " + "[WEBVIEW] Candidates found: ${candidates.size}")
+            showToast("Found ${candidates.size} potential links", Toast.LENGTH_SHORT)
+
+            for (url in candidates) {
+                // Filter out junk
+                if (url.contains("favicon") || url.contains(".css") || url.contains(".js") || url.contains("google")) continue
                 
-                if (videoUrl.contains(".m3u8") || videoUrl.contains(".mp4")) {
+                println("CimaNow: " + "[LINK CHECK] Processing: $url")
+                
+                if (url.contains(".m3u8") || url.contains(".mp4")) {
                     val qualityText = when {
-                        videoUrl.contains("1080") -> "1080p"
-                        videoUrl.contains("720") -> "720p"
-                        videoUrl.contains("480") -> "480p"
-                        videoUrl.contains("360") -> "360p"
+                        url.contains("1080") -> "1080p"
+                        url.contains("720") -> "720p"
+                        url.contains("480") -> "480p"
                         else -> "Auto"
                     }
+                    val type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     
-                    val linkType = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     callback.invoke(
                         newExtractorLink(
                             this.name,
-                            "$name - $qualityText",
-                            videoUrl,
-                            linkType
+                            "$name $qualityText",
+                            url,
+                            type
                         ) {
-                            this.referer = data
+                            this.referer = mainUrl
                             this.quality = getQualityFromText(qualityText)
                         }
                     )
                     foundLinks++
-                    println("CimaNow: " + "[WEBVIEW] Added direct link: $qualityText - $videoUrl")
-                } else if (videoUrl.contains("vidstream") || videoUrl.contains("embedsito") || 
-                           videoUrl.contains("dood") || videoUrl.contains("upstream") ||
-                           videoUrl.contains("streamtape") || videoUrl.contains("mixdrop")) {
-                    // These are embed URLs, use loadExtractor
-                    println("CimaNow: " + "[WEBVIEW] Loading extractor for: $videoUrl")
-                    loadExtractor(videoUrl, data, subtitleCallback, callback)
+                } else if (url.contains("embed") || url.contains("player.php") || 
+                           url.contains("vidstream") || url.contains("dood") || url.contains("streamtape")) {
+                    // Try to load as extractor
+                    val fixedUrl = if(url.startsWith("//")) "https:$url" else url
+                    loadExtractor(fixedUrl, safeUrl, subtitleCallback, callback)
                     foundLinks++
                 }
             }
             
-            // Give a small delay for script execution
-            delay(500)
-            
-            // Process URLs extracted from DOM via script
-            for (entry in extractedUrls) {
-                val parts = entry.split("|||")
-                if (parts.size == 2) {
-                    val qualityText = parts[0]
-                    val videoUrl = parts[1]
-                    
-                    if (videoUrl.startsWith("http")) {
-                        if (videoUrl.contains(".m3u8") || videoUrl.contains(".mp4")) {
-                            val linkType = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    "$name - $qualityText",
-                                    videoUrl,
-                                    linkType
-                                ) {
-                                    this.referer = data
-                                    this.quality = getQualityFromText(qualityText)
-                                }
-                            )
-                            foundLinks++
-                            println("CimaNow: " + "[WEBVIEW] Added from script: $qualityText - $videoUrl")
-                        } else if (qualityText == "Iframe" || videoUrl.contains("embed") || videoUrl.contains("player")) {
-                            // Iframe source - use loadExtractor
-                            println("CimaNow: " + "[WEBVIEW] Loading extractor for iframe: $videoUrl")
-                            val fullUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
-                            loadExtractor(fullUrl, data, subtitleCallback, callback)
-                            foundLinks++
-                        }
-                    }
-                }
-            }
-            
-            // Fallback: Try original AJAX method if WebView didn't find anything
-            if (foundLinks == 0) {
-                println("CimaNow: " + "[FALLBACK] WebView found nothing, trying AJAX fallback...")
-                foundLinks += tryAjaxFallback(data, subtitleCallback, callback)
-            }
-            
-            println("CimaNow: " + "========================================")
-            println("CimaNow: " + "[LOADLINKS] COMPLETE. Total links found: $foundLinks")
-            println("CimaNow: " + "========================================")
             return foundLinks > 0
+            
         } catch (e: Exception) {
-            println("CimaNow ERROR: " + "[LOADLINKS] EXCEPTION: ${e.message}")
+            println("CimaNow ERROR: " + "[LOADLINKS] Exception: ${e.message}")
             e.printStackTrace()
             return false
         }
@@ -574,61 +495,4 @@ class CimaNowProvider : MainAPI() {
             else -> Qualities.Unknown.value
         }
     }
-    
-    private suspend fun tryAjaxFallback(
-        data: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Int {
-        var foundLinks = 0
-        try {
-            val rawHtml = app.get(data).text
-            val html = deobfuscateHtml(rawHtml)
-            val doc = Jsoup.parse(html)
-            
-            // Try to extract Post ID
-            val shortlinkHref = doc.select("link[rel='shortlink']").attr("href")
-            val dataIdFromButton = doc.selectFirst("ul#watch li")?.attr("data-id") ?: ""
-            val bodyClass = doc.select("body").attr("class")
-            
-            val postId = shortlinkHref.substringAfter("p=")
-                .takeIf { it.all { c -> c.isDigit() } && it.isNotBlank() }
-                ?: dataIdFromButton.takeIf { it.isNotBlank() && it.all { c -> c.isDigit() } }
-                ?: bodyClass.split(" ").find { it.startsWith("postid-") }?.substringAfter("postid-")
-            
-            if (!postId.isNullOrBlank()) {
-                for (index in listOf("00", "01", "02", "03")) {
-                    try {
-                        withTimeout(15000L) {
-                            val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                            val response = app.get(ajaxUrl, headers = mapOf("Referer" to data, "X-Requested-With" to "XMLHttpRequest")).text
-                            val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                            
-                            if (iframeSrc.isNotBlank()) {
-                                val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                                loadExtractor(fullSrc, subtitleCallback, callback)
-                                foundLinks++
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // Continue to next index
-                    }
-                }
-            }
-            
-            // Try static iframes
-            val iframes = doc.select("iframe")
-            for (iframe in iframes) {
-                val src = iframe.attr("src")
-                if (src.isNotBlank() && !src.contains("facebook") && !src.contains("twitter")) {
-                    loadExtractor(src, subtitleCallback, callback)
-                    foundLinks++
-                }
-            }
-        } catch (e: Exception) {
-            println("CimaNow ERROR: " + "[FALLBACK] Exception: ${e.message}")
-        }
-        return foundLinks
-    }
 }
-
