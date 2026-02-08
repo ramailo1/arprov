@@ -1,6 +1,7 @@
 package com.lagradost.cloudstream3.cimanow
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -9,6 +10,11 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+import android.os.Handler
+import android.os.Looper
+import android.webkit.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -307,219 +313,208 @@ class CimaNowProvider : MainAPI() {
         println("CimaNow: " + "[LOADLINKS] Starting WebView extraction for URL: $data")
         println("CimaNow: " + "========================================")
         
-        try {
-            showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
+        val mainUrl = mainUrl
+        
+        return suspendCoroutine { continuation ->
+            var webView: WebView? = null
             
-            val extractedUrls = mutableSetOf<String>()
-            var foundLinks = 0
-            
-            // JavaScript to interact with the page and extract sources
-            // Includes "Super Probe" logic to dump DOM structure
-            val extractionScript = """
-                (function() {
-                    var urls = [];
-                    var clicked = false;
-                    
+            // 60s timeout in Kotlin to ensure we don't hang execution
+            val timeoutHandler = Handler(Looper.getMainLooper())
+            val timeoutRunnable = Runnable {
+                if (webView != null) {
+                    println("CimaNow: " + "[WEBVIEW] Timeout reached")
                     try {
-                        function log(msg) { urls.push('DEBUG|||' + msg); }
-                        
-                        log('Page Title: ' + document.title);
-                        log('URL: ' + window.location.href);
-                        
-                        // --- PROBE: Dump Page Structure ---
-                        var uls = document.querySelectorAll('ul');
-                        log('Found ' + uls.length + ' UL elements');
-                        for(var i=0; i<uls.length; i++) {
-                            var u = uls[i];
-                            var info = 'UL[' + i + '] id="' + (u.id||'') + '" class="' + (u.className||'') + '"';
-                            if (u.id || u.className) log(info);
-                        }
-                        
-                        var divs = document.querySelectorAll('div[id*="server"], div[class*="server"], div[id*="watch"], div[class*="watch"]');
-                        for(var i=0; i<divs.length; i++) {
-                             log('Div Candidate: id="' + divs[i].id + '" class="' + divs[i].className + '"');
-                        }
-
-                            // --- ACTIVE: Click Server Button (Skipping Action Buttons) ---
-                            if (!clicked) {
-                                var serverLists = document.querySelectorAll('ul.btns');
-                                log('Found ' + serverLists.length + ' ul.btns elements');
-                                
-                                for (var u = 0; u < serverLists.length; u++) {
-                                    if (clicked) break;
-                                    var listItems = serverLists[u].querySelectorAll('li');
-                                    
-                                    for (var i = 0; i < listItems.length; i++) {
-                                        var item = listItems[i];
-                                        var text = (item.innerText || '').trim();
-                                        
-                                        // Skip Action Buttons (Return, Details, Add to List, Report, Favorites)
-                                        if (text.includes('عودة') || text.includes('التفاصيل') || 
-                                            text.includes('اضف') || text.includes('قائمتي') || 
-                                            text.includes('بلغ') || text.includes('مفضلة')) {
-                                            log('Skipping Action Button: ' + text.substring(0, 20));
-                                            continue;
-                                        }
-                                        
-                                        // Skip empty or too short items
-                                        if (text.length < 2) continue;
-                                        
-                                        log('Targeting server candidate: ' + item.tagName + ' Text: ' + text.substring(0, 20));
-                                        
-                                        // Try clicking clickable children
-                                        var clickableChild = item.querySelector('a, span, div');
-                                        if (clickableChild) {
-                                            log('Clicking child element: ' + clickableChild.tagName + ' Content: ' + clickableChild.innerText.substring(0,20));
-                                            clickableChild.click();
-                                        } else {
-                                            log('No specific clickable child found, clicking LI');
-                                            item.click();
-                                        }
-                                        
-                                        clicked = true;
-                                        log('CLICKED server element');
-                                        break; // Stop after first successful click
-                                    }
-                                }
-                                
-                                if (!clicked) {
-                                    log('No valid server button found to click after checking ' + serverLists.length + ' lists');
-                                }
-                            }
-
-                        // --- EXTRACTION LOGIC ---
-                        
-                        // 1. Iframes
-                        var iframes = document.querySelectorAll('iframe');
-                        log('Iframes count: ' + iframes.length);
-                        for (var i = 0; i < iframes.length; i++) {
-                            var src = iframes[i].src || iframes[i].getAttribute('src');
-                            if (src) urls.push('Iframe|||' + src);
-                        }
-                        
-                        // 2. Video Tags
-                        var videos = document.querySelectorAll('video');
-                        log('Videos count: ' + videos.length);
-                        for (var i = 0; i < videos.length; i++) {
-                            var src = videos[i].src || videos[i].currentSrc;
-                            if (src) urls.push('Video|||' + src);
-                        }
-                        
-                        // 3. Global Variables
-                        if (window.playerSrc) urls.push('Player|||' + window.playerSrc);
-                        
-                    } catch(e) {
-                        urls.push('DEBUG|||Script Error: ' + e.toString());
-                    }
-                    
-                    return JSON.stringify(urls);
-                })()
-            """.trimIndent()
-            
-            // Relaxed Regex to catch more potential streams
-            val resolver = WebViewResolver(
-                // Catch m3u8, mp4, common embeds, and php player endpoints
-                interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player\.php|/embed/)"""),
-                additionalUrls = listOf(
-                    Regex("""\.m3u8(\?|$)"""),
-                    Regex("""\.mp4(\?|$)"""),
-                    Regex("""master\.m3u8"""),
-                    Regex("""playlist\.m3u8""")
-                ),
-                userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                script = extractionScript,
-                scriptCallback = { result ->
-                    try {
-                        val cleaned = result.trim('"').replace("\\\"", "\"")
-                        if (cleaned.startsWith("[")) {
-                            val urlList = cleaned.removeSurrounding("[", "]")
-                                .split("\",\"")
-                                .map { it.trim('"') }
-                                .filter { it.contains("|||") }
-                            
-                            for (entry in urlList) {
-                                if (entry.startsWith("DEBUG|||")) {
-                                    println("CimaNow: " + "[WEBVIEW PROBE] $entry")
-                                } else {
-                                    val parts = entry.split("|||")
-                                    if (parts.size == 2 && !extractedUrls.contains(parts[1])) {
-                                        extractedUrls.add(parts[1])
-                                        println("CimaNow: " + "[WEBVIEW] Script Found: ${parts[1]} (${parts[0]})")
-                                    }
-                                }
-                            }
-                        }
-                    } catch (e: Exception) { }
-                },
-                timeout = 60000L // 60s timeout to allow for click + load
-            )
-            
-            println("CimaNow: " + "[WEBVIEW] Starting resolution active...")
-            
-            // Fix double slashes in URL just in case
-            val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
-            
-            val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
-                requestCreator("GET", safeUrl, headers = mapOf(
-                    "Referer" to mainUrl,
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-                ))
-            )
-            
-            // Collect all potential URLs (intercepted + extracted by script)
-            val candidates = mutableSetOf<String>()
-            if (mainRequest != null) candidates.add(mainRequest.url.toString())
-            candidates.addAll(additionalRequests.map { it.url.toString() })
-            candidates.addAll(extractedUrls)
-            
-            println("CimaNow: " + "[WEBVIEW] Candidates found: ${candidates.size}")
-            showToast("Found ${candidates.size} potential links", Toast.LENGTH_SHORT)
-
-            for (url in candidates) {
-                // Filter out junk
-                if (url.contains("favicon") || url.contains(".css") || url.contains(".js") || url.contains("google")) continue
-                
-                println("CimaNow: " + "[LINK CHECK] Processing: $url")
-                
-                if (url.contains(".m3u8") || url.contains(".mp4")) {
-                    val qualityText = when {
-                        url.contains("1080") -> "1080p"
-                        url.contains("720") -> "720p"
-                        url.contains("480") -> "480p"
-                        else -> "Auto"
-                    }
-                    val type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "$name $qualityText",
-                            url,
-                            type
-                        ) {
-                            this.referer = mainUrl
-                            this.quality = getQualityFromText(qualityText)
-                        }
-                    )
-                    foundLinks++
-                } else if (url.contains("embed") || url.contains("player.php") || 
-                           url.contains("vidstream") || url.contains("dood") || url.contains("streamtape")) {
-                    // Try to load as extractor
-                    val fixedUrl = if(url.startsWith("//")) "https:$url" else url
-                    loadExtractor(fixedUrl, safeUrl, subtitleCallback, callback)
-                    foundLinks++
+                        webView?.stopLoading()
+                        webView?.destroy()
+                    } catch (e: Exception) {}
+                    webView = null
+                    continuation.resume(false)
                 }
             }
+            timeoutHandler.postDelayed(timeoutRunnable, 60000)
+
+            val api = this
             
-            return foundLinks > 0
-            
-        } catch (e: Exception) {
-            println("CimaNow ERROR: " + "[LOADLINKS] Exception: ${e.message}")
-            e.printStackTrace()
-            return false
+            newWebView {
+                webView = this
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                        val msg = consoleMessage?.message() ?: ""
+                        
+                        if (msg.startsWith("RESULT_LINKS|||")) {
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            try {
+                                val json = msg.removePrefix("RESULT_LINKS|||")
+                                println("CimaNow: " + "[WEBVIEW] Received links: $json")
+                                val links = AppUtils.parseJson<List<String>>(json)
+                                
+                                var linksFound = 0
+                                for (entry in links) {
+                                    val parts = entry.split("|||")
+                                    if (parts.size < 2) continue
+                                    val type = parts[0]
+                                    val url = parts[1]
+                                    
+                                    println("CimaNow: " + "[LINK] Found: $url ($type)")
+
+                                    if (url.contains(".m3u8") || url.contains(".mp4")) {
+                                        val qualityText = when {
+                                            url.contains("1080") -> "1080p"
+                                            url.contains("720") -> "720p"
+                                            url.contains("480") -> "480p"
+                                            else -> "Auto"
+                                        }
+                                        val linkType = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                api.name,
+                                                "$name $qualityText",
+                                                url,
+                                                linkType,
+                                                Qualities.Unknown.value
+                                            ) {
+                                                this.referer = mainUrl
+                                            }
+                                        )
+                                        linksFound++
+                                    } else if (url.contains("embed") || url.contains("player") || url.contains("vidstream") || url.contains("dood") || url.contains("streamtape")) {
+                                         val fixedUrl = if(url.startsWith("//")) "https:$url" else url
+                                         loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
+                                         linksFound++
+                                    }
+                                }
+                                
+                                try {
+                                    stopLoading()
+                                    destroy()
+                                } catch (e: Exception) {}
+                                webView = null
+                                continuation.resume(linksFound > 0)
+                                
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                try {
+                                    stopLoading()
+                                    destroy()
+                                } catch (ex: Exception) {}
+                                webView = null
+                                continuation.resume(false)
+                            }
+                        } else if (msg.startsWith("DEBUG|||")) {
+                             println("CimaNow: " + "[JS] ${msg.removePrefix("DEBUG|||")}")
+                        }
+                        return true
+                    }
+                }
+                
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        println("CimaNow: " + "[WEBVIEW] Page loaded: $url")
+                        // Inject Polling Script
+                        val js = """
+                            (function() {
+                                var attempt = 0;
+                                var maxAttempts = 60; // 30 seconds of polling (500ms * 60)
+                                
+                                function log(msg) { console.log("DEBUG|||" + msg); }
+                                
+                                function getLinks() {
+                                    var urls = [];
+                                    var iframes = document.querySelectorAll('iframe');
+                                    for(var i=0; i<iframes.length; i++) {
+                                        var src = iframes[i].src || iframes[i].getAttribute('src');
+                                        if(src) urls.push("Iframe|||"+src);
+                                    }
+                                    var videos = document.querySelectorAll('video');
+                                    for(var i=0; i<videos.length; i++) {
+                                        var src = videos[i].src || videos[i].currentSrc;
+                                        if(src) urls.push("Video|||"+src);
+                                    }
+                                    // Also check for global variables
+                                    if(window.playerSrc) urls.push("Variable|||"+window.playerSrc);
+                                    
+                                    return urls;
+                                }
+                                
+                                function tryClickServer() {
+                                    log("Scanning for servers...");
+                                    var clicked = false;
+                                    
+                                    // Strategy 1: Look for ul.btns li (Specific)
+                                    var lists = document.querySelectorAll('ul.btns li');
+                                    log("Found " + lists.length + " list items in ul.btns");
+                                    
+                                    for(var i=0; i<lists.length; i++) {
+                                        var t = lists[i].innerText || "";
+                                        // Filter
+                                        if (t.includes("add") || t.includes("qayimati") || t.includes("اضف") || t.includes("قائمتي") || t.includes("عودة") || t.includes("Return") || t.includes("التفاصيل")) {
+                                            continue;
+                                        }
+                                        // If it looks like a server or just a generic item in the list
+                                        log("Clicking candidate (Strategy 1): " + t);
+                                        lists[i].click();
+                                        // Try clicking 'a' inside if exists
+                                        if (lists[i].querySelector('a')) lists[i].querySelector('a').click();
+                                        clicked = true;
+                                        break; 
+                                    }
+                                    
+                                    if (clicked) return true;
+
+                                    // Strategy 2: Broad Search for "Server" keyword
+                                    log("Strategy 1 failed/empty. Trying broad search...");
+                                    var buttons = document.querySelectorAll('li, a, button, div.btn'); 
+                                    
+                                    for(var i=0; i<buttons.length; i++) {
+                                        var t = buttons[i].innerText || "";
+                                        if ((t.includes("سيرفر") || t.includes("مشاهدة") || t.includes("Server") || t.includes("Watch")) && 
+                                            !t.includes("عودة") && !t.includes("Return") && !t.includes("قائمتي") && !t.includes("التفاصيل")) {
+                                                
+                                            log("Clicking candidate (Strategy 2): " + t);
+                                            buttons[i].click();
+                                            clicked = true;
+                                            break; 
+                                        }
+                                    }
+                                    return clicked;
+                                }
+                                
+                                // Initial Click Attempt
+                                setTimeout(function() {
+                                    var clicked = tryClickServer();
+                                    log("Server clicked: " + clicked);
+                                }, 2000); // Wait 2s for initial JS to settle
+                                
+                                // Poll for results
+                                var interval = setInterval(function() {
+                                    var links = getLinks();
+                                    log("Polling... Attempt " + attempt + "/" + maxAttempts + " Found: " + links.length);
+                                    
+                                    if (links.length > 0) {
+                                        clearInterval(interval);
+                                        console.log("RESULT_LINKS|||" + JSON.stringify(links));
+                                    }
+                                    
+                                    if (attempt >= maxAttempts) {
+                                        clearInterval(interval);
+                                        console.log("RESULT_LINKS|||" + JSON.stringify(links)); 
+                                    }
+                                    attempt++;
+                                }, 500);
+                            })();
+                        """.trimIndent()
+                        view?.evaluateJavascript(js, null)
+                    }
+                }
+                loadUrl(data)
+            }
         }
     }
-    
+
     private fun getQualityFromText(quality: String): Int {
         return when {
             quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
@@ -530,3 +525,4 @@ class CimaNowProvider : MainAPI() {
         }
     }
 }
+
