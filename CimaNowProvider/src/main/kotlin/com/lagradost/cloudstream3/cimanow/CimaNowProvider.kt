@@ -2,6 +2,8 @@ package com.lagradost.cloudstream3.cimanow
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.requestCreator
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -10,6 +12,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import android.os.Handler
@@ -304,209 +307,121 @@ class CimaNowProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("CimaNow: " + "========================================")
-        println("CimaNow: " + "[LOADLINKS] Starting WebView extraction for URL: $data")
-        println("CimaNow: " + "========================================")
-        
+        println("CimaNow: [LOADLINKS] Starting WebViewResolver for URL: $data")
+        showToast("جاري استخراج الروابط...", Toast.LENGTH_SHORT)
+
         val mainUrl = mainUrl
         
-        return suspendCoroutine { continuation ->
-            var webView: WebView? = null
-            
-            // 60s timeout in Kotlin to ensure we don't hang execution
-            val timeoutHandler = Handler(Looper.getMainLooper())
-            val timeoutRunnable = Runnable {
-                if (webView != null) {
-                    println("CimaNow: " + "[WEBVIEW] Timeout reached")
-                    try {
-                        webView?.stopLoading()
-                        webView?.destroy()
-                    } catch (e: Exception) {}
-                    webView = null
-                    continuation.resume(false)
-                }
-            }
-            timeoutHandler.postDelayed(timeoutRunnable, 60000)
-
-            val api = this
-            
-            newWebView {
-                webView = this
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        // Script: Clicks server button AND forces navigation to video/iframe to trigger interception
+        // This bypasses the need for polling result callback
+        val extractionScript = """
+            (function() {
+                var attempt = 0;
                 
-                webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                        val msg = consoleMessage?.message() ?: ""
-                        
-                        if (msg.startsWith("RESULT_LINKS|||")) {
-                            timeoutHandler.removeCallbacks(timeoutRunnable)
-                            try {
-                                val json = msg.removePrefix("RESULT_LINKS|||")
-                                println("CimaNow: " + "[WEBVIEW] Received links: $json")
-                                val links = AppUtils.parseJson<List<String>>(json)
-                                
-                                var linksFound = 0
-                                for (entry in links) {
-                                    val parts = entry.split("|||")
-                                    if (parts.size < 2) continue
-                                    val type = parts[0]
-                                    val url = parts[1]
+                function log(msg) { console.log("DEBUG|||" + msg); }
+                
+                // Polling Loop
+                setInterval(function() {
+                    attempt++;
+                    
+                    // 1. Try to Click Server Button (if not already found video)
+                    var iframes = document.querySelectorAll('iframe');
+                    var videos = document.querySelectorAll('video');
+                    
+                    if (iframes.length === 0 && videos.length === 0) {
+                        var buttons = document.querySelectorAll('ul.btns li, button, .btn');
+                        for(var i=0; i<buttons.length; i++) {
+                            var t = (buttons[i].innerText || "").trim();
+                            if ((t.includes("Server") || t.includes("سيرفر") || t.includes("مشاهدة")) && 
+                                !t.includes("عودة") && !t.includes("اضف") && !t.includes("قائمتي") && !t.includes("مفضلة")) {
                                     
-                                    println("CimaNow: " + "[LINK] Found: $url ($type)")
-
-                                    if (url.contains(".m3u8") || url.contains(".mp4")) {
-                                        val qualityText = when {
-                                            url.contains("1080") -> "1080p"
-                                            url.contains("720") -> "720p"
-                                            url.contains("480") -> "480p"
-                                            else -> "Auto"
-                                        }
-                                        val linkType = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                api.name,
-                                                "$name $qualityText",
-                                                url,
-                                                linkType,
-                                                Qualities.Unknown.value
-                                            ) {
-                                                this.referer = mainUrl
-                                            }
-                                        )
-                                        linksFound++
-                                    } else if (url.contains("embed") || url.contains("player") || url.contains("vidstream") || url.contains("dood") || url.contains("streamtape")) {
-                                         val fixedUrl = if(url.startsWith("//")) "https:$url" else url
-                                         loadExtractor(fixedUrl, mainUrl, subtitleCallback, callback)
-                                         linksFound++
-                                    }
-                                }
-                                
-                                try {
-                                    stopLoading()
-                                    destroy()
-                                } catch (e: Exception) {}
-                                webView = null
-                                continuation.resume(linksFound > 0)
-                                
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                                try {
-                                    stopLoading()
-                                    destroy()
-                                } catch (ex: Exception) {}
-                                webView = null
-                                continuation.resume(false)
+                                log("Clicking server button: " + t);
+                                buttons[i].click();
+                                if(buttons[i].querySelector('a')) buttons[i].querySelector('a').click();
+                                break; // active click one at a time
                             }
-                        } else if (msg.startsWith("DEBUG|||")) {
-                             println("CimaNow: " + "[JS] ${msg.removePrefix("DEBUG|||")}")
                         }
-                        return true
+                    } else {
+                        // 2. FOUND VIDEO/IFRAME -> FORCE NAVIGATION to trigger Interception
+                        if (iframes.length > 0) {
+                            var src = iframes[0].src || iframes[0].getAttribute('src');
+                            if (src && src.startsWith("http")) {
+                                log("Found iframe, navigating to: " + src);
+                                window.location.href = src;
+                            }
+                        } else if (videos.length > 0) {
+                             var src = videos[0].src || videos[0].currentSrc;
+                             if (src && src.startsWith("http")) {
+                                 log("Found video, navigating to: " + src);
+                                 window.location.href = src;
+                             }
+                        }
                     }
-                }
+                }, 1000); // Check every second
+            })();
+        """.trimIndent()
+        
+        val resolver = WebViewResolver(
+            // Catch native video files and common embed providers
+            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player\.php|/embed/|/watch/)"""),
+            additionalUrls = listOf(
+                Regex("""\.m3u8(\?|$)"""),
+                Regex("""\.mp4(\?|$)"""),
+                Regex("""master\.m3u8""")
+            ),
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            script = extractionScript,
+            scriptCallback = { 
+                // We rely on interception, but if script returns something (it doesn't), we could process it
+            },
+            timeout = 30000L // 30s timeout for async loading
+        )
+        
+        val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
+        
+        try {
+            val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
+                requestCreator("GET", safeUrl, headers = mapOf(
+                    "Referer" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                ))
+            )
+            
+            val candidates = mutableSetOf<String>()
+            if (mainRequest != null) candidates.add(mainRequest.url.toString())
+            candidates.addAll(additionalRequests.map { it.url.toString() })
+            
+            println("CimaNow: [WEBVIEW] Intercepted ${candidates.size} URLs")
+            
+            for (url in candidates) {
+                if (url.contains("favicon") || url.contains(".css")) continue
                 
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        println("CimaNow: " + "[WEBVIEW] Page loaded: $url")
-                        // Inject Polling Script
-                        val js = """
-                            (function() {
-                                var attempt = 0;
-                                var maxAttempts = 60; // 30 seconds of polling (500ms * 60)
-                                
-                                function log(msg) { console.log("DEBUG|||" + msg); }
-                                
-                                function getLinks() {
-                                    var urls = [];
-                                    var iframes = document.querySelectorAll('iframe');
-                                    for(var i=0; i<iframes.length; i++) {
-                                        var src = iframes[i].src || iframes[i].getAttribute('src');
-                                        if(src) urls.push("Iframe|||"+src);
-                                    }
-                                    var videos = document.querySelectorAll('video');
-                                    for(var i=0; i<videos.length; i++) {
-                                        var src = videos[i].src || videos[i].currentSrc;
-                                        if(src) urls.push("Video|||"+src);
-                                    }
-                                    // Also check for global variables
-                                    if(window.playerSrc) urls.push("Variable|||"+window.playerSrc);
-                                    
-                                    return urls;
-                                }
-                                
-                                function tryClickServer() {
-                                    log("Scanning for servers...");
-                                    var clicked = false;
-                                    
-                                    // Strategy 1: Look for ul.btns li (Specific)
-                                    var lists = document.querySelectorAll('ul.btns li');
-                                    log("Found " + lists.length + " list items in ul.btns");
-                                    
-                                    for(var i=0; i<lists.length; i++) {
-                                        var t = lists[i].innerText || "";
-                                        // Filter
-                                        if (t.includes("add") || t.includes("qayimati") || t.includes("اضف") || t.includes("قائمتي") || t.includes("عودة") || t.includes("Return") || t.includes("التفاصيل")) {
-                                            continue;
-                                        }
-                                        // If it looks like a server or just a generic item in the list
-                                        log("Clicking candidate (Strategy 1): " + t);
-                                        lists[i].click();
-                                        // Try clicking 'a' inside if exists
-                                        if (lists[i].querySelector('a')) lists[i].querySelector('a').click();
-                                        clicked = true;
-                                        break; 
-                                    }
-                                    
-                                    if (clicked) return true;
-
-                                    // Strategy 2: Broad Search for "Server" keyword
-                                    log("Strategy 1 failed/empty. Trying broad search...");
-                                    var buttons = document.querySelectorAll('li, a, button, div.btn'); 
-                                    
-                                    for(var i=0; i<buttons.length; i++) {
-                                        var t = buttons[i].innerText || "";
-                                        if ((t.includes("سيرفر") || t.includes("مشاهدة") || t.includes("Server") || t.includes("Watch")) && 
-                                            !t.includes("عودة") && !t.includes("Return") && !t.includes("قائمتي") && !t.includes("التفاصيل")) {
-                                                
-                                            log("Clicking candidate (Strategy 2): " + t);
-                                            buttons[i].click();
-                                            clicked = true;
-                                            break; 
-                                        }
-                                    }
-                                    return clicked;
-                                }
-                                
-                                // Initial Click Attempt
-                                setTimeout(function() {
-                                    var clicked = tryClickServer();
-                                    log("Server clicked: " + clicked);
-                                }, 2000); // Wait 2s for initial JS to settle
-                                
-                                // Poll for results
-                                var interval = setInterval(function() {
-                                    var links = getLinks();
-                                    log("Polling... Attempt " + attempt + "/" + maxAttempts + " Found: " + links.length);
-                                    
-                                    if (links.length > 0) {
-                                        clearInterval(interval);
-                                        console.log("RESULT_LINKS|||" + JSON.stringify(links));
-                                    }
-                                    
-                                    if (attempt >= maxAttempts) {
-                                        clearInterval(interval);
-                                        console.log("RESULT_LINKS|||" + JSON.stringify(links)); 
-                                    }
-                                    attempt++;
-                                }, 500);
-                            })();
-                        """.trimIndent()
-                        view?.evaluateJavascript(js, null)
-                    }
+                println("CimaNow: [LINK] Checking: $url")
+                
+                if (url.contains(".m3u8") || url.contains(".mp4")) {
+                     val qualityText = if (url.contains(".m3u8")) "Auto" else "Video"
+                     val type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                     
+                     callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            "$name $qualityText",
+                            url,
+                            type
+                        ) {
+                            this.referer = mainUrl
+                        }
+                    )
+                } else if (url.contains("embed") || url.contains("vidstream") || url.contains("dood")) {
+                    loadExtractor(url, mainUrl, subtitleCallback, callback)
                 }
-                loadUrl(data)
             }
+            return candidates.isNotEmpty()
+            
+        } catch (e: Exception) {
+            println("CimaNow ERROR: ${e.message}")
+            e.printStackTrace()
+            return false
         }
     }
 
