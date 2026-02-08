@@ -271,7 +271,7 @@ class CimaNowProvider : MainAPI() {
             } else {
                 episodes += loadSeasonEpisodes(1, url)
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.season ?: 1 }.sortedWith(compareBy<Episode> { it.season ?: 1 }.thenBy { it.episode ?: 0 })) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { Pair(it.season ?: 1, it.episode ?: 0) }.sortedWith(compareBy<Episode> { it.season ?: 1 }.thenBy { it.episode ?: 0 })) {
                 this.posterUrl = posterUrl
                 this.plot = synopsis
                 this.year = year
