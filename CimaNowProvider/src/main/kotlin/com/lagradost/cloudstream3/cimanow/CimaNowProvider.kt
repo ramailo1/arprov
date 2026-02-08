@@ -314,6 +314,8 @@ class CimaNowProvider : MainAPI() {
         
         // Script: Clicks server button AND forces navigation to video/iframe to trigger interception
         // This bypasses the need for polling result callback
+        // Script: Clicks server button AND forces navigation to video/iframe to trigger interception
+        // This bypasses the need for polling result callback
         val extractionScript = """
             (function() {
                 var attempt = 0;
@@ -329,27 +331,32 @@ class CimaNowProvider : MainAPI() {
                     var videos = document.querySelectorAll('video');
                     
                     if (iframes.length === 0 && videos.length === 0) {
-                        var buttons = document.querySelectorAll('ul.btns li, button, .btn');
+                        var buttons = document.querySelectorAll('ul.btns li, button, .btn, li[data-server]');
                         for(var i=0; i<buttons.length; i++) {
                             var t = (buttons[i].innerText || "").trim();
-                            if ((t.includes("Server") || t.includes("سيرفر") || t.includes("مشاهدة")) && 
+                            if ((t.includes("Server") || t.includes("سيرفر") || t.includes("مشاهدة") || buttons[i].getAttribute("data-server")) && 
                                 !t.includes("عودة") && !t.includes("اضف") && !t.includes("قائمتي") && !t.includes("مفضلة")) {
                                     
                                 log("Clicking server button: " + t);
                                 buttons[i].click();
                                 if(buttons[i].querySelector('a')) buttons[i].querySelector('a').click();
-                                break; // active click one at a time
+                                // Don't break, maybe need to click multiple? No, usually one active.
+                                // break; 
                             }
                         }
                     } else {
                         // 2. FOUND VIDEO/IFRAME -> FORCE NAVIGATION to trigger Interception
                         if (iframes.length > 0) {
-                            var src = iframes[0].src || iframes[0].getAttribute('src');
-                            if (src && src.startsWith("http")) {
-                                log("Found iframe, navigating to: " + src);
-                                window.location.href = src;
+                            for(var j=0; j<iframes.length; j++) {
+                                var src = iframes[j].src || iframes[j].getAttribute('src') || iframes[j].getAttribute('data-src');
+                                if (src && src.startsWith("http") && !src.includes("google") && !src.includes("facebook")) {
+                                    log("Found iframe, navigating to: " + src);
+                                    window.location.href = src;
+                                    break; 
+                                }
                             }
-                        } else if (videos.length > 0) {
+                        } 
+                        if (videos.length > 0) {
                              var src = videos[0].src || videos[0].currentSrc;
                              if (src && src.startsWith("http")) {
                                  log("Found video, navigating to: " + src);
@@ -362,19 +369,21 @@ class CimaNowProvider : MainAPI() {
         """.trimIndent()
         
         val resolver = WebViewResolver(
-            // Catch native video files and common embed providers
-            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player\.php|/embed/|/watch/)"""),
+            // Catch native video files and common embed providers - BROADENED
+            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player|/embed/|/watch/|vimeo|youtube|dailymotion)"""),
             additionalUrls = listOf(
                 Regex("""\.m3u8(\?|$)"""),
                 Regex("""\.mp4(\?|$)"""),
-                Regex("""master\.m3u8""")
+                Regex("""master\.m3u8"""),
+                Regex("""index\.m3u8"""),
+                Regex("""playlist\.m3u8""")
             ),
             userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             script = extractionScript,
             scriptCallback = { 
-                // We rely on interception, but if script returns something (it doesn't), we could process it
+                // We rely on interception
             },
-            timeout = 30000L // 30s timeout for async loading
+            timeout = 30000L 
         )
         
         val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
