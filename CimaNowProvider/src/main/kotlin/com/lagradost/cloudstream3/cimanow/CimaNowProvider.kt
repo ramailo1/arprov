@@ -294,7 +294,8 @@ class CimaNowProvider : MainAPI() {
         println("CimaNow: " + "[DEOBFUSCATE] Starting deobfuscation, raw HTML length: ${html.length}")
         
         // CimaNow obfuscates HTML using Base64-encoded char codes with a shift
-        val scriptPattern = Regex("""hide_my_HTML_\s*=\s*"([^"]+)"""")
+        // Note: The value is surrounded by single quotes, not double quotes
+        val scriptPattern = Regex("""hide_my_HTML_\s*=\s*'([^']+)'""")
         val match = scriptPattern.find(html)
         if (match == null) {
             println("CimaNow: " + "[DEOBFUSCATE] No obfuscation detected (hide_my_HTML_ not found)")
