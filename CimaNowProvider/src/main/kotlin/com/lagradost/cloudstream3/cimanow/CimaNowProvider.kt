@@ -373,6 +373,23 @@ class CimaNowProvider : MainAPI() {
                 (function() {
                     var urls = [];
                     
+                    try {
+                        // DEBUG: Log initial state
+                        urls.push('DEBUG|||Page Title: ' + document.title);
+                        urls.push('DEBUG|||HTML Length: ' + document.body.innerHTML.length);
+                        urls.push('DEBUG|||Iframes found: ' + document.querySelectorAll('iframe').length);
+                        urls.push('DEBUG|||Videos found: ' + document.querySelectorAll('video').length);
+                        urls.push('DEBUG|||Quality Buttons found: ' + document.querySelectorAll('[data-url], .quality-btn, .server-btn, ul#watch li').length);
+                        
+                        // DEBUG: Dump iframes src
+                        var iframes = document.querySelectorAll('iframe');
+                        for (var i = 0; i < iframes.length; i++) {
+                            urls.push('DEBUG|||Iframe[' + i + '] src: ' + (iframes[i].src || 'none'));
+                        }
+                    } catch(e) {
+                        urls.push('DEBUG|||Error in probe script: ' + e.toString());
+                    }
+                    
                     // Method 1: Look for video/source elements
                     var videos = document.querySelectorAll('video source, video');
                     for (var i = 0; i < videos.length; i++) {
@@ -419,7 +436,7 @@ class CimaNowProvider : MainAPI() {
                 script = extractionScript,
                 scriptCallback = { result ->
                     try {
-                        println("CimaNow: " + "[WEBVIEW] Script result: ${result.take(500)}")
+                        println("CimaNow: " + "[WEBVIEW PROBE] Script result length: ${result.length}")
                         val cleaned = result.trim('"').replace("\\\"", "\"")
                         if (cleaned.startsWith("[")) {
                             val urlList = cleaned.removeSurrounding("[", "]")
@@ -428,15 +445,19 @@ class CimaNowProvider : MainAPI() {
                                 .filter { it.contains("|||") }
                             
                             for (entry in urlList) {
-                                extractedUrls.add(entry)
-                                println("CimaNow: " + "[WEBVIEW] Extracted from DOM: $entry")
+                                if (entry.startsWith("DEBUG|||")) {
+                                    println("CimaNow: " + "[WEBVIEW PROBE] $entry")
+                                } else {
+                                    extractedUrls.add(entry)
+                                    println("CimaNow: " + "[WEBVIEW] Extracted: $entry")
+                                }
                             }
                         }
                     } catch (e: Exception) {
                         println("CimaNow ERROR: " + "[WEBVIEW] Script parse error: ${e.message}")
                     }
                 },
-                timeout = 20000L
+                timeout = 60000L
             )
             
             println("CimaNow: " + "[WEBVIEW] Starting WebView resolution...")
