@@ -20,7 +20,7 @@ class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
     override var name = "CimaNow"
-    override val usesWebView = false
+    override val usesWebView = true
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
@@ -50,29 +50,66 @@ class CimaNowProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         val isAnchor = tagName().equals("a", ignoreCase = true)
         val url = if (isAnchor) fixUrlNull(attr("href")) else fixUrlNull(selectFirst("a")?.attr("href"))
-        if (url == null || url.contains("/news/") || url.contains("coming-soon", true)) return null
+        if (url == null || url.contains("/news/") || url.contains("coming-soon", true) || url.contains("قريبا", true)) return null
 
         val images = select("img")
-        val posterImg = images.filter { 
-            val src = it.attr("src").lowercase()
-            !src.contains("logo") && !src.contains("user")
-        }.firstOrNull() ?: images.firstOrNull()
+        
+        // For poster and title: Many sections have TWO images:
+        // - First image is often "logo" overlay
+        // - Second image is the actual poster with title in alt
+        var posterUrl = ""
+        var altTitle = ""
 
-        val posterUrl = posterImg?.attr("data-src")?.ifBlank { null } 
-            ?: posterImg?.attr("src")?.ifBlank { null } ?: ""
+        for (img in images) {
+            val alt = img.attr("alt")?.trim() ?: ""
+            if (alt.equals("logo", ignoreCase = true) || alt.isEmpty()) continue
+            posterUrl = img.attr("data-src")?.ifBlank { null } ?: img.attr("src") ?: ""
+            altTitle = alt
+            break
+        }
+
+        if (posterUrl.isEmpty() && images.isNotEmpty()) {
+            val firstImg = images.first()
+            posterUrl = firstImg?.attr("data-src")?.ifBlank { null } ?: firstImg?.attr("src") ?: ""
+        }
             
-        val title = select("li[aria-label=\"title\"]").text().takeIf { it.isNotBlank() } 
-            ?: attr("aria-label").takeIf { it.isNotBlank() }
-            ?: selectFirst("h3")?.text()?.cleanHtml()
-            ?: posterImg?.attr("alt") 
-            ?: text().cleanHtml()
+        var title = select("li[aria-label=\"title\"]").text().trim()
+        if (title.isEmpty()) title = altTitle
+        if (title.isEmpty()) title = images.firstOrNull()?.attr("alt")?.takeIf { !it.equals("logo", ignoreCase = true) } ?: ""
+        if (title.isEmpty()) title = text().cleanHtml().trim()
 
         if (title.isNullOrBlank() || title.equals("logo", true)) return null
 
-        val year = select("li[aria-label=\"year\"]").text().toIntOrNull()
-        val isSeries = title.contains("مسلسل") || url.contains("مسلسل")
-        val finalType = if (isSeries) TvType.TvSeries else TvType.Movie
+        val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
+            ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
+
+        // Robust Type Detection from user snippet
+        val isSeries = 
+            title.contains("مسلسل") || 
+            title.contains("برنامج") ||
+            url.contains("مسلسل") ||
+            url.contains("برنامج") ||
+            select("li[aria-label=\"tab\"]").text().let { t -> 
+                t.contains("مسلسلات") || t.contains("برامج")
+            }
+
+        val isMovie = !isSeries && (
+            url.contains(Regex("فيلم|مسرحية|حفلات")) || 
+            select("li[aria-label=\"tab\"]").text().contains("افلام")
+        )
+        
+        val tvType = if (isSeries) TvType.TvSeries else if (isMovie) TvType.Movie else TvType.Movie
+
+        // If it looks like an Episode (has "الحلقة"), force Series
+        val finalType = if (title.contains("الحلقة") || select("li[aria-label=\"episode\"]").isNotEmpty()) {
+             TvType.TvSeries
+        } else {
+             tvType
+        }
+
         val quality = getQualityFromString(select("li[aria-label=\"ribbon\"]").text())
+        val statusText = select("li[aria-label=\"status\"]").text()
+        if (statusText.contains("قريبا")) return null
 
         return newMovieSearchResponse(title, url, finalType) {
             this.posterUrl = posterUrl
