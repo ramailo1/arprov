@@ -340,45 +340,49 @@ class CimaNowProvider : MainAPI() {
                              log('Div Candidate: id="' + divs[i].id + '" class="' + divs[i].className + '"');
                         }
 
-                        // --- ACTIVE: Click First Server Button ---
-                        if (!clicked) {
-                            // Target the server list: ul.btns
-                            var serverList = document.querySelector('ul.btns');
-                            if (serverList) {
-                                log('Server List Found (ul.btns). Structure: ' + serverList.innerHTML.substring(0, 200).replace(/\n/g, ' '));
-                                
-                                var firstServer = serverList.querySelector('li');
-                                if (firstServer) {
-                                    log('Targeting first server li: ' + firstServer.tagName);
+                            // --- ACTIVE: Click Server Button (Skipping "Return") ---
+                            if (!clicked) {
+                                var serverList = document.querySelector('ul.btns');
+                                if (serverList) {
+                                    log('Server List Found (ul.btns).');
                                     
-                                    // Try clicking the li itself
-                                    // firstServer.click(); // Commenting out generic li click to prioritize specific children if exist
+                                    var listItems = serverList.querySelectorAll('li');
+                                    log('Found ' + listItems.length + ' LI elements in server list');
                                     
-                                    // Try clicking clickable children
-                                    var clickableChild = firstServer.querySelector('a, span, div');
-                                    if (clickableChild) {
-                                        log('Clicking child element: ' + clickableChild.tagName + ' Content: ' + clickableChild.innerText.substring(0,20));
-                                        clickableChild.click();
+                                    for (var i = 0; i < listItems.length; i++) {
+                                        var item = listItems[i];
+                                        var text = item.innerText || '';
                                         
-                                        // Fallback: Also click the li just in case
-                                        // firstServer.click(); 
-                                    } else {
-                                        log('No specific clickable child found, clicking LI');
-                                        firstServer.click();
+                                        // Skip "Return to details" button
+                                        if (text.includes('عودة') || text.includes('التفاصيل')) {
+                                            log('Skipping "Return/Details" button: ' + text.substring(0, 20));
+                                            continue;
+                                        }
+                                        
+                                        log('Targeting server li[' + i + ']: ' + item.tagName + ' Text: ' + text.substring(0, 20));
+                                        
+                                        // Try clicking clickable children
+                                        var clickableChild = item.querySelector('a, span, div');
+                                        if (clickableChild) {
+                                            log('Clicking child element: ' + clickableChild.tagName + ' Content: ' + clickableChild.innerText.substring(0,20));
+                                            clickableChild.click();
+                                        } else {
+                                            log('No specific clickable child found, clicking LI');
+                                            item.click();
+                                        }
+                                        
+                                        clicked = true;
+                                        log('CLICKED server element');
+                                        break; // Stop after first successful click
                                     }
                                     
-                                    clicked = true;
-                                    log('CLICKED server element');
+                                    if (!clicked) {
+                                        log('No valid server button found to click (all skipped or empty list)');
+                                    }
                                 } else {
-                                    log('ul.btns exists but has no LI children');
+                                    log('Server list (ul.btns) not found');
                                 }
-                            } else {
-                                log('Server list (ul.btns) not found');
-                                
-                                // Fallback to text matching if class changed
-                                // ... (Optional: keep text logic as backup? Removed for clarity as ul.btns was confirmed)
                             }
-                        }
 
                         // --- EXTRACTION LOGIC ---
                         
