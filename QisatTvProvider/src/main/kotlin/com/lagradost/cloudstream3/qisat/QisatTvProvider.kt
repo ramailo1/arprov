@@ -2,6 +2,7 @@ package com.lagradost.cloudstream3.qisat
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class QisatTvProvider : MainAPI() {
@@ -14,38 +15,36 @@ class QisatTvProvider : MainAPI() {
     // ---------- Main Page ----------
     override val mainPage = mainPageOf(
         "/" to "أحدث الحلقات",
-        "/turkish-series/" to "المسلسلات التركية"
+        "/turkish-series/" to "المسلسلات التركية",
+        "/turkish-movies/" to "افلام تركية"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(fixUrl(request.data)).document
+        val items = mutableListOf<SearchResponse>()
+
+        val selector = if (request.data == "/") "div.episode-block, div.block-post, a[href*=/episode/]" else "div.block-post, a[href*=/series/], a[href*=/movie/]"
         
-        val items = when {
-            request.data == "/" -> {
-                // Homepage shows episode links
-                doc.select("a[href*=/episode/]").mapNotNull { a ->
-                    val url = fixUrl(a.attr("href"))
-                    val title = a.text().trim().ifEmpty { return@mapNotNull null }
-                    newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                        this.posterUrl = a.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-                    }
-                }
-            }
-            request.data.contains("/turkish-series/") -> {
-                // Series listing page
-                doc.select("a[href*=/series/]").mapNotNull { a ->
-                    val url = fixUrl(a.attr("href"))
-                    val title = a.text().trim().ifEmpty { return@mapNotNull null }
-                    newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                        posterUrl = a.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-                    }
-                }
-            }
-            else -> emptyList()
-        }.distinctBy { it.url }
+        doc.select(selector).forEach { element ->
+            val a = if (element.tagName() == "a") element else element.selectFirst("a") ?: return@forEach
+            val url = fixUrl(a.attr("href"))
+            val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
+            if (title.isEmpty()) return@forEach
+
+            val poster = element.selectFirst("img")?.let { img ->
+                img.attr("data-src").ifBlank { img.attr("src") }
+            }?.let { fixUrl(it) }
+
+            val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
+
+            items.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+                this.posterUrl = poster
+                this.year = year
+            })
+        }
 
         return newHomePageResponse(
-            list = HomePageList(request.name, items, isHorizontalImages = false),
+            list = HomePageList(request.name, items.distinctBy { it.url }, isHorizontalImages = false),
             hasNext = false
         )
     }
@@ -53,18 +52,18 @@ class QisatTvProvider : MainAPI() {
     // ---------- Search ----------
     override suspend fun search(query: String): List<SearchResponse> {
         val doc = app.get("$mainUrl/?s=$query").document
-        return doc.select("a[href*=/series/], a[href*=/episode/]").mapNotNull { a ->
+        return doc.select("div.block-post").mapNotNull { element ->
+            val a = element.selectFirst("a") ?: return@mapNotNull null
             val url = fixUrl(a.attr("href"))
-            val title = a.text().trim().ifEmpty { return@mapNotNull null }
+            val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
+            if (title.isEmpty()) return@mapNotNull null
             
-            if (url.contains("/series/")) {
-                newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                    this.posterUrl = a.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-                }
-            } else {
-                newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                    this.posterUrl = a.selectFirst("img")?.attr("src")?.let { fixUrl(it) }
-                }
+            val poster = element.selectFirst("img")?.let { img ->
+                img.attr("data-src").ifBlank { img.attr("src") }
+            }?.let { fixUrl(it) }
+
+            newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+                this.posterUrl = poster
             }
         }.distinctBy { it.url }
     }
@@ -72,44 +71,46 @@ class QisatTvProvider : MainAPI() {
     // ---------- Load Series/Episode ----------
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
-        val title = doc.selectFirst("h1, h2")?.text()?.trim()
-            ?: doc.title().substringBefore(" - ").trim()
-        val poster = doc.selectFirst("img[src*=qisat]")?.attr("src")?.let { fixUrl(it) }
-        val plot = doc.selectFirst("p")?.text()?.trim()
+        val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
+        val poster = doc.selectFirst("div.poster img")?.let { img ->
+            img.attr("data-src").ifBlank { img.attr("src") }
+        }?.let { fixUrl(it) }
+        val plot = doc.selectFirst("div.story p")?.text()?.trim()
+        val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
 
-        return when {
-            url.contains("/series/") -> {
-                // Series page - collect all episodes
-                val episodes = doc.select("a[href*=/episode/]").mapNotNull { a ->
-                    val epUrl = fixUrl(a.attr("href"))
-                    val epName = a.text().trim()
-                    val epNum = Regex("""الحلقة\s+(\d+)""").find(epName)
-                        ?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    
-                    newEpisode(epUrl) {
-                        this.name = epName
-                        this.episode = epNum
-                    }
-                }.distinctBy { it.data }
+        // Series Logic
+        if (url.contains("/series/")) {
+            val episodes = doc.select("div.episodes-list a, div.block-post a").mapNotNull { a ->
+                val epUrl = fixUrl(a.attr("href"))
+                if (!epUrl.contains("/episode/")) return@mapNotNull null
+                
+                val epName = a.selectFirst(".title")?.text()?.trim() ?: a.text().trim()
+                val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
+                    ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
 
-                newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                    this.posterUrl = poster
-                    this.plot = plot
+                val epPoster = a.selectFirst("img")?.let { img ->
+                    img.attr("data-src").ifBlank { img.attr("src") }
+                }?.let { fixUrl(it) }
+
+                newEpisode(epUrl) {
+                    this.name = epName
+                    this.episode = epNum
+                    this.posterUrl = epPoster
                 }
+            }.distinctBy { it.data }.sortedByDescending { it.episode }
+
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
             }
-            url.contains("/episode/") -> {
-                // Single episode page
-                newMovieLoadResponse(title, url, TvType.Movie, url) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
-            }
-            else -> {
-                newMovieLoadResponse(title, url, TvType.Movie, url) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                }
-            }
+        } 
+        
+        // Single Episode or Movie Logic
+        return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            this.posterUrl = poster
+            this.plot = plot
+            this.year = year
         }
     }
 
@@ -122,45 +123,42 @@ class QisatTvProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // Extract the player slug from the page
-        val playerSlug = doc.selectFirst("a[href*=/albaplayer/]")?.attr("href")
-            ?.substringAfter("/albaplayer/")?.substringBefore("?")
-            ?: return false
+        // Extract the player iframe directly
+        val playerIframe = doc.selectFirst("iframe[src*='/albaplayer/']")
+        val playerUrl = playerIframe?.attr("src")?.let { fixUrl(it) } ?: return false
 
-        // Server mapping: button label -> server number
+        // Determine base player URL for server switching
+        // e.g., https://w.shadwo.pro/albaplayer/slug
+        val playerBaseUrl = playerUrl.substringBefore("?")
+
+        // Server mapping
         val servers = listOf(
+            "Main" to 0, // Sometimes 0 is valid
             "CDNPlus" to 1,
             "MP4Plus" to 2,
             "AnaFast" to 3,
             "Vidoba" to 4,
             "VidSpeed" to 5,
-            "larhu" to 6,
+            "Larhu" to 6,
             "VK" to 7,
             "OK" to 8
         )
 
-        servers.forEach { (serverName, servNum) ->
+        val tasks = servers.map { (name, index) ->
+            // Use concurrent requests for speed
+            val serverUrl = "$playerBaseUrl?serv=$index"
             try {
-                val playerUrl = "$mainUrl/albaplayer/$playerSlug/?serv=$servNum"
-                val playerDoc = app.get(
-                    playerUrl,
-                    referer = data
-                ).document
-
-                // Extract iframe sources
-                playerDoc.select("iframe[src]").forEach { iframe ->
-                    val iframeUrl = fixUrl(iframe.attr("src"))
-                    loadExtractor(iframeUrl, data, subtitleCallback, callback)
+                // Determine referer: The player URL usually expects the episode page as referer
+                val response = app.get(serverUrl, referer = data).text
+                
+                // Extract inner iframe (the actual video host)
+                val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
+                
+                if (!innerIframeSrc.isNullOrBlank()) {
+                     loadExtractor(fixUrl(innerIframeSrc!!), referer = data, subtitleCallback = subtitleCallback, callback = callback)
                 }
-
-                // Extract embed links
-                playerDoc.select("a[href*=/embed-], a[href*=/videoembed/]").forEach { a ->
-                    val embedUrl = fixUrl(a.attr("href"))
-                    loadExtractor(embedUrl, data, subtitleCallback, callback)
-                }
-
             } catch (e: Exception) {
-                // Server may not be available
+                // Ignore errors
             }
         }
 
