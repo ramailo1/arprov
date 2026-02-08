@@ -294,17 +294,32 @@ class CimaNowProvider : MainAPI() {
         println("CimaNow: " + "[DEOBFUSCATE] Starting deobfuscation, raw HTML length: ${html.length}")
         
         // CimaNow obfuscates HTML using Base64-encoded char codes with a shift
-        // Note: The value is surrounded by single quotes, not double quotes
-        val scriptPattern = Regex("""hide_my_HTML_\s*=\s*'([^']+)'""")
+        // Note: The value can be split across multiple lines with '+' concatenation
+        // Pattern matches: hide_my_HTML_ = 'data' + 'data' + ... or multiline single quotes
+        val scriptPattern = Regex("""hide_my_HTML_\s*=\s*[\r\n\s]*'([^']+)'""")
         val match = scriptPattern.find(html)
         if (match == null) {
             println("CimaNow: " + "[DEOBFUSCATE] No obfuscation detected (hide_my_HTML_ not found)")
             return html // Not obfuscated
         }
         
+        // Check if there are additional concatenated parts ('+' followed by more data)
+        // Gather all parts from concatenated string literal
+        var fullData = match.groupValues[1]
+        val continuationPattern = Regex("""'\s*\+\s*[\r\n\s]*'([^']+)'""")
+        var searchStart = match.range.last + 1
+        while (searchStart < html.length) {
+            val continuation = continuationPattern.find(html, searchStart)
+            if (continuation != null && continuation.range.first <= searchStart + 10) {
+                fullData += continuation.groupValues[1]
+                searchStart = continuation.range.last + 1
+            } else {
+                break
+            }
+        }
+        
         println("CimaNow: " + "[DEOBFUSCATE] Found obfuscated data pattern!")
-        val obfuscatedData = match.groupValues[1]
-        val parts = obfuscatedData.split(".")
+        val parts = fullData.split(".")
         println("CimaNow: " + "[DEOBFUSCATE] Split into ${parts.size} parts")
         
         val decoded = StringBuilder()
