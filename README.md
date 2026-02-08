@@ -65,11 +65,9 @@ graph TD
 | **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
 | **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
-| **Cima4U** (Working) | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
-| **CimaClub** (Working) | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
-| **CimaLeek** (New) | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
-| **QisatTv** (Development) | Movies & Series | `com.lagradost.cloudstream3.qisat` |
-| **CimaNow** (Working) | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
+| **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
+| **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
+| **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
