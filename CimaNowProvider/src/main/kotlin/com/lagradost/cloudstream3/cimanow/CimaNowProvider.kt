@@ -221,6 +221,19 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
+    private suspend fun tryExtractor(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callbackWrapper: (ExtractorLink) -> Unit
+    ): Boolean {
+        var worked = false
+        loadExtractor(url, subtitleCallback) {
+            worked = true
+            callbackWrapper(it)
+        }
+        return worked
+    }
+
     /** 
      * loadLinks using pure HTTP/AJAX approach
      * 
@@ -298,17 +311,20 @@ class CimaNowProvider : MainAPI() {
                             )
                         ).text
                         
-                        val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                        if (iframeSrc.isNotEmpty()) {
-                            val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                            loadExtractor(fullSrc, subtitleCallback, callbackWrapper)
-                        } else {
-                            // CimaNowTV CPM fallback
-                            val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
-                                .find(response)?.value
-                            if (cpmMatch != null) {
-                                loadExtractor(cpmMatch, subtitleCallback, callbackWrapper)
-                            }
+                        val doc = Jsoup.parse(response)
+                        doc.select("iframe[src]").forEach { iframe ->
+                             val src = iframe.attr("src")
+                             if (src.isNotEmpty()) {
+                                 val fullSrc = if (src.startsWith("//")) "https:$src" else src
+                                 tryExtractor(fullSrc, subtitleCallback, callbackWrapper)
+                             }
+                        }
+                        
+                        // CimaNowTV CPM fallback
+                        val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
+                            .find(response)?.value
+                        if (cpmMatch != null) {
+                            tryExtractor(cpmMatch, subtitleCallback, callbackWrapper)
                         }
                     } catch (e: Exception) {
                         // Ignore individual AJAX failures
