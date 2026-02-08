@@ -8,12 +8,18 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver
+import android.webkit.WebView
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -294,6 +300,14 @@ class CimaNowProvider : MainAPI() {
             
             if (postId == null) println("DEBUG loadLinks: Could not find post ID")
             
+            // Theme Path Detection
+            var themePath = "Cima%20Now%20New"
+            val themeMatch = Regex("""wp-content/themes/([^/]+)/""").find(watchingDoc.html())
+            if (themeMatch != null) {
+                themePath = themeMatch.groupValues[1]
+                println("DEBUG loadLinks: Detected theme path: $themePath")
+            }
+
             // 1. AJAX Extraction (Case A)
             if (postId != null) {
                 val serverIndices = listOf(
@@ -302,7 +316,7 @@ class CimaNowProvider : MainAPI() {
                 
                 for (index in serverIndices) {
                     try {
-                        val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                        val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$index&id=$postId"
                         val response = app.get(
                             ajaxUrl,
                             headers = mapOf(
@@ -351,7 +365,7 @@ class CimaNowProvider : MainAPI() {
                     if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
                         val fullSrc = if (src.startsWith("//")) "https:$src" else src
                         println("DEBUG loadLinks: Found static iframe: $fullSrc")
-                        loadExtractor(fullSrc, subtitleCallback, callbackWrapper)
+                        tryExtractor(fullSrc, subtitleCallback, callbackWrapper)
                     }
                 }
             }
@@ -382,7 +396,7 @@ class CimaNowProvider : MainAPI() {
                                 }
                             )
                         } else {
-                            loadExtractor(url, subtitleCallback, callbackWrapper)
+                            tryExtractor(url, subtitleCallback, callbackWrapper)
                         }
                     }
                 }
@@ -391,11 +405,11 @@ class CimaNowProvider : MainAPI() {
             watchingDoc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
                 val url = link.attr("href")
                 if (url.isNotBlank()) {
-                     loadExtractor(url, subtitleCallback, callbackWrapper)
+                     tryExtractor(url, subtitleCallback, callbackWrapper)
                 }
             }
             
-            println("DEBUG loadLinks: Total valid links found: $validLinksCount")
+            println("DEBUG loadLinks: Total valid links found via HTTP: $validLinksCount")
             return validLinksCount > 0
         } catch (e: Exception) {
             println("DEBUG loadLinks: Exception: ${e.message}")
