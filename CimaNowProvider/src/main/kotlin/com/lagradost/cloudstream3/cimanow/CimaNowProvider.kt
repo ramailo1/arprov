@@ -237,13 +237,13 @@ class CimaNowProvider : MainAPI() {
         try {
             println("DEBUG loadLinks: Loading URL: $data")
 
-            val seenUrls = mutableSetOf<String>()
-            var validLinksCount = 0
+            val seenUrls = java.util.Collections.synchronizedSet(HashSet<String>())
+            val validLinksCount = java.util.concurrent.atomic.AtomicInteger(0)
 
             // Wrapper to deduplicate and call original callback
             val callbackWrapper: (ExtractorLink) -> Unit = { link ->
                 if (link.url.isNotBlank() && seenUrls.add(link.url)) {
-                    validLinksCount++
+                    validLinksCount.incrementAndGet()
                     callback(link)
                 }
             }
@@ -278,89 +278,108 @@ class CimaNowProvider : MainAPI() {
 
             // Helper suspend function to safely try extractor and wait
             suspend fun safeTryExtractor(url: String) {
-                if (url.isBlank() || url.contains("ads") || url.contains("doubleclick")) return
+                val trimmed = url.trim()
+                if (trimmed.isBlank() || trimmed.contains("ads") || trimmed.contains("doubleclick") || trimmed.startsWith("javascript:")) return
                 try {
-                    val fixedUrl = if (url.startsWith("//")) "https:$url" else url
+                    val fixedUrl = if (trimmed.startsWith("//")) "https:$trimmed" else trimmed
                     loadExtractor(fixedUrl, subtitleCallback, callbackWrapper)
                 } catch (e: Exception) {
                     // Ignore individual extractor failures
                 }
             }
 
-            // 1. AJAX Extraction (if postId exists)
-            if (!postId.isNullOrBlank()) {
-                val serverIndices = listOf("00", "33", "34", "35", "31", "66", "32", "7", "30", "12")
-                for (index in serverIndices) {
-                    try {
-                        val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$index&id=$postId"
-                        val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
-                        val doc = Jsoup.parse(response)
+            coroutineScope {
+                val tasks = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
-                        doc.select("iframe[src]").forEach { iframe ->
-                             val src = iframe.attr("src")
-                             if (src.isNotBlank()) safeTryExtractor(src)
+                // 1. AJAX Extraction (if postId exists)
+                if (!postId.isNullOrBlank()) {
+                    val serverIndices = listOf("00", "33", "34", "35", "31", "66", "32", "7", "30", "12")
+                    
+                    tasks.add(async {
+                        serverIndices.map { index ->
+                            async {
+                                try {
+                                    val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$index&id=$postId"
+                                    val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                                    val doc = Jsoup.parse(response)
+
+                                    val urlsToTry = doc.select("iframe[src]").map { it.attr("src") } +
+                                        listOfNotNull(Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""").find(response)?.value)
+
+                                    urlsToTry.map { url -> async { safeTryExtractor(url) } }.awaitAll()
+                                } catch (e: Exception) {
+                                    // Ignore individual AJAX failures
+                                }
+                            }
+                        }.awaitAll()
+                        Unit
+                    })
+                }
+
+                // 2. Static iframe extraction
+                val iframeSelectors = listOf(
+                    "ul#watch li[aria-label=\"embed\"] iframe",
+                    "ul#watch li iframe",
+                    "#watch iframe",
+                    "iframe[src*='embed']",
+                    "iframe[data-src*='embed']",
+                    "iframe[src*='player']",
+                    "iframe[data-src*='player']"
+                )
+
+                tasks.add(async {
+                    watchingDoc.select(iframeSelectors.joinToString(", ")).map { iframe ->
+                        val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
+                        async { safeTryExtractor(src) }
+                    }.awaitAll()
+                    Unit
+                })
+
+                // 3. Download links (Parallelized as well)
+                tasks.add(async {
+                    watchingDoc.select("ul#download li[aria-label='quality'] a").map { link ->
+                         async {
+                            val url = link.attr("href")
+                            if (url.isNotBlank()) {
+                                val text = link.text().trim()
+                                val sizeText = link.select("p").text()
+                                val qualityText = text.replace(sizeText, "").trim()
+                                val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
+
+                                if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
+                                    callbackWrapper(
+                                        newExtractorLink(
+                                            this@CimaNowProvider.name,
+                                            "Download - $qualityText",
+                                            url,
+                                            if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        ) { this.referer = data; this.quality = quality }
+                                    )
+                                } else {
+                                    safeTryExtractor(url)
+                                }
+                            }
+                         }
+                    }.awaitAll()
+                    Unit
+                })
+                
+                // standard download buttons
+                tasks.add(async {
+                     watchingDoc.select("ul#download li[aria-label=\"download\"] a").map { link ->
+                        async {
+                            val url = link.attr("href")
+                            if (url.isNotBlank()) safeTryExtractor(url)
                         }
+                     }.awaitAll()
+                     Unit
+                })
 
-                        // CPM fallback
-                        Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""").find(response)?.value?.let {
-                            safeTryExtractor(it)
-                        }
-                    } catch (e: Exception) {
-                        // Ignore individual AJAX failures
-                    }
-                }
+                tasks.awaitAll()
             }
 
-            // 2. Static iframe extraction
-            val iframeSelectors = listOf(
-                "ul#watch li[aria-label=\"embed\"] iframe",
-                "ul#watch li iframe",
-                "#watch iframe",
-                "iframe[src*='embed']",
-                "iframe[data-src*='embed']",
-                "iframe[src*='player']",
-                "iframe[data-src*='player']"
-            )
-
-            for (selector in iframeSelectors) {
-                watchingDoc.select(selector).forEach { iframe ->
-                    val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
-                    if (src.isNotBlank()) safeTryExtractor(src)
-                }
-            }
-
-            // 3. Download links
-            watchingDoc.select("ul#download li[aria-label='quality'] a").forEach { link ->
-                val url = link.attr("href")
-                if (url.isNotBlank()) {
-                    val text = link.text().trim()
-                    val sizeText = link.select("p").text()
-                    val qualityText = text.replace(sizeText, "").trim()
-                    val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-
-                    if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
-                        callbackWrapper(
-                            newExtractorLink(
-                                this.name,
-                                "Download - $qualityText",
-                                url,
-                                if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) { this.referer = data; this.quality = quality }
-                        )
-                    } else {
-                        safeTryExtractor(url)
-                    }
-                }
-            }
-            
-            // Also check standard download buttons
-            watchingDoc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
-                val url = link.attr("href")
-                if (url.isNotBlank()) safeTryExtractor(url)
-            }
-
-            println("DEBUG loadLinks: Total valid links: $validLinksCount")
-            return validLinksCount > 0
+            println("DEBUG loadLinks: Total valid links: ${validLinksCount.get()}")
+            return validLinksCount.get() > 0
 
         } catch (e: Exception) {
             println("DEBUG loadLinks: Exception: ${e.message}")
