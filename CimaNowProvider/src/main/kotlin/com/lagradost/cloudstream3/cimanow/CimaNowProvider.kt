@@ -340,21 +340,17 @@ class CimaNowProvider : MainAPI() {
                              log('Div Candidate: id="' + divs[i].id + '" class="' + divs[i].className + '"');
                         }
 
-                        // --- ACTIVE: Text-based Click (Fallback) ---
+                        // --- ACTIVE: Click First Server Button ---
                         if (!clicked) {
-                            var allItems = document.querySelectorAll('li, span, a, div');
-                            for(var i=0; i<allItems.length; i++) {
-                                var txt = allItems[i].innerText || '';
-                                if ((txt.includes('Server') || txt.includes('سيرفر') || txt.includes('مشاهدة')) && allItems[i].offsetParent !== null) {
-                                    // Avoid clicking giant containers
-                                    if (allItems[i].tagName === 'DIV' && allItems[i].innerHTML.length > 500) continue;
-                                    
-                                    log('Found potential server button via text: ' + allItems[i].tagName + ' "' + txt.substring(0,20) + '..."');
-                                    allItems[i].click();
-                                    clicked = true;
-                                    log('CLICKED element with text-match');
-                                    break;
-                                }
+                            // Target the server list: ul.btns li
+                            var serverList = document.querySelector('ul.btns li');
+                            if (serverList && serverList.offsetParent !== null) {
+                                log('Found server button: ul.btns li');
+                                serverList.click();
+                                clicked = true;
+                                log('CLICKED first server button');
+                            } else {
+                                log('Server list (ul.btns li) not found or not visible');
                             }
                         }
 
