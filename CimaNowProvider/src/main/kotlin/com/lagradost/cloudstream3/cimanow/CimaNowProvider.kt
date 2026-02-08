@@ -340,26 +340,31 @@ class CimaNowProvider : MainAPI() {
                              log('Div Candidate: id="' + divs[i].id + '" class="' + divs[i].className + '"');
                         }
 
-                            // --- ACTIVE: Click Server Button (Skipping "Return") ---
+                            // --- ACTIVE: Click Server Button (Skipping Action Buttons) ---
                             if (!clicked) {
-                                var serverList = document.querySelector('ul.btns');
-                                if (serverList) {
-                                    log('Server List Found (ul.btns).');
-                                    
-                                    var listItems = serverList.querySelectorAll('li');
-                                    log('Found ' + listItems.length + ' LI elements in server list');
+                                var serverLists = document.querySelectorAll('ul.btns');
+                                log('Found ' + serverLists.length + ' ul.btns elements');
+                                
+                                for (var u = 0; u < serverLists.length; u++) {
+                                    if (clicked) break;
+                                    var listItems = serverLists[u].querySelectorAll('li');
                                     
                                     for (var i = 0; i < listItems.length; i++) {
                                         var item = listItems[i];
-                                        var text = item.innerText || '';
+                                        var text = (item.innerText || '').trim();
                                         
-                                        // Skip "Return to details" button
-                                        if (text.includes('عودة') || text.includes('التفاصيل')) {
-                                            log('Skipping "Return/Details" button: ' + text.substring(0, 20));
+                                        // Skip Action Buttons (Return, Details, Add to List, Report, Favorites)
+                                        if (text.includes('عودة') || text.includes('التفاصيل') || 
+                                            text.includes('اضف') || text.includes('قائمتي') || 
+                                            text.includes('بلغ') || text.includes('مفضلة')) {
+                                            log('Skipping Action Button: ' + text.substring(0, 20));
                                             continue;
                                         }
                                         
-                                        log('Targeting server li[' + i + ']: ' + item.tagName + ' Text: ' + text.substring(0, 20));
+                                        // Skip empty or too short items
+                                        if (text.length < 2) continue;
+                                        
+                                        log('Targeting server candidate: ' + item.tagName + ' Text: ' + text.substring(0, 20));
                                         
                                         // Try clicking clickable children
                                         var clickableChild = item.querySelector('a, span, div');
@@ -375,12 +380,10 @@ class CimaNowProvider : MainAPI() {
                                         log('CLICKED server element');
                                         break; // Stop after first successful click
                                     }
-                                    
-                                    if (!clicked) {
-                                        log('No valid server button found to click (all skipped or empty list)');
-                                    }
-                                } else {
-                                    log('Server list (ul.btns) not found');
+                                }
+                                
+                                if (!clicked) {
+                                    log('No valid server button found to click after checking ' + serverLists.length + ' lists');
                                 }
                             }
 
