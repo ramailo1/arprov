@@ -240,8 +240,15 @@ class CimaNowProvider : MainAPI() {
         try {
             println("DEBUG loadLinks: Loading URL: $data")
             
-            // Track successful callbacks
+            val seenUrls = mutableSetOf<String>()
             var validLinksCount = 0
+            
+            val callbackWrapper: (ExtractorLink) -> Unit = { link ->
+                if (link.url.isNotBlank() && seenUrls.add(link.url)) {
+                    validLinksCount++
+                    callback(link)
+                }
+            }
             
             // Remove /watching/ suffix to get the main page URL
             val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
@@ -249,21 +256,30 @@ class CimaNowProvider : MainAPI() {
             
             println("DEBUG loadLinks: Main page URL: $mainPageUrl")
             
-            // Fetch the main page to get the post ID from shortlink
+            // Fetch both pages to find post ID
             val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
+            val watchingDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
             
-            // Extract post ID from shortlink: <link rel='shortlink' href='https://cimanow.cc/?p=123456' />
-            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")
-                ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
-            
-            // Fallback: try to find postid from body class like "postid-123456"
-            if (postId == null) {
-                postId = mainDoc.selectFirst("body")?.className()
-                    ?.split(" ")?.find { it.startsWith("postid-") }
-                    ?.substringAfter("postid-")
+            // Extract post ID
+            var postId: String? = null
+            val docs = listOf(mainDoc, watchingDoc)
+            for (doc in docs) {
+                postId = doc.selectFirst("link[rel='shortlink']")?.attr("href")
+                    ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
+                
+                if (postId == null) {
+                    postId = doc.selectFirst("body")?.className()
+                        ?.split(" ")?.find { it.startsWith("postid-") }
+                        ?.substringAfter("postid-")
+                }
+                
+                if (postId != null) {
+                    println("DEBUG loadLinks: Found post ID: $postId")
+                    break
+                }
             }
             
-            println("DEBUG loadLinks: Found post ID: $postId")
+            if (postId == null) println("DEBUG loadLinks: Could not find post ID")
             
             // 1. AJAX Extraction (Case A)
             if (postId != null) {
@@ -285,27 +301,13 @@ class CimaNowProvider : MainAPI() {
                         val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
                         if (iframeSrc.isNotEmpty()) {
                             val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                            
-                            if (fullSrc.contains("cimanowtv.com")) {
-                                loadExtractor(fullSrc, subtitleCallback) { link ->
-                                    validLinksCount++
-                                    callback(link)
-                                }
-                            } else {
-                                loadExtractor(fullSrc, subtitleCallback) { link ->
-                                    validLinksCount++
-                                    callback(link)
-                                }
-                            }
+                            loadExtractor(fullSrc, subtitleCallback, callbackWrapper)
                         } else {
                             // CimaNowTV CPM fallback
                             val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
                                 .find(response)?.value
                             if (cpmMatch != null) {
-                                loadExtractor(cpmMatch, subtitleCallback) { link ->
-                                    validLinksCount++
-                                    callback(link)
-                                }
+                                loadExtractor(cpmMatch, subtitleCallback, callbackWrapper)
                             }
                         }
                     } catch (e: Exception) {
@@ -314,8 +316,7 @@ class CimaNowProvider : MainAPI() {
                 }
             }
             
-            // 2. Static Iframe Extraction (Case B) - Always run independently
-            val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
+            // 2. Static Iframe Extraction (Case B)
             val iframeSelectors = listOf(
                 "ul#watch li[aria-label=\"embed\"] iframe",
                 "ul#watch li iframe", 
@@ -328,24 +329,20 @@ class CimaNowProvider : MainAPI() {
             )
             
             for (selector in iframeSelectors) {
-                val iframes = doc.select(selector)
+                val iframes = watchingDoc.select(selector)
                 iframes.forEach { iframe ->
                     val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
                     if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
                         val fullSrc = if (src.startsWith("//")) "https:$src" else src
                         println("DEBUG loadLinks: Found static iframe: $fullSrc")
-                        loadExtractor(fullSrc, subtitleCallback) { link ->
-                            validLinksCount++
-                            callback(link)
-                        }
+                        loadExtractor(fullSrc, subtitleCallback, callbackWrapper)
                     }
                 }
             }
 
-            // 3. Download Links (Case C) - Always run independently
-            val downloadBlocks = doc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label='quality'] a")
+            // 3. Download Links (Case C)
+            val downloadBlocks = watchingDoc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label='quality'] a")
             downloadBlocks.forEach { element ->
-                // Handle both the li container and direct a tag
                 val links = if(element.tagName() == "a") listOf(element) else element.select("a")
                 
                 links.forEach { link ->
@@ -357,35 +354,28 @@ class CimaNowProvider : MainAPI() {
                         val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
                         
                         if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
-                            validLinksCount++
-                            callback.invoke(
+                             callbackWrapper(
                                 newExtractorLink(
                                     this.name,
                                     "Download - $qualityText",
                                     url,
-                                    ExtractorLinkType.VIDEO
+                                    if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                 ) {
                                     this.referer = data
                                     this.quality = quality
                                 }
                             )
                         } else {
-                            loadExtractor(url, subtitleCallback) { link ->
-                                validLinksCount++
-                                callback(link)
-                            }
+                            loadExtractor(url, subtitleCallback, callbackWrapper)
                         }
                     }
                 }
             }
 
-            doc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
+            watchingDoc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
                 val url = link.attr("href")
                 if (url.isNotBlank()) {
-                    loadExtractor(url, subtitleCallback) { link ->
-                        validLinksCount++
-                        callback(link)
-                    }
+                     loadExtractor(url, subtitleCallback, callbackWrapper)
                 }
             }
             
