@@ -1,16 +1,16 @@
 package com.lagradost.cloudstream3.cimanow
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.nicehttp.requestCreator
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -18,7 +18,7 @@ class CimaNowProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://cimanow.cc"
     override var name = "CimaNow"
-    override val usesWebView = true
+    override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
@@ -38,6 +38,10 @@ class CimaNowProvider : MainAPI() {
     )
 
     private val sectionPaginationMap = mutableMapOf<String, String>()
+
+    private fun String.getIntFromText(): Int? {
+        return Regex("""\d+""").find(this)?.value?.toIntOrNull()
+    }
 
     private fun String.cleanHtml(): String = this.replace(Regex("<[^>]*>"), "").trim()
 
@@ -177,13 +181,13 @@ class CimaNowProvider : MainAPI() {
     }
 
     /** 
-     * loadLinks using WebViewResolver
+     * loadLinks using pure HTTP/AJAX approach
      * 
      * CimaNow Flow:
-     * 1. Watch page loads with server list (ul#watch li)
-     * 2. Clicking a server triggers AJAX that loads iframe
-     * 3. Iframe contains embed URL (e.g., cimanowtv.com/e/xxx)
-     * 4. We intercept the iframe src or video URL
+     * 1. Get post ID from main page shortlink or body class
+     * 2. Call AJAX endpoint: core.php?action=switch&index=X&id=Y
+     * 3. Parse iframe from response
+     * 4. Use loadExtractor on iframe src
      */
     override suspend fun loadLinks(
         data: String,
@@ -191,159 +195,194 @@ class CimaNowProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // JavaScript to navigate through full flow:
-        // 1. Episode/Movie page -> click watch button
-        // 2. Timer page -> wait + click proceed button
-        // 3. Watch page -> click Cima Now server -> get iframe
-        val extractionScript = """
-            (function() {
-                var attempts = 0;
-                var maxAttempts = 30;
-                var clickedWatchBtn = false;
-                var clickedProceedBtn = false;
-                var clickedServer = false;
-                var navigatedToEmbed = false;
-                
-                function checkAndAct() {
-                    attempts++;
-                    if (attempts > maxAttempts) return;
-                    
-                    // Check current page state
-                    var serverList = document.querySelectorAll('ul#watch > li[data-index]');
-                    
-                    // STAGE 3: On watch page - click server and get iframe
-                    if (serverList.length > 0) {
-                        if (!clickedServer) {
-                            clickedServer = true;
-                            var cimaServer = document.querySelector('ul#watch > li[data-index="00"]');
-                            var targetServer = cimaServer || serverList[0];
-                            if (targetServer) targetServer.click();
-                            setTimeout(checkAndAct, 2500);
-                            return;
-                        }
-                        
-                        // Get iframe src
-                        var iframe = document.querySelector('ul#watch iframe[src]');
-                        if (!iframe) iframe = document.querySelector('li[aria-label="embed"] iframe[src]');
-                        
-                        if (iframe && !navigatedToEmbed) {
-                            var src = iframe.src || iframe.getAttribute('src');
-                            if (src && src.includes('http') && !src.includes('about:blank')) {
-                                navigatedToEmbed = true;
-                                window.location.href = src;
-                                return;
-                            }
-                        }
-                        setTimeout(checkAndAct, 1000);
-                        return;
-                    }
-                    
-                    // STAGE 2: Timer page - look for proceed button
-                    var allLinks = document.querySelectorAll('a, button, div');
-                    for (var i = 0; i < allLinks.length; i++) {
-                        var txt = allLinks[i].innerText || '';
-                        if (txt.includes('مشاهدة وتحميل') && !clickedProceedBtn) {
-                            clickedProceedBtn = true;
-                            allLinks[i].click();
-                            setTimeout(checkAndAct, 2000);
-                            return;
-                        }
-                    }
-                    
-                    // STAGE 1: Episode/Movie page - click watch button
-                    if (!clickedWatchBtn) {
-                        for (var i = 0; i < allLinks.length; i++) {
-                            var txt = allLinks[i].innerText || '';
-                            // Click "شاهد الحلقة" or "شاهد الفيلم" or similar
-                            if (txt.includes('شاهد الحلقة') || txt.includes('شاهد الفيلم') || 
-                                txt.includes('شاهد') && allLinks[i].classList.contains('shine')) {
-                                clickedWatchBtn = true;
-                                allLinks[i].click();
-                                setTimeout(checkAndAct, 1500);
-                                return;
-                            }
-                        }
-                        // Fallback: click any a.shine link (common pattern)
-                        var shineBtn = document.querySelector('a.shine');
-                        if (shineBtn && !clickedWatchBtn) {
-                            clickedWatchBtn = true;
-                            shineBtn.click();
-                            setTimeout(checkAndAct, 1500);
-                            return;
-                        }
-                    }
-                    
-                    // Keep checking
-                    setTimeout(checkAndAct, 1000);
-                }
-                
-                // Start after page loads
-                setTimeout(checkAndAct, 1000);
-            })();
-        """.trimIndent()
-
-        val resolver = WebViewResolver(
-            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|cimanowtv|/e/|/embed/|filemoon|bysetayico|listeamed|dood|ok\.ru|vk\.com|uqload)"""),
-            additionalUrls = listOf(
-                Regex("""\.m3u8(\?|$)"""),
-                Regex("""\.mp4(\?|$)"""),
-                Regex("""cimanowtv\.com/e/"""),
-                Regex("""master\.m3u8""")
-            ),
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            script = extractionScript,
-            timeout = 35000L
-        )
-
-        val safeUrl = data.replace("(?<!:)/{2,}".toRegex(), "/")
-
         try {
-            val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
-                requestCreator("GET", safeUrl, headers = mapOf(
-                    "Referer" to mainUrl,
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                ))
-            )
+            // Remove /watching/ suffix to get the main page URL
+            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
+                .replace("https:/", "https://")
+            
+            // Fetch the main page to get the post ID from shortlink
+            val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
+            
+            // Extract post ID from shortlink: <link rel='shortlink' href='https://cimanow.cc/?p=123456' />
+            var postId = mainDoc.selectFirst("link[rel='shortlink']")?.attr("href")
+                ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
+            
+            // Fallback: try to find postid from body class like "postid-123456"
+            if (postId == null) {
+                postId = mainDoc.selectFirst("body")?.className()
+                    ?.split(" ")?.find { it.startsWith("postid-") }
+                    ?.substringAfter("postid-")
+            }
+            
+            var foundLinks = 0
+            
+            if (postId != null) {
+                // Server indices to try via AJAX (browser analysis confirmed these)
+                val serverIndices = listOf(
+                    "00", // CimaNow main (first priority)
+                    "31", // Vidguard (Added from browser inspection)
+                    "66", // Upnshare
+                    "32", // Filemoon
+                    "7",  // OK
+                    "30", // VK
+                    "12"  // Uqload
+                )
+                
+                for (index in serverIndices) {
+                    try {
+                        val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                        
+                        val response = app.get(
+                            ajaxUrl,
+                            headers = mapOf(
+                                "Referer" to mainPageUrl,
+                                "X-Requested-With" to "XMLHttpRequest"
+                            )
+                        ).text
+                        
+                        // Parse iframe src from response
+                        val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
+                        
+                        if (iframeSrc.isNotEmpty()) {
+                            var fullSrc = iframeSrc
+                            if (fullSrc.startsWith("//")) {
+                                fullSrc = "https:$iframeSrc"
+                            }
+                            
+                            // Priority extraction for CimaNowTV
+                            if (fullSrc.contains("cimanowtv.com")) {
+                                val tempLinks = mutableListOf<ExtractorLink>()
+                                loadExtractor(fullSrc, subtitleCallback) { link ->
+                                    tempLinks.add(link)
+                                }
+                                
+                                tempLinks.forEach { link ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            "CimaNow (Main)",
+                                            "CimaNow (Main)",
+                                            link.url,
+                                            if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.referer = link.referer
+                                            this.quality = link.quality
+                                        }
+                                    )
+                                }
+                                foundLinks++
+                                continue
+                            }
 
-            val candidates = mutableSetOf<String>()
-            mainRequest?.url?.toString()?.let { candidates.add(it) }
-            candidates.addAll(additionalRequests.map { it.url.toString() })
+                            loadExtractor(fullSrc, subtitleCallback, callback)
+                            foundLinks++
+                        } else {
+                            // Fallback: Extract CPM links directly (no iframe) for CimaNowTV
+                            val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
+                                .find(response)?.value
 
-            var foundLinks = false
-
-            for (url in candidates) {
-                if (url.contains("favicon") || url.contains(".css") || url.contains(".js")) continue
-
-                when {
-                    // Direct video files
-                    url.contains(".m3u8") || url.contains(".mp4") -> {
-                        val isM3u8 = url.contains(".m3u8")
+                            if (cpmMatch != null) {
+                                val tempLinks = mutableListOf<ExtractorLink>()
+                                loadExtractor(cpmMatch, subtitleCallback) { link ->
+                                    tempLinks.add(link)
+                                }
+                                
+                                tempLinks.forEach { link ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            "CimaNow (Main)",
+                                            "CimaNow (Main)",
+                                            link.url,
+                                            if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.referer = link.referer
+                                            this.quality = link.quality
+                                        }
+                                    )
+                                }
+                                foundLinks++
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Continue to next server index
+                    }
+                }
+            }
+            
+            // Extract download links from the watching page
+            val downloadDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
+            
+            // 1. Extract quality links (ul#download li[aria-label="quality"] a)
+            downloadDoc.select("ul#download li[aria-label='quality'] a").forEach { link ->
+                val url = link.attr("href")
+                if (url.isNotBlank()) {
+                    // Extract text quality, removing size info usually in <p> tag if present
+                    val sizeText = link.select("p").text()
+                    val fullText = link.text()
+                    val qualityText = fullText.replace(sizeText, "").trim()
+                    
+                    val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
+                    
+                    // Identify if it's a direct stream or external link
+                    if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
                         callback.invoke(
                             newExtractorLink(
                                 this.name,
-                                "$name سيرفر سيما ناو",
+                                "Download - $qualityText",
                                 url,
-                                if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ExtractorLinkType.VIDEO
                             ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.P1080.value
+                                this.referer = data
+                                this.quality = quality
                             }
                         )
-                        foundLinks = true
-                    }
-                    // Embed pages - pass to extractors
-                    url.contains("cimanowtv") || url.contains("/e/") || 
-                    url.contains("filemoon") || url.contains("bysetayico") ||
-                    url.contains("dood") || url.contains("uqload") ||
-                    url.contains("ok.ru") || url.contains("vk.com") -> {
-                        loadExtractor(url, mainUrl, subtitleCallback, callback)
-                        foundLinks = true
+                        foundLinks++
+                    } else {
+                        // External hosts
+                        loadExtractor(url, subtitleCallback, callback)
+                        foundLinks++
                     }
                 }
             }
 
-            return foundLinks
-
+            // 2. Extract other download servers (ul#download li[aria-label="download"] a)
+            downloadDoc.select("ul#download li[aria-label='download'] a").forEach { link ->
+                val url = link.attr("href")
+                if (url.isNotBlank()) {
+                    loadExtractor(url, subtitleCallback, callback)
+                    foundLinks++
+                }
+            }
+            
+            // Fallback: Try direct iframe scraping from watching page
+            if (foundLinks == 0) {
+                val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
+                
+                val iframeSelectors = listOf(
+                    "ul#watch li[aria-label=\"embed\"] iframe",
+                    "ul#watch li iframe", 
+                    "ul#watch iframe",
+                    "#watch iframe",
+                    "iframe[src*='embed']",
+                    "iframe[data-src*='embed']",
+                    "iframe[src*='player']",
+                    "iframe[data-src*='player']"
+                )
+                
+                for (selector in iframeSelectors) {
+                    val iframes = doc.select(selector)
+                    iframes.forEach { iframe ->
+                        val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
+                        if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
+                            val fullSrc = if (src.startsWith("//")) "https:$src" else src
+                            loadExtractor(fullSrc, subtitleCallback, callback)
+                            foundLinks++
+                        }
+                    }
+                    if (foundLinks > 0) break
+                }
+            }
+            
+            return foundLinks > 0
         } catch (e: Exception) {
             return false
         }
