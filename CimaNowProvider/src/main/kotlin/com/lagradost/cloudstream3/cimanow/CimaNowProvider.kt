@@ -342,15 +342,41 @@ class CimaNowProvider : MainAPI() {
 
                         // --- ACTIVE: Click First Server Button ---
                         if (!clicked) {
-                            // Target the server list: ul.btns li
-                            var serverList = document.querySelector('ul.btns li');
-                            if (serverList && serverList.offsetParent !== null) {
-                                log('Found server button: ul.btns li');
-                                serverList.click();
-                                clicked = true;
-                                log('CLICKED first server button');
+                            // Target the server list: ul.btns
+                            var serverList = document.querySelector('ul.btns');
+                            if (serverList) {
+                                log('Server List Found (ul.btns). Structure: ' + serverList.innerHTML.substring(0, 200).replace(/\n/g, ' '));
+                                
+                                var firstServer = serverList.querySelector('li');
+                                if (firstServer) {
+                                    log('Targeting first server li: ' + firstServer.tagName);
+                                    
+                                    // Try clicking the li itself
+                                    // firstServer.click(); // Commenting out generic li click to prioritize specific children if exist
+                                    
+                                    // Try clicking clickable children
+                                    var clickableChild = firstServer.querySelector('a, span, div');
+                                    if (clickableChild) {
+                                        log('Clicking child element: ' + clickableChild.tagName + ' Content: ' + clickableChild.innerText.substring(0,20));
+                                        clickableChild.click();
+                                        
+                                        // Fallback: Also click the li just in case
+                                        // firstServer.click(); 
+                                    } else {
+                                        log('No specific clickable child found, clicking LI');
+                                        firstServer.click();
+                                    }
+                                    
+                                    clicked = true;
+                                    log('CLICKED server element');
+                                } else {
+                                    log('ul.btns exists but has no LI children');
+                                }
                             } else {
-                                log('Server list (ul.btns li) not found or not visible');
+                                log('Server list (ul.btns) not found');
+                                
+                                // Fallback to text matching if class changed
+                                // ... (Optional: keep text logic as backup? Removed for clarity as ul.btns was confirmed)
                             }
                         }
 
