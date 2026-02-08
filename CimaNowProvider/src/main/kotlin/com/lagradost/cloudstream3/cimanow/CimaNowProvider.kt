@@ -10,6 +10,8 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -196,9 +198,13 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
+            println("DEBUG loadLinks: Loading URL: $data")
+            
             // Remove /watching/ suffix to get the main page URL
             val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
                 .replace("https:/", "https://")
+            
+            println("DEBUG loadLinks: Main page URL: $mainPageUrl")
             
             // Fetch the main page to get the post ID from shortlink
             val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
@@ -214,12 +220,17 @@ class CimaNowProvider : MainAPI() {
                     ?.substringAfter("postid-")
             }
             
+            println("DEBUG loadLinks: Found post ID: $postId")
+            
             var foundLinks = 0
             
             if (postId != null) {
                 // Server indices to try via AJAX (browser analysis confirmed these)
                 val serverIndices = listOf(
                     "00", // CimaNow main (first priority)
+                    "33",
+                    "34",
+                    "35",
                     "31", // Vidguard (Added from browser inspection)
                     "66", // Upnshare
                     "32", // Filemoon
@@ -231,6 +242,7 @@ class CimaNowProvider : MainAPI() {
                 for (index in serverIndices) {
                     try {
                         val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
+                        // println("DEBUG loadLinks: Calling AJAX: $ajaxUrl")
                         
                         val response = app.get(
                             ajaxUrl,
@@ -244,6 +256,8 @@ class CimaNowProvider : MainAPI() {
                         val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
                         
                         if (iframeSrc.isNotEmpty()) {
+                            println("DEBUG loadLinks: Found iframe from AJAX (index $index): $iframeSrc")
+                            
                             var fullSrc = iframeSrc
                             if (fullSrc.startsWith("//")) {
                                 fullSrc = "https:$iframeSrc"
@@ -281,6 +295,7 @@ class CimaNowProvider : MainAPI() {
                                 .find(response)?.value
 
                             if (cpmMatch != null) {
+                                println("DEBUG loadLinks: Found CPM match from AJAX (index $index): $cpmMatch")
                                 val tempLinks = mutableListOf<ExtractorLink>()
                                 loadExtractor(cpmMatch, subtitleCallback) { link ->
                                     tempLinks.add(link)
@@ -353,8 +368,11 @@ class CimaNowProvider : MainAPI() {
                 }
             }
             
+            println("DEBUG loadLinks: Found $foundLinks streaming/download links")
+
             // Fallback: Try direct iframe scraping from watching page
             if (foundLinks == 0) {
+                println("DEBUG loadLinks: Link count 0, trying fallback scraping")
                 val doc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
                 
                 val iframeSelectors = listOf(
@@ -374,6 +392,7 @@ class CimaNowProvider : MainAPI() {
                         val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
                         if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
                             val fullSrc = if (src.startsWith("//")) "https:$src" else src
+                            println("DEBUG loadLinks: Found fallback iframe: $fullSrc")
                             loadExtractor(fullSrc, subtitleCallback, callback)
                             foundLinks++
                         }
@@ -384,6 +403,8 @@ class CimaNowProvider : MainAPI() {
             
             return foundLinks > 0
         } catch (e: Exception) {
+            println("DEBUG loadLinks: Exception: ${e.message}")
+            e.printStackTrace()
             return false
         }
     }
