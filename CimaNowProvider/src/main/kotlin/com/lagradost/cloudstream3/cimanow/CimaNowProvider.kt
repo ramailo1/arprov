@@ -18,11 +18,6 @@ import android.webkit.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import kotlinx.coroutines.withTimeout
-import android.util.Base64
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.nicehttp.requestCreator
-import kotlinx.coroutines.delay
 import com.lagradost.cloudstream3.CommonActivity.showToast
 import android.widget.Toast
 
