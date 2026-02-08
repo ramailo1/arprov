@@ -314,8 +314,7 @@ class CimaNowProvider : MainAPI() {
         
         // Script: Clicks server button AND forces navigation to video/iframe to trigger interception
         // This bypasses the need for polling result callback
-        // Script: Clicks server button AND forces navigation to video/iframe to trigger interception
-        // This bypasses the need for polling result callback
+        // Script: Clicks server button/timer button AND forces navigation to video/iframe to trigger interception
         val extractionScript = """
             (function() {
                 var attempt = 0;
@@ -326,30 +325,45 @@ class CimaNowProvider : MainAPI() {
                 setInterval(function() {
                     attempt++;
                     
-                    // 1. Try to Click Server Button (if not already found video)
+                    // 1. Handle Middle Page Timer / Watch Button
+                    var watchBtn = Array.from(document.querySelectorAll('a, button')).find(b => 
+                        (b.innerText && (b.innerText.includes("شاهد وحمل الان") || b.innerText.includes("مشاهدة وتحميل")))
+                    );
+                    if (watchBtn) {
+                        log("Found Watch/Timer button, clicking...");
+                        watchBtn.click();
+                        return;
+                    }
+
+                    // 2. Play Server Buttons (Watch Page)
+                    // Configured based on browser inspection: ul.tabcontent#watch li
                     var iframes = document.querySelectorAll('iframe');
                     var videos = document.querySelectorAll('video');
                     
                     if (iframes.length === 0 && videos.length === 0) {
-                        var buttons = document.querySelectorAll('ul.btns li, button, .btn, li[data-server]');
+                        // Broader selector to catch 'ul.tabcontent#watch li', 'ul.btns li', etc.
+                        var buttons = document.querySelectorAll('ul.tabcontent#watch li, ul.btns li, button, .btn, li[data-server]');
+                        
                         for(var i=0; i<buttons.length; i++) {
                             var t = (buttons[i].innerText || "").trim();
-                            if ((t.includes("Server") || t.includes("سيرفر") || t.includes("مشاهدة") || buttons[i].getAttribute("data-server")) && 
+                            // Filter valid server buttons
+                            if ((t.includes("Server") || t.includes("سيرفر") || t.includes("مشاهدة") || t.includes("Cima Now") || t.includes("Vidguard") || buttons[i].getAttribute("data-server")) && 
                                 !t.includes("عودة") && !t.includes("اضف") && !t.includes("قائمتي") && !t.includes("مفضلة")) {
                                     
                                 log("Clicking server button: " + t);
                                 buttons[i].click();
                                 if(buttons[i].querySelector('a')) buttons[i].querySelector('a').click();
-                                // Don't break, maybe need to click multiple? No, usually one active.
-                                // break; 
+                                // Try one click per interval to allow loading
+                                break; 
                             }
                         }
                     } else {
-                        // 2. FOUND VIDEO/IFRAME -> FORCE NAVIGATION to trigger Interception
+                        // 3. Force Navigation if Video/Iframe Found
                         if (iframes.length > 0) {
                             for(var j=0; j<iframes.length; j++) {
                                 var src = iframes[j].src || iframes[j].getAttribute('src') || iframes[j].getAttribute('data-src');
-                                if (src && src.startsWith("http") && !src.includes("google") && !src.includes("facebook")) {
+                                // Filter out ads/trackers
+                                if (src && src.startsWith("http") && !src.includes("google") && !src.includes("facebook") && !src.includes("cloudflare")) {
                                     log("Found iframe, navigating to: " + src);
                                     window.location.href = src;
                                     break; 
@@ -369,8 +383,9 @@ class CimaNowProvider : MainAPI() {
         """.trimIndent()
         
         val resolver = WebViewResolver(
-            // Catch native video files and common embed providers - BROADENED
-            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player|/embed/|/watch/|vimeo|youtube|dailymotion)"""),
+            // Catch native video files and common embed providers
+            // Added 'cimanowtv' based on browser finding
+            interceptUrl = Regex("""(?i)(\.m3u8|\.mp4|cimanowtv|vidstream|embedsito|dood|upstream|streamtape|mixdrop|cdn\.watch|player|/embed/|/watch/|vimeo|youtube|dailymotion)"""),
             additionalUrls = listOf(
                 Regex("""\.m3u8(\?|$)"""),
                 Regex("""\.mp4(\?|$)"""),
