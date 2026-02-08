@@ -14,7 +14,6 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import kotlinx.coroutines.withTimeout
 import android.util.Base64
-import android.util.Log
 
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
@@ -290,26 +289,22 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
-    companion object {
-        private const val TAG = "CimaNow"
-    }
-
     /** --- Deobfuscate CimaNow HTML --- */
     private fun deobfuscateHtml(html: String): String {
-        Log.d(TAG, "[DEOBFUSCATE] Starting deobfuscation, raw HTML length: ${html.length}")
+        println("CimaNow: " + "[DEOBFUSCATE] Starting deobfuscation, raw HTML length: ${html.length}")
         
         // CimaNow obfuscates HTML using Base64-encoded char codes with a shift
         val scriptPattern = Regex("""hide_my_HTML_\s*=\s*"([^"]+)"""")
         val match = scriptPattern.find(html)
         if (match == null) {
-            Log.d(TAG, "[DEOBFUSCATE] No obfuscation detected (hide_my_HTML_ not found)")
+            println("CimaNow: " + "[DEOBFUSCATE] No obfuscation detected (hide_my_HTML_ not found)")
             return html // Not obfuscated
         }
         
-        Log.d(TAG, "[DEOBFUSCATE] Found obfuscated data pattern!")
+        println("CimaNow: " + "[DEOBFUSCATE] Found obfuscated data pattern!")
         val obfuscatedData = match.groupValues[1]
         val parts = obfuscatedData.split(".")
-        Log.d(TAG, "[DEOBFUSCATE] Split into ${parts.size} parts")
+        println("CimaNow: " + "[DEOBFUSCATE] Split into ${parts.size} parts")
         
         val decoded = StringBuilder()
         var successCount = 0
@@ -329,8 +324,8 @@ class CimaNowProvider : MainAPI() {
         }
         
         val result = decoded.toString()
-        Log.d(TAG, "[DEOBFUSCATE] Decoded ${successCount} chars, failed ${failCount}")
-        Log.d(TAG, "[DEOBFUSCATE] Result length: ${result.length}, first 200 chars: ${result.take(200)}")
+        println("CimaNow: " + "[DEOBFUSCATE] Decoded ${successCount} chars, failed ${failCount}")
+        println("CimaNow: " + "[DEOBFUSCATE] Result length: ${result.length}, first 200 chars: ${result.take(200)}")
         
         return result.ifBlank { html }
     }
@@ -342,58 +337,58 @@ class CimaNowProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "========================================")
-        Log.d(TAG, "[LOADLINKS] Starting for URL: $data")
-        Log.d(TAG, "========================================")
+        println("CimaNow: " + "========================================")
+        println("CimaNow: " + "[LOADLINKS] Starting for URL: $data")
+        println("CimaNow: " + "========================================")
         
         try {
             // Step 1: Fetch raw HTML
-            Log.d(TAG, "[STEP 1] Fetching raw HTML...")
+            println("CimaNow: " + "[STEP 1] Fetching raw HTML...")
             val rawHtml = app.get(data).text
-            Log.d(TAG, "[STEP 1] Raw HTML length: ${rawHtml.length}")
-            Log.d(TAG, "[STEP 1] First 300 chars: ${rawHtml.take(300)}")
+            println("CimaNow: " + "[STEP 1] Raw HTML length: ${rawHtml.length}")
+            println("CimaNow: " + "[STEP 1] First 300 chars: ${rawHtml.take(300)}")
             
             // Step 2: Deobfuscate HTML if needed
-            Log.d(TAG, "[STEP 2] Attempting deobfuscation...")
+            println("CimaNow: " + "[STEP 2] Attempting deobfuscation...")
             val html = deobfuscateHtml(rawHtml)
             val doc = Jsoup.parse(html)
-            Log.d(TAG, "[STEP 2] Final HTML length after deobfuscation: ${html.length}")
+            println("CimaNow: " + "[STEP 2] Final HTML length after deobfuscation: ${html.length}")
             
             // Step 3: Parse server buttons
-            Log.d(TAG, "[STEP 3] Looking for server buttons (ul#watch li, .servers-list li)...")
+            println("CimaNow: " + "[STEP 3] Looking for server buttons (ul#watch li, .servers-list li)...")
             val servers = doc.select("ul#watch li, .servers-list li").mapNotNull { li ->
                 val index = li.attr("data-index")
                 val name = li.text().trim()
                 if (index.isNotBlank()) {
-                    Log.d(TAG, "[STEP 3] Found server: name='$name', index='$index'")
+                    println("CimaNow: " + "[STEP 3] Found server: name='$name', index='$index'")
                     Pair(index, name)
                 } else null
             }.sortedByDescending { (_, name) -> 
                 name.contains("Cima Now", ignoreCase = true) || name.contains("Main", ignoreCase = true)
             }
-            Log.d(TAG, "[STEP 3] Total servers found: ${servers.size}")
+            println("CimaNow: " + "[STEP 3] Total servers found: ${servers.size}")
 
             // Fallback indices if dynamic parsing failed
             val serverIndices = if (servers.isNotEmpty()) {
                 servers.map { it.first }
             } else {
-                Log.d(TAG, "[STEP 3] No servers found, using fallback indices: 00, 01, 02, 03")
+                println("CimaNow: " + "[STEP 3] No servers found, using fallback indices: 00, 01, 02, 03")
                 listOf("00", "01", "02", "03")
             }
-            Log.d(TAG, "[STEP 3] Server indices to try: $serverIndices")
+            println("CimaNow: " + "[STEP 3] Server indices to try: $serverIndices")
 
             var foundLinks = 0
 
             // Step 4: Extract Post ID
-            Log.d(TAG, "[STEP 4] Extracting Post ID...")
+            println("CimaNow: " + "[STEP 4] Extracting Post ID...")
             val shortlinkHref = doc.select("link[rel='shortlink']").attr("href")
-            Log.d(TAG, "[STEP 4] Shortlink href: '$shortlinkHref'")
+            println("CimaNow: " + "[STEP 4] Shortlink href: '$shortlinkHref'")
             
             val dataIdFromButton = doc.selectFirst("ul#watch li")?.attr("data-id") ?: ""
-            Log.d(TAG, "[STEP 4] data-id from button: '$dataIdFromButton'")
+            println("CimaNow: " + "[STEP 4] data-id from button: '$dataIdFromButton'")
             
             val bodyClass = doc.select("body").attr("class")
-            Log.d(TAG, "[STEP 4] Body class: '${bodyClass.take(200)}'")
+            println("CimaNow: " + "[STEP 4] Body class: '${bodyClass.take(200)}'")
             
             val postId = shortlinkHref.substringAfter("p=")
                 .takeIf { it.all { c -> c.isDigit() } && it.isNotBlank() }
@@ -403,58 +398,58 @@ class CimaNowProvider : MainAPI() {
                     ?.substringAfter("postid-")
             
             if (postId.isNullOrBlank()) {
-                Log.e(TAG, "[STEP 4] FAILED - Could not extract Post ID!")
+                println("CimaNow ERROR: " + "[STEP 4] FAILED - Could not extract Post ID!")
                 return false
             }
-            Log.d(TAG, "[STEP 4] Post ID extracted: '$postId'")
+            println("CimaNow: " + "[STEP 4] Post ID extracted: '$postId'")
 
             // Step 5: Make AJAX calls for each server
-            Log.d(TAG, "[STEP 5] Starting AJAX calls for ${serverIndices.size} servers...")
+            println("CimaNow: " + "[STEP 5] Starting AJAX calls for ${serverIndices.size} servers...")
             val ajaxResults = coroutineScope {
                 serverIndices.map { index ->
                     async {
                         try {
                             withTimeout(15000L) {
                                 val ajaxUrl = "$mainUrl/wp-content/themes/Cima%20Now%20New/core.php?action=switch&index=$index&id=$postId"
-                                Log.d(TAG, "[STEP 5] AJAX call for index=$index, URL: $ajaxUrl")
+                                println("CimaNow: " + "[STEP 5] AJAX call for index=$index, URL: $ajaxUrl")
                                 
                                 val response = app.get(ajaxUrl, headers = mapOf("Referer" to data, "X-Requested-With" to "XMLHttpRequest")).text
-                                Log.d(TAG, "[STEP 5] AJAX response for index=$index, length: ${response.length}")
-                                Log.d(TAG, "[STEP 5] AJAX response content: ${response.take(300)}")
+                                println("CimaNow: " + "[STEP 5] AJAX response for index=$index, length: ${response.length}")
+                                println("CimaNow: " + "[STEP 5] AJAX response content: ${response.take(300)}")
                                 
                                 val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                                Log.d(TAG, "[STEP 5] Iframe src found: '$iframeSrc'")
+                                println("CimaNow: " + "[STEP 5] Iframe src found: '$iframeSrc'")
                                 
                                 if (iframeSrc.isNotBlank()) {
                                     val fullSrc = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                                    Log.d(TAG, "[STEP 5] Calling loadExtractor with: $fullSrc")
+                                    println("CimaNow: " + "[STEP 5] Calling loadExtractor with: $fullSrc")
                                     loadExtractor(fullSrc, subtitleCallback, callback)
                                     true
                                 } else {
-                                    Log.d(TAG, "[STEP 5] No iframe found for index=$index")
+                                    println("CimaNow: " + "[STEP 5] No iframe found for index=$index")
                                     false
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "[STEP 5] AJAX error for index=$index: ${e.message}")
+                            println("CimaNow ERROR: " + "[STEP 5] AJAX error for index=$index: ${e.message}")
                             false
                         }
                     }
                 }.awaitAll()
             }
             foundLinks += ajaxResults.count { it }
-            Log.d(TAG, "[STEP 5] AJAX calls complete. Found links from AJAX: $foundLinks")
+            println("CimaNow: " + "[STEP 5] AJAX calls complete. Found links from AJAX: $foundLinks")
 
             // Step 6: Fallback to static iframes
             if (foundLinks == 0) {
-                Log.d(TAG, "[STEP 6] No AJAX links found, trying static iframes...")
+                println("CimaNow: " + "[STEP 6] No AJAX links found, trying static iframes...")
                 val iframes = doc.select("iframe")
-                Log.d(TAG, "[STEP 6] Found ${iframes.size} iframes in document")
+                println("CimaNow: " + "[STEP 6] Found ${iframes.size} iframes in document")
                 for (iframe in iframes) {
                     val src = iframe.attr("src")
-                    Log.d(TAG, "[STEP 6] Iframe src: '$src'")
+                    println("CimaNow: " + "[STEP 6] Iframe src: '$src'")
                     if (src.isNotBlank() && !src.contains("facebook") && !src.contains("twitter")) {
-                        Log.d(TAG, "[STEP 6] Loading extractor for static iframe: $src")
+                        println("CimaNow: " + "[STEP 6] Loading extractor for static iframe: $src")
                         loadExtractor(src, subtitleCallback, callback)
                         foundLinks++
                     }
@@ -462,10 +457,10 @@ class CimaNowProvider : MainAPI() {
             }
 
             // Step 7: Download links
-            Log.d(TAG, "[STEP 7] Looking for download links...")
+            println("CimaNow: " + "[STEP 7] Looking for download links...")
             val downloadDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
             val downloadBlocks = downloadDoc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label=\"download\"] a")
-            Log.d(TAG, "[STEP 7] Found ${downloadBlocks.size} download blocks")
+            println("CimaNow: " + "[STEP 7] Found ${downloadBlocks.size} download blocks")
             for (block in downloadBlocks) {
                 val links = block.select("a")
                 for (link in links) {
@@ -473,18 +468,18 @@ class CimaNowProvider : MainAPI() {
                     if (url.isNotBlank()) {
                          val qualityText = link.selectFirst("i")?.nextSibling()?.toString()?.trim() ?: ""
                          val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-                         Log.d(TAG, "[STEP 7] Download link: $url, quality: $qualityText")
+                         println("CimaNow: " + "[STEP 7] Download link: $url, quality: $qualityText")
                          callback.invoke(newExtractorLink(this.name, qualityText.ifBlank { "Download" }, url, ExtractorLinkType.VIDEO) { this.referer = data; this.quality = quality })
                     }
                 }
             }
 
-            Log.d(TAG, "========================================")
-            Log.d(TAG, "[LOADLINKS] COMPLETE. Total links found: $foundLinks")
-            Log.d(TAG, "========================================")
+            println("CimaNow: " + "========================================")
+            println("CimaNow: " + "[LOADLINKS] COMPLETE. Total links found: $foundLinks")
+            println("CimaNow: " + "========================================")
             return foundLinks > 0
         } catch (e: Exception) {
-            Log.e(TAG, "[LOADLINKS] EXCEPTION: ${e.message}")
+            println("CimaNow ERROR: " + "[LOADLINKS] EXCEPTION: ${e.message}")
             e.printStackTrace()
             return false
         }
