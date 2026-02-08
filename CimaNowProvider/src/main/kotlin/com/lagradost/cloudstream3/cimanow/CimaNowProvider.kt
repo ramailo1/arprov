@@ -29,7 +29,10 @@ class CimaNowProvider : MainAPI() {
         "أحدث الافلام الاجنبية" to "$mainUrl/category/افلام-اجنبية",
         "أحدث الافلام التركية" to "$mainUrl/category/افلام-تركية",
         "أحدث الافلام الهندية" to "$mainUrl/category/افلام-هندية",
-        "أحدث الافلام الانيميشن" to "$mainUrl/category/افلام-انيميشن"
+        "أحدث الافلام الانيميشن" to "$mainUrl/category/افلام-انيميشن",
+        "أحدث البرامج التلفزيونية" to "$mainUrl/category/البرامج-التلفزيونية",
+        "أحدث المسرحيات" to "$mainUrl/category/مسرحيات",
+        "أحدث الحفلات" to "$mainUrl/category/حفلات"
     )
 
     private val sectionPaginationMap = mutableMapOf<String, String>()
