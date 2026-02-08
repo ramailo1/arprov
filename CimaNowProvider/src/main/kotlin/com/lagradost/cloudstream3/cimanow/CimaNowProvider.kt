@@ -227,28 +227,6 @@ class CimaNowProvider : MainAPI() {
         }
     }
 
-    private suspend fun tryExtractor(
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callbackWrapper: (ExtractorLink) -> Unit
-    ): Boolean {
-        var worked = false
-        loadExtractor(url, subtitleCallback) {
-            worked = true
-            callbackWrapper(it)
-        }
-        return worked
-    }
-
-    /** 
-     * loadLinks using pure HTTP/AJAX approach
-     * 
-     * CimaNow Flow:
-     * 1. Get post ID from main page shortlink or body class
-     * 2. Call AJAX endpoint: core.php?action=switch&index=X&id=Y
-     * 3. Parse iframe from response
-     * 4. Use loadExtractor on iframe src
-     */
     @Suppress("DEPRECATION")
     override suspend fun loadLinks(
         data: String,
@@ -258,165 +236,138 @@ class CimaNowProvider : MainAPI() {
     ): Boolean {
         try {
             println("DEBUG loadLinks: Loading URL: $data")
-            
+
             val seenUrls = mutableSetOf<String>()
             var validLinksCount = 0
-            
+
+            // Wrapper to deduplicate and call original callback
             val callbackWrapper: (ExtractorLink) -> Unit = { link ->
                 if (link.url.isNotBlank() && seenUrls.add(link.url)) {
                     validLinksCount++
                     callback(link)
                 }
             }
-            
-            // Remove /watching/ suffix to get the main page URL
-            val mainPageUrl = data.replace("/watching/", "/").replace("//", "/")
-                .replace("https:/", "https://")
-            
+
+            // Clean URL safely
+            val mainPageUrl = data.removeSuffix("/watching/")
             println("DEBUG loadLinks: Main page URL: $mainPageUrl")
-            
-            // Fetch both pages to find post ID
-            val mainDoc = app.get(mainPageUrl, headers = mapOf("Referer" to mainUrl)).document
-            val watchingDoc = app.get(data, headers = mapOf("Referer" to mainUrl)).document
-            
-            // Extract post ID
-            var postId: String? = null
+
+            val headers = mapOf("Referer" to mainUrl)
+            val mainDoc = app.get(mainPageUrl, headers = headers).document
+            // If data == mainPageUrl, we can reuse mainDoc, but keeping separate is safer for 'watching' pages
+            val watchingDoc = if (data == mainPageUrl) mainDoc else app.get(data, headers = headers).document
+
+            // Extract post ID safely from both docs
             val docs = listOf(mainDoc, watchingDoc)
+            var postId: String? = null
+            
             for (doc in docs) {
-                postId = doc.selectFirst("link[rel='shortlink']")?.attr("href")
-                    ?.substringAfter("?p=")?.takeIf { it.isNotBlank() }
-                
-                if (postId == null) {
-                    postId = doc.selectFirst("body")?.className()
-                        ?.split(" ")?.find { it.startsWith("postid-") }
+                postId = doc.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
+                    ?: doc.selectFirst("body")?.className()?.split(" ")?.find { it.startsWith("postid-") }
                         ?.substringAfter("postid-")
-                }
                 
-                if (postId != null) {
-                    println("DEBUG loadLinks: Found post ID: $postId")
-                    break
-                }
-            }
-            
-            if (postId == null) println("DEBUG loadLinks: Could not find post ID")
-            
-            // Theme Path Detection
-            var themePath = "Cima%20Now%20New"
-            val themeMatch = Regex("""wp-content/themes/([^/]+)/""").find(watchingDoc.html())
-            if (themeMatch != null) {
-                themePath = themeMatch.groupValues[1]
-                println("DEBUG loadLinks: Detected theme path: $themePath")
+                if (!postId.isNullOrBlank()) break
             }
 
-            // 1. AJAX Extraction (Case A)
-            if (postId != null) {
-                val serverIndices = listOf(
-                    "00", "33", "34", "35", "31", "66", "32", "7", "30", "12"
-                )
-                
+            println("DEBUG loadLinks: Post ID: $postId")
+
+            // Detect theme path
+            val themePath = Regex("""wp-content/themes/([^/]+)/""").find(watchingDoc.html())?.groupValues?.get(1)
+                ?: "Cima%20Now%20New"
+            println("DEBUG loadLinks: Theme Path: $themePath")
+
+            // Helper suspend function to safely try extractor and wait
+            suspend fun safeTryExtractor(url: String) {
+                if (url.isBlank() || url.contains("ads") || url.contains("doubleclick")) return
+                try {
+                    val fixedUrl = if (url.startsWith("//")) "https:$url" else url
+                    loadExtractor(fixedUrl, subtitleCallback, callbackWrapper)
+                } catch (e: Exception) {
+                    // Ignore individual extractor failures
+                }
+            }
+
+            // 1. AJAX Extraction (if postId exists)
+            if (!postId.isNullOrBlank()) {
+                val serverIndices = listOf("00", "33", "34", "35", "31", "66", "32", "7", "30", "12")
                 for (index in serverIndices) {
                     try {
                         val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$index&id=$postId"
-                        val response = app.get(
-                            ajaxUrl,
-                            headers = mapOf(
-                                "Referer" to mainPageUrl,
-                                "X-Requested-With" to "XMLHttpRequest"
-                            )
-                        ).text
-                        
+                        val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
                         val doc = Jsoup.parse(response)
+
                         doc.select("iframe[src]").forEach { iframe ->
                              val src = iframe.attr("src")
-                             if (src.isNotEmpty()) {
-                                 val fullSrc = if (src.startsWith("//")) "https:$src" else src
-                                 tryExtractor(fullSrc, subtitleCallback, callbackWrapper)
-                             }
+                             if (src.isNotBlank()) safeTryExtractor(src)
                         }
-                        
-                        // CimaNowTV CPM fallback
-                        val cpmMatch = Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""")
-                            .find(response)?.value
-                        if (cpmMatch != null) {
-                            tryExtractor(cpmMatch, subtitleCallback, callbackWrapper)
+
+                        // CPM fallback
+                        Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""").find(response)?.value?.let {
+                            safeTryExtractor(it)
                         }
                     } catch (e: Exception) {
                         // Ignore individual AJAX failures
                     }
                 }
             }
-            
-            // 2. Static Iframe Extraction (Case B)
+
+            // 2. Static iframe extraction
             val iframeSelectors = listOf(
                 "ul#watch li[aria-label=\"embed\"] iframe",
-                "ul#watch li iframe", 
-                "ul#watch iframe",
+                "ul#watch li iframe",
                 "#watch iframe",
                 "iframe[src*='embed']",
                 "iframe[data-src*='embed']",
                 "iframe[src*='player']",
                 "iframe[data-src*='player']"
             )
-            
+
             for (selector in iframeSelectors) {
-                val iframes = watchingDoc.select(selector)
-                iframes.forEach { iframe ->
+                watchingDoc.select(selector).forEach { iframe ->
                     val src = iframe.attr("data-src").ifBlank { iframe.attr("src") }
-                    if (src.isNotBlank() && (src.startsWith("http") || src.startsWith("//"))) {
-                        val fullSrc = if (src.startsWith("//")) "https:$src" else src
-                        println("DEBUG loadLinks: Found static iframe: $fullSrc")
-                        tryExtractor(fullSrc, subtitleCallback, callbackWrapper)
-                    }
+                    if (src.isNotBlank()) safeTryExtractor(src)
                 }
             }
 
-            // 3. Download Links (Case C)
-            val downloadBlocks = watchingDoc.select("ul#download li[aria-label=\"quality\"].box, ul#download li[aria-label='quality'] a")
-            downloadBlocks.forEach { element ->
-                val links = if(element.tagName() == "a") listOf(element) else element.select("a")
-                
-                links.forEach { link ->
-                    val url = link.attr("href")
-                    if (url.isNotBlank()) {
-                        val sizeText = link.select("p").text()
-                        val fullText = link.text()
-                        val qualityText = fullText.replace(sizeText, "").trim()
-                        val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
-                        
-                        if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
-                             callbackWrapper(
-                                newExtractorLink(
-                                    this.name,
-                                    "Download - $qualityText",
-                                    url,
-                                    if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = data
-                                    this.quality = quality
-                                }
-                            )
-                        } else {
-                            tryExtractor(url, subtitleCallback, callbackWrapper)
-                        }
-                    }
-                }
-            }
-
-            watchingDoc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
+            // 3. Download links
+            watchingDoc.select("ul#download li[aria-label='quality'] a").forEach { link ->
                 val url = link.attr("href")
                 if (url.isNotBlank()) {
-                     tryExtractor(url, subtitleCallback, callbackWrapper)
+                    val text = link.text().trim()
+                    val sizeText = link.select("p").text()
+                    val qualityText = text.replace(sizeText, "").trim()
+                    val quality = qualityText.getIntFromText() ?: Qualities.Unknown.value
+
+                    if (url.contains("cimanowtv.com") || url.contains("worldcdn.online")) {
+                        callbackWrapper(
+                            newExtractorLink(
+                                this.name,
+                                "Download - $qualityText",
+                                url,
+                                if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) { this.referer = data; this.quality = quality }
+                        )
+                    } else {
+                        safeTryExtractor(url)
+                    }
                 }
             }
             
-            println("DEBUG loadLinks: Total valid links found via HTTP: $validLinksCount")
+            // Also check standard download buttons
+            watchingDoc.select("ul#download li[aria-label=\"download\"] a").forEach { link ->
+                val url = link.attr("href")
+                if (url.isNotBlank()) safeTryExtractor(url)
+            }
+
+            println("DEBUG loadLinks: Total valid links: $validLinksCount")
             return validLinksCount > 0
+
         } catch (e: Exception) {
             println("DEBUG loadLinks: Exception: ${e.message}")
             e.printStackTrace()
             return false
         }
     }
-
-
 }
+
+
