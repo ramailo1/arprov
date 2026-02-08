@@ -135,7 +135,7 @@ class CimaNowProvider : MainAPI() {
             val epNum = ep.select("a em").text().toIntOrNull()
             val epName = ep.select("a img:nth-child(2)").attr("alt").ifBlank { "Episode $epNum" }
             val epPoster = ep.select("a img:nth-child(2)").attr("src")
-            newEpisode("${epUrl.trimEnd('/')}/watching/") {
+            newEpisode(epUrl.trimEnd('/')) {
                 this.name = epName
                 this.episode = epNum
                 this.season = seasonNumber
@@ -170,7 +170,7 @@ class CimaNowProvider : MainAPI() {
                 this.posterUrl = posterUrl; this.plot = synopsis; this.year = year; this.tags = tags; this.recommendations = recommendations
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, "${url.trimEnd('/')}/watching/") {
+            newMovieLoadResponse(title, url, TvType.Movie, url.trimEnd('/')) {
                 this.posterUrl = posterUrl; this.plot = synopsis; this.year = year; this.tags = tags; this.recommendations = recommendations
             }
         }
@@ -191,57 +191,84 @@ class CimaNowProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // JavaScript to click the first server (Cima Now) and extract iframe
+        // JavaScript to navigate through full flow:
+        // 1. Episode/Movie page -> click watch button
+        // 2. Timer page -> wait + click proceed button
+        // 3. Watch page -> click Cima Now server -> get iframe
         val extractionScript = """
             (function() {
                 var attempts = 0;
-                var maxAttempts = 15;
+                var maxAttempts = 30;
+                var clickedWatchBtn = false;
+                var clickedProceedBtn = false;
                 var clickedServer = false;
+                var navigatedToEmbed = false;
                 
                 function checkAndAct() {
                     attempts++;
                     if (attempts > maxAttempts) return;
                     
-                    // Step 1: Look for timer/watch button (middle page)
-                    var timerBtn = document.querySelector('a[href*="watching"], button:contains("مشاهدة"), a:contains("شاهد")');
-                    if (!timerBtn) {
-                        var allLinks = document.querySelectorAll('a, button');
-                        for (var i = 0; i < allLinks.length; i++) {
-                            var txt = allLinks[i].innerText || '';
-                            if (txt.includes('مشاهدة وتحميل') || txt.includes('شاهد وحمل')) {
-                                timerBtn = allLinks[i];
-                                break;
+                    // Check current page state
+                    var serverList = document.querySelectorAll('ul#watch > li[data-index]');
+                    
+                    // STAGE 3: On watch page - click server and get iframe
+                    if (serverList.length > 0) {
+                        if (!clickedServer) {
+                            clickedServer = true;
+                            var cimaServer = document.querySelector('ul#watch > li[data-index="00"]');
+                            var targetServer = cimaServer || serverList[0];
+                            if (targetServer) targetServer.click();
+                            setTimeout(checkAndAct, 2500);
+                            return;
+                        }
+                        
+                        // Get iframe src
+                        var iframe = document.querySelector('ul#watch iframe[src]');
+                        if (!iframe) iframe = document.querySelector('li[aria-label="embed"] iframe[src]');
+                        
+                        if (iframe && !navigatedToEmbed) {
+                            var src = iframe.src || iframe.getAttribute('src');
+                            if (src && src.includes('http') && !src.includes('about:blank')) {
+                                navigatedToEmbed = true;
+                                window.location.href = src;
+                                return;
                             }
                         }
-                    }
-                    if (timerBtn && !timerBtn.clicked) {
-                        timerBtn.clicked = true;
-                        timerBtn.click();
                         setTimeout(checkAndAct, 1000);
                         return;
                     }
                     
-                    // Step 2: Click first server in ul#watch (prioritize Cima Now)
-                    var serverList = document.querySelectorAll('ul#watch > li[data-index]');
-                    if (serverList.length > 0 && !clickedServer) {
-                        clickedServer = true;
-                        // Find Cima Now server (data-index="00") or first server
-                        var cimaServer = document.querySelector('ul#watch > li[data-index="00"]');
-                        var targetServer = cimaServer || serverList[0];
-                        if (targetServer) {
-                            targetServer.click();
+                    // STAGE 2: Timer page - look for proceed button
+                    var allLinks = document.querySelectorAll('a, button, div');
+                    for (var i = 0; i < allLinks.length; i++) {
+                        var txt = allLinks[i].innerText || '';
+                        if (txt.includes('مشاهدة وتحميل') && !clickedProceedBtn) {
+                            clickedProceedBtn = true;
+                            allLinks[i].click();
+                            setTimeout(checkAndAct, 2000);
+                            return;
                         }
-                        setTimeout(checkAndAct, 2000);
-                        return;
                     }
                     
-                    // Step 3: Check if iframe appeared after click
-                    var iframe = document.querySelector('ul#watch li[aria-label="embed"] iframe[src]');
-                    if (iframe) {
-                        var src = iframe.src || iframe.getAttribute('src');
-                        if (src && src.includes('http')) {
-                            // Navigate to iframe to trigger interception
-                            window.location.href = src;
+                    // STAGE 1: Episode/Movie page - click watch button
+                    if (!clickedWatchBtn) {
+                        for (var i = 0; i < allLinks.length; i++) {
+                            var txt = allLinks[i].innerText || '';
+                            // Click "شاهد الحلقة" or "شاهد الفيلم" or similar
+                            if (txt.includes('شاهد الحلقة') || txt.includes('شاهد الفيلم') || 
+                                txt.includes('شاهد') && allLinks[i].classList.contains('shine')) {
+                                clickedWatchBtn = true;
+                                allLinks[i].click();
+                                setTimeout(checkAndAct, 1500);
+                                return;
+                            }
+                        }
+                        // Fallback: click any a.shine link (common pattern)
+                        var shineBtn = document.querySelector('a.shine');
+                        if (shineBtn && !clickedWatchBtn) {
+                            clickedWatchBtn = true;
+                            shineBtn.click();
+                            setTimeout(checkAndAct, 1500);
                             return;
                         }
                     }
@@ -250,8 +277,8 @@ class CimaNowProvider : MainAPI() {
                     setTimeout(checkAndAct, 1000);
                 }
                 
-                // Start after page settles
-                setTimeout(checkAndAct, 1500);
+                // Start after page loads
+                setTimeout(checkAndAct, 1000);
             })();
         """.trimIndent()
 
