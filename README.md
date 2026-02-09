@@ -69,6 +69,7 @@ graph TD
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
 | **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
 | **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
+72: | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
@@ -112,9 +113,16 @@ https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
 > [!NOTE]
 > This project is a refined fork of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
 > Re-architected and maintained by **ramailo1**.
->
-> **Special Thanks**:
-> *   [Abodabodd](https://github.com/Abodabodd) for their contributions to the CimaNow provider logic.
+
+## 🏆 Hall of Fame
+We honor the brilliant minds who have contributed to the success of ArProv.
+
+| Contributor | Achievement | Impact |
+| :--- | :--- | :--- |
+| **[Abodabodd](https://github.com/Abodabodd)** | **Anti-Scraping & Server Logic** | Unlocked `CimaNow` provider capabilities. |
+| **[dhomred](https://github.com/dhomred)** | **Original Architect** | Foundation of the v2 extensions. |
+
+Want to be here? Submit a fix or new provider!
 
 Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
 

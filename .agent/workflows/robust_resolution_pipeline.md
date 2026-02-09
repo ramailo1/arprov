@@ -43,4 +43,42 @@ Use this workflow when the user requests a complex fix or explicitly asks for th
 3.  **Report**: Final `notify_user` should be structured clearly with "Changes", "Verification", and "Notes".
 
 ---
+
+## Phase 6: Proven Strategies (Knowledge Base)
+This section contains "brilliant thinking" and proven strategies for specific issues.
+
+### Anti-Scraping: Handling `hide_my_HTML_` Obfuscation
+**Problem**: Sites wrap their content in a script `hide_my_HTML_` to prevent Jsoup selectors from working.
+**Solution**: Decode the Base64 content manually before parsing.
+**Snippet (Kotlin)**:
+```kotlin
+private fun decodeHtml(doc: Document): Document {
+    val docStr = doc.toString()
+    if (!docStr.contains("hide_my_HTML_")) return doc
+
+    val encoded = Regex("""hide_my_HTML_=['"]([^"']+)['"]""").find(docStr)?.groupValues?.get(1) ?: return doc
+    val decoded = String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), kotlin.text.Charsets.UTF_8)
+    // Option 1: Return full new document
+    // return Jsoup.parse(decoded)
+    // Option 2: Append to body (Best for preserving scripts/styles)
+    doc.body().append(decoded)
+    return doc
+}
+```
+**Advanced**: If the string is double-encoded or chopped, look for a custom `decodeObfuscatedString` function (see `CimaNowProvider`).
+
+### Raw Server Parsing (No-Extractor)
+**Problem**: Some "servers" aren't iframe embeds but just list raw video files in the HTML.
+**Solution**: Use Regex to find specific file extensions linked to quality labels.
+**Snippet**:
+```kotlin
+// Extract [720p] /uploads/file.mp4
+Regex("""\[(\d+p)]\s+(/uploads/[^\"]+\.mp4)""").findAll(html).forEach { match ->
+    val quality = match.groupValues[1]
+    val link = fixUrl(match.groupValues[2])
+    callback(newExtractorLink(name, name, link, ExtractorLinkType.VIDEO, getQualityFromName(quality)))
+}
+```
+
+---
 **Trigger:** Use this flow for significant refactors or when `task_boundary` complexity is High.
