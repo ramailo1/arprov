@@ -12,3 +12,7 @@ cloudstream {
 android {
     namespace = "com.lagradost.cloudstream3.qisat"
 }
+
+dependencies {
+    implementation("org.mozilla:rhino:1.7.14")
+}

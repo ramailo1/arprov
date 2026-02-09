@@ -80,7 +80,7 @@ subprojects {
         implementation("com.github.Blatzar:NiceHttp:0.4.4") // http library
         implementation("org.jsoup:jsoup:1.13.1") // html parser
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.+")
-		implementation("org.mozilla:rhino:1.7.14")
+        // implementation("org.mozilla:rhino:1.7.14")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
     }
 }
