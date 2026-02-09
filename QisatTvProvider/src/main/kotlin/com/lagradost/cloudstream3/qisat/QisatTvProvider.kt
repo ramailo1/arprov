@@ -138,8 +138,9 @@ class QisatTvProvider : MainAPI() {
                        doc.select("body").hasClass("single-series") || 
                        finalUrl.contains("/series/")
 
+        val episodes = mutableListOf<Episode>()
+
         if (isSeries) {
-            val episodes = mutableListOf<Episode>()
             // QisatTv apparently loads all episodes in the grid on the single-series page
             // But we should still check for pagination just in case
             
@@ -169,11 +170,24 @@ class QisatTvProvider : MainAPI() {
                 }
             }
             episodes.addAll(pagedEps)
-
-            val finalEpisodes = episodes.distinctBy { it.data }.sortedWith(
-                compareByDescending<Episode> { it.episode ?: 0 }
-                    .thenByDescending { it.name }
-            ).toMutableList()
+        } 
+        
+        // Logical correction: Only treat as movie if it was supposed to be a series but no episodes were found.
+        // This handles cases where a page is tagged as series but has no episodes (fallback to movie).
+        // We DO NOT convert single-episode series to movies anymore, as per Cloudstream best practices.
+        if (isSeries && episodes.isEmpty()) {
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
+            }
+        }
+        
+        if (isSeries) {
+            val finalEpisodes = episodes
+                .distinctBy { it.data }
+                .sortedBy { it.episode ?: Int.MAX_VALUE }
+                .toMutableList()
 
             finalEpisodes.forEachIndexed { index, ep ->
                 if (ep.episode == null) {
@@ -186,18 +200,16 @@ class QisatTvProvider : MainAPI() {
                 this.plot = plot
                 this.year = year
             }
-        } 
-        
+        }
+
         // Movie Logic
-        return newMovieLoadResponse(title, finalUrl, TvType.Movie, finalUrl) {
+        return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
             this.plot = plot
             this.year = year
         }
     }
 
-    // ---------- Load Links (Video Sources) ----------
-    // ---------- Load Links (Video Sources) ----------
     // ---------- Load Links (Video Sources) ----------
     override suspend fun loadLinks(
         data: String,
@@ -214,7 +226,6 @@ class QisatTvProvider : MainAPI() {
 
         playerUrl = fixUrl(playerUrl ?: return false)
 
-        var hasLinks = false
         val servers = mutableListOf<ServerItem>()
 
         // Try parsing from "post" param first (no network call needed)
@@ -268,8 +279,8 @@ class QisatTvProvider : MainAPI() {
         // Parallel fetch servers
         // We construct the "direct" embed URLs based on the server ID and name mapping
         // This bypasses the need to visit the blocked/maintenance 'watch' page
-        coroutineScope {
-            servers.mapNotNull { server ->
+        return coroutineScope {
+            val results = servers.mapNotNull { server ->
                 val serverName = server.name.lowercase()
                 val serverId = server.id
                 var fixedUrl: String? = null
@@ -309,6 +320,7 @@ class QisatTvProvider : MainAPI() {
                 }
             }.map { (server, url) ->
                 async {
+                    var found = false
                     val fixedInnerSrc = url // It is already fixed
                      if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
                         // Specific handling for CDNPlus
@@ -331,7 +343,7 @@ class QisatTvProvider : MainAPI() {
                                                  this.quality = Qualities.Unknown.value
                                              }
                                          )
-                                         hasLinks = true
+                                         found = true
                                      }
                                  }
                             }
@@ -366,30 +378,31 @@ class QisatTvProvider : MainAPI() {
                             } else {
                                 callback(link)
                             }
-                            hasLinks = true
+                            found = true
                         }
                     }
+                    found
                 }
             }.awaitAll()
+            
+            results.any { it }
         }
-
-        return hasLinks
     }
 
     private fun runJS(script: String): String {
-        val rhino = Context.enter()
+        val rhino = org.mozilla.javascript.Context.enter()
         rhino.initSafeStandardObjects()
         rhino.optimizationLevel = -1
-        val scope: Scriptable = rhino.initSafeStandardObjects()
+        val scope: org.mozilla.javascript.Scriptable = rhino.initSafeStandardObjects()
         val result: String
         try {
             val resultObj = rhino.evaluateString(scope, script, "JavaScript", 1, null)
-            result = Context.toString(resultObj)
+            result = org.mozilla.javascript.Context.toString(resultObj)
         } catch (e: Exception) {
             return ""
         } finally {
-            Context.exit()
+            org.mozilla.javascript.Context.exit()
         }
         return result
     }
-}
+} 
