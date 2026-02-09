@@ -16,3 +16,7 @@ cloudstream {
 android {
     namespace = "com.lagradost.cloudstream3.egybest"
 }
+
+dependencies {
+    implementation("org.mozilla:rhino:1.7.14")
+}
