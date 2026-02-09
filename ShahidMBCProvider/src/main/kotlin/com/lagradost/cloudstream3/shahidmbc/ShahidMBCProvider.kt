@@ -58,20 +58,21 @@ class ShahidMBCProvider : MainAPI() {
         val response = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
         val nextData = extractNextData(response.text) ?: return newHomePageResponse(request.name, emptyList())
         
-        // Use regex for lightweight JSON navigation if possible, or Jsoup/Regex for links
-        // For simplicity and speed without a full JSON library, we'll parse predictable patterns
         val items = mutableListOf<SearchResponse>()
         
-        // Extract items from JSON sections (this is a simplified heuristic)
-        // Actual implementation would map the specific JSON structure found in Phase 1
-        val itemPattern = """"title":"([^"]+)".*?"productPath":"([^"]+)"(?:.*?"path":"([^"]+)")?""".toRegex()
-        itemPattern.findAll(nextData).take(20).forEach { match ->
+        // Robust regex to capture title, product URL, and image path
+        // Pattern: "title":"...", "productUrl":{"url":"..."}, "image":{"path":"..."}
+        val itemPattern = """"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)".*?"image":\{"path":"([^"]+)"""".toRegex()
+        itemPattern.findAll(nextData).take(40).forEach { match ->
             val title = match.groupValues[1]
-            val path = match.groupValues[2]
-            val poster = match.groupValues.getOrNull(3)
+            val url = match.groupValues[2]
+            val poster = match.groupValues[3]
             
-            items.add(newMovieSearchResponse(title, fixUrl(path), TvType.Movie) {
-                this.posterUrl = poster?.let { fixUrl(it) }
+            // Map to movie or series based on URL pattern
+            val type = if (url.contains("/series/")) TvType.TvSeries else TvType.Movie
+            
+            items.add(newMovieSearchResponse(title, fixUrl(url), type) {
+                this.posterUrl = fixUrl(poster)
             })
         }
 
@@ -84,7 +85,8 @@ class ShahidMBCProvider : MainAPI() {
         val nextData = extractNextData(response.text) ?: return emptyList()
         
         val items = mutableListOf<SearchResponse>()
-        val resultPattern = """"title":"([^"]+)".*?"productPath":"([^"]+)"""".toRegex()
+        // Simplified search pattern
+        val resultPattern = """"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
         resultPattern.findAll(nextData).forEach { match ->
             val title = match.groupValues[1]
             val path = match.groupValues[2]
@@ -100,7 +102,7 @@ class ShahidMBCProvider : MainAPI() {
         val nextData = extractNextData(response.text) ?: return null
         
         val title = Regex(""""title":"([^"]+)"""").find(nextData)?.groupValues?.get(1) ?: return null
-        val poster = Regex(""""path":"([^"]+\?(?:height|width)=[^"]+)"""").find(nextData)?.groupValues?.get(1)
+        val poster = Regex(""""image":\{"path":"([^"]+)"""").find(nextData)?.groupValues?.get(1)
         val plot = Regex(""""description":"([^"]+)"""").find(nextData)?.groupValues?.get(1)
         val year = Regex(""""releaseDate":(\d{4})""").find(nextData)?.groupValues?.get(1)?.toIntOrNull()
         
@@ -108,14 +110,14 @@ class ShahidMBCProvider : MainAPI() {
         
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            // Extract episodes from JSON (heuristic based on common Shahid structure)
-            val epPattern = """"episodeNumber":(\d+).*?"title":"([^"]+)".*?"productPath":"([^"]+)"""".toRegex()
+            // Extract episodes from JSON
+            val epPattern = """"episodeNumber":(\d+).*?"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
             epPattern.findAll(nextData).forEach { match ->
                 val epNum = match.groupValues[1].toIntOrNull()
                 val epTitle = match.groupValues[2]
-                val epPath = match.groupValues[3]
+                val epUrl = match.groupValues[3]
                 
-                episodes.add(newEpisode(fixUrl(epPath)) {
+                episodes.add(newEpisode(fixUrl(epUrl)) {
                     this.name = epTitle
                     this.episode = epNum
                 })

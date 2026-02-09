@@ -103,27 +103,58 @@ class QisatTvProvider : MainAPI() {
         val episodesTab = doc.select("#episodes-tab, .episodes-list").firstOrNull()
         
         if (finalUrl.contains("/series/") || episodesTab != null) {
-            val episodes = doc.select("div.episodes-list a, div.block-post a, #episodes-tab a.block-post, #episodes-tab div.block-post a").mapNotNull { a ->
-                val epUrl = fixUrl(a.attr("href"))
-                if (!epUrl.contains("/episode/")) return@mapNotNull null
-                
-                val epName = a.selectFirst(".title")?.text()?.trim() ?: a.text().trim()
-                val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
-                    ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
+            val episodes = mutableListOf<Episode>()
+            var page = 1
+            var hasNext = true
 
-                val epPoster = a.selectFirst("img")?.let { img ->
-                    img.attr("data-src").ifBlank { img.attr("src") }
-                }?.let { fixUrl(it) }
-
-                newEpisode(epUrl) {
-                    this.name = epName
-                    this.episode = epNum
-                    this.posterUrl = epPoster
+            while (hasNext) {
+                val pageUrl = if (page == 1) finalUrl else "${finalUrl.removeSuffix("/")}/page/$page/"
+                val pageDoc = try {
+                    app.get(pageUrl).document
+                } catch (e: Exception) {
+                    break
                 }
-            }.distinctBy { it.data }.sortedByDescending { it.episode }
 
-            if (episodes.isNotEmpty()) {
-                return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, episodes) {
+                val pagedEps = pageDoc.select("div.episodes-list a, div.block-post a, #episodes-tab a.block-post, #episodes-tab div.block-post a").mapNotNull { a ->
+                    val epUrl = fixUrl(a.attr("href"))
+                    if (!epUrl.contains("/episode/")) return@mapNotNull null
+                    
+                    val epName = a.selectFirst(".title")?.text()?.trim() ?: a.text().trim()
+                    val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
+                        ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
+
+                    val epPoster = a.selectFirst("img")?.let { img ->
+                        img.attr("data-src").ifBlank { img.attr("src") }
+                    }?.let { fixUrl(it) }
+
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = epNum
+                        this.posterUrl = epPoster
+                    }
+                }
+
+                if (pagedEps.isEmpty()) {
+                    hasNext = false
+                } else {
+                    episodes.addAll(pagedEps)
+                    // Check for next page link to avoid unnecessary requests
+                    val nextLink = pageDoc.selectFirst("a.next.page-numbers")
+                    if (nextLink == null) {
+                        hasNext = false
+                    } else {
+                        page++
+                    }
+                }
+                
+                // Safety break to prevent infinite loops if something goes wrong
+                if (page > 50) break 
+            }
+
+            val finalEpisodes = episodes.distinctBy { it.data }.sortedByDescending { it.episode }
+
+            if (finalEpisodes.isNotEmpty()) {
+                return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, finalEpisodes) {
                     this.posterUrl = poster
                     this.plot = plot
                     this.year = year
@@ -170,7 +201,6 @@ class QisatTvProvider : MainAPI() {
              // functionality for single server handling remains similar to loop logic below
              // but strictly speaking we expect the list.
              // We can at least try the current playerUrl as a fallback
-             val serverName = "Main"
              val serverUrl = playerUrl
              
              // ... extract logic for single server ...
