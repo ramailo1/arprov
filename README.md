@@ -63,7 +63,7 @@ graph TD
 | **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
 | **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
-| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
+| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` | (Blocked by Cloudflare) |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
@@ -85,6 +85,7 @@ graph TD
 ### 🚫 Blocked by Cloudflare
 The following providers are currently inaccessible due to high-security Cloudflare protection.
 - [ ] **AnimeBlkom** - `Pending Bypass Research`
+- [ ] **FajerShow** - `Cloudflare Protection`
 
 ---
 
