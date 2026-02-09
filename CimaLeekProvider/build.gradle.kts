@@ -2,7 +2,7 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "CimaLeek Provider - Working"
+    description = "CimaLeek Provider - (Working)"
 
     language = "ar"
 	

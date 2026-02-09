@@ -75,7 +75,20 @@ class QisatTvProvider : MainAPI() {
 
     // ---------- Load Series/Episode ----------
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+        var doc = app.get(url).document
+        var finalUrl = url
+
+        // Fix for missing episodes: If we are on an episode page, fetch the series page
+        val seriesLink = doc.selectFirst("div.singleSeries .info h2 a")?.attr("href")
+        if (!seriesLink.isNullOrBlank() && url.contains("/episode/")) {
+             try {
+                 finalUrl = fixUrl(seriesLink)
+                 doc = app.get(finalUrl).document
+             } catch (e: Exception) {
+                 // Fallback to original doc
+             }
+        }
+
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
         val poster = doc.selectFirst("div.poster img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
@@ -89,7 +102,7 @@ class QisatTvProvider : MainAPI() {
         // Check if page has episodes list (even if it's an episode URL)
         val episodesTab = doc.select("#episodes-tab, .episodes-list").firstOrNull()
         
-        if (url.contains("/series/") || episodesTab != null) {
+        if (finalUrl.contains("/series/") || episodesTab != null) {
             val episodes = doc.select("div.episodes-list a, div.block-post a, #episodes-tab a.block-post, #episodes-tab div.block-post a").mapNotNull { a ->
                 val epUrl = fixUrl(a.attr("href"))
                 if (!epUrl.contains("/episode/")) return@mapNotNull null
@@ -110,7 +123,7 @@ class QisatTvProvider : MainAPI() {
             }.distinctBy { it.data }.sortedByDescending { it.episode }
 
             if (episodes.isNotEmpty()) {
-                return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, episodes) {
                     this.posterUrl = poster
                     this.plot = plot
                     this.year = year
@@ -119,7 +132,7 @@ class QisatTvProvider : MainAPI() {
         } 
         
         // Single Episode or Movie Logic
-        return newMovieLoadResponse(title, url, TvType.Movie, url) {
+        return newMovieLoadResponse(title, finalUrl, TvType.Movie, finalUrl) {
             this.posterUrl = poster
             this.plot = plot
             this.year = year

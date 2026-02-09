@@ -2,7 +2,7 @@ version = 10
 
 cloudstream {
     authors = listOf("ramailo1")
-    description = "FaselHD Provider - Clean, Organized, and High-Performance"
+    description = "FaselHD Provider - Clean, Organized, and High-Performance - (Working)"
     language = "ar"
     status = 3
     tvTypes = listOf("TvSeries", "Movie", "Anime")

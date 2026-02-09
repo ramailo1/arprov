@@ -3,7 +3,7 @@ version = 10
 
 cloudstream {
     language = "ar"
-    description = "MovizLands Provider - Clean, Organized, and High-Performance"
+    description = "MovizLands Provider - Clean, Organized, and High-Performance - (Working)"
     status = 1
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     iconUrl = "https://www.google.com/s2/favicons?domain=movizlands.com&sz=%size%"

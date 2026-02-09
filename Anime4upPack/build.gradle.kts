@@ -1,7 +1,7 @@
 version = 10
 
 cloudstream {
-    description = "Anime4up and Witanime - Clean, Organized, and High-Performance"
+    description = "Anime4up and Witanime - Clean, Organized, and High-Performance - (Working)"
     authors = listOf( "ramailo1" )
 
 	language = "ar"

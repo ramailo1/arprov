@@ -10,7 +10,7 @@ cloudstream {
 
     tvTypes = listOf( "TvSeries" , "Movie" )
 
-    iconUrl = "https://www.google.com/s2/favicons?domain=cimanow.cc&sz=%size%"
+    iconUrl = "https://cimanow.cc/wp-content/uploads/2017/05/Favicon.gif"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cimanow"
