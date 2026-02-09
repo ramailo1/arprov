@@ -2,7 +2,7 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "FajerShow Provider - (In Progress)"
+    description = "FajerShow Provider - (Blocked by cloudflare)"
 
     language = "ar"
 	
