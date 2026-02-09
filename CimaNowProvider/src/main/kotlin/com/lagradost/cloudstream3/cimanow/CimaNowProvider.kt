@@ -91,15 +91,15 @@ class CimaNowProvider : MainAPI() {
         val year = select("li[aria-label=\"year\"]").text().toIntOrNull() 
             ?: Regex("""\b(19|20)\d{2}\b""").find(title)?.value?.toIntOrNull()
 
-        // Robust Type Detection from user snippet
         val isSeries = 
             title.contains("مسلسل") || 
             title.contains("برنامج") ||
             url.contains("مسلسل") ||
             url.contains("برنامج") ||
-            select("li[aria-label=\"tab\"]").text().let { t -> 
-                t.contains("مسلسلات") || t.contains("برامج")
-            }
+            select("li[aria-label=\"category\"] a").text().contains("مسلسل") ||
+            select("li[aria-label=\"category\"] a").text().contains("برنامج") ||
+            select("li[aria-label=\"tab\"]").text().contains("مسلسلات") ||
+            select("li[aria-label=\"tab\"]").text().contains("برامج")
 
         val isMovie = !isSeries && (
             url.contains(Regex("فيلم|مسرحية|حفلات")) || 
@@ -169,7 +169,7 @@ class CimaNowProvider : MainAPI() {
         if (doc.select("ul#eps li").isNotEmpty()) return TvType.TvSeries
         val pageTitle = doc.select("title").text()
         if (pageTitle.contains("مسلسل") || pageTitle.contains("برنامج")) return TvType.TvSeries
-        return if (url.contains("/selary/") || url.contains("/episode/")) TvType.TvSeries else TvType.Movie
+        return if (url.contains("/selary/") || url.contains("/series/") || url.contains("/episode/")) TvType.TvSeries else TvType.Movie
     }
 
     private fun extractSeasons(doc: Document): List<Pair<Int, String>> =

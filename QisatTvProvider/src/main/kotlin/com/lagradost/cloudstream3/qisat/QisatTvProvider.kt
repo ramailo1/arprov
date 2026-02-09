@@ -4,6 +4,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import org.mozilla.javascript.Context
+import org.mozilla.javascript.Scriptable
 
 class QisatTvProvider : MainAPI() {
     override var mainUrl = "https://www.qisat.tv"
@@ -74,13 +76,18 @@ class QisatTvProvider : MainAPI() {
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
         val poster = doc.selectFirst("div.poster img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
+        }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
+             img.attr("data-src").ifBlank { img.attr("src") }
         }?.let { fixUrl(it) }
-        val plot = doc.selectFirst("div.story p")?.text()?.trim()
+
+        val plot = doc.selectFirst("div.story p")?.text()?.trim() ?: doc.selectFirst("div.story")?.text()?.trim()
         val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
 
-        // Series Logic
-        if (url.contains("/series/")) {
-            val episodes = doc.select("div.episodes-list a, div.block-post a").mapNotNull { a ->
+        // Check if page has episodes list (even if it's an episode URL)
+        val episodesTab = doc.select("#episodes-tab, .episodes-list").firstOrNull()
+        
+        if (url.contains("/series/") || episodesTab != null) {
+            val episodes = doc.select("div.episodes-list a, div.block-post a, #episodes-tab a.block-post, #episodes-tab div.block-post a").mapNotNull { a ->
                 val epUrl = fixUrl(a.attr("href"))
                 if (!epUrl.contains("/episode/")) return@mapNotNull null
                 
@@ -99,10 +106,12 @@ class QisatTvProvider : MainAPI() {
                 }
             }.distinctBy { it.data }.sortedByDescending { it.episode }
 
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
-                this.plot = plot
-                this.year = year
+            if (episodes.isNotEmpty()) {
+                return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                    this.posterUrl = poster
+                    this.plot = plot
+                    this.year = year
+                }
             }
         } 
         
@@ -144,7 +153,7 @@ class QisatTvProvider : MainAPI() {
             "OK" to 8
         )
 
-        val tasks = servers.map { (name, index) ->
+        servers.amap { (_, index) ->
             // Use concurrent requests for speed
             val serverUrl = "$playerBaseUrl?serv=$index"
             try {
@@ -155,7 +164,31 @@ class QisatTvProvider : MainAPI() {
                 val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
                 
                 if (!innerIframeSrc.isNullOrBlank()) {
-                     loadExtractor(fixUrl(innerIframeSrc!!), referer = data, subtitleCallback = subtitleCallback, callback = callback)
+                     val fixedInnerSrc = fixUrl(innerIframeSrc)
+                     if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
+                         // Specific handling for CDNPlus which uses packed JS
+                         val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
+                         val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
+                         if (packed != null) {
+                             val unpacked = runJS(packed.replace("eval", ""))
+                             val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
+                             if (m3u8 != null) {
+                                 callback(
+                                     newExtractorLink(
+                                         "CdnPlus",
+                                         "CdnPlus",
+                                         m3u8,
+                                         ExtractorLinkType.M3U8
+                                     ) {
+                                         this.referer = fixedInnerSrc
+                                         this.quality = Qualities.Unknown.value
+                                     }
+                                 )
+                             }
+                         }
+                     } else {
+                         loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback, callback = callback)
+                     }
                 }
             } catch (e: Exception) {
                 // Ignore errors
@@ -163,5 +196,22 @@ class QisatTvProvider : MainAPI() {
         }
 
         return true
+    }
+
+    private fun runJS(script: String): String {
+        val rhino = Context.enter()
+        rhino.initSafeStandardObjects()
+        rhino.optimizationLevel = -1
+        val scope: Scriptable = rhino.initSafeStandardObjects()
+        val result: String
+        try {
+            val resultObj = rhino.evaluateString(scope, script, "JavaScript", 1, null)
+            result = Context.toString(resultObj)
+        } catch (e: Exception) {
+            return ""
+        } finally {
+            Context.exit()
+        }
+        return result
     }
 }
