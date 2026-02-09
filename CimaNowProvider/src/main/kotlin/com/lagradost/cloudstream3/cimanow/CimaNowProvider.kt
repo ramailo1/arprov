@@ -294,20 +294,34 @@ class CimaNowProvider : MainAPI() {
 
                 // 1. AJAX Extraction (if postId exists)
                 if (!postId.isNullOrBlank()) {
-                    val serverIndices = listOf("00", "33", "34", "35", "31", "66", "32", "7", "30", "12")
+                    // Extract dynamic server list from the "Watch" tab
+                    val serverElements = watchingDoc.select("ul#watch li")
                     
                     tasks.add(async {
-                        serverIndices.map { index ->
+                        serverElements.map { li ->
                             async {
                                 try {
-                                    val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$index&id=$postId"
-                                    val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
-                                    val doc = Jsoup.parse(response)
+                                    val serverId = li.attr("data-index")
+                                    // Skip if no ID or if it looks like an ad/fake tab
+                                    if (serverId.isNotBlank()) {
+                                        // Retry up to 3 times to simulate clicking through ads
+                                        for (attempt in 1..3) {
+                                            val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$serverId&id=$postId"
+                                            val response = app.get(ajaxUrl, headers = mapOf("Referer" to mainPageUrl, "X-Requested-With" to "XMLHttpRequest")).text
+                                            val doc = Jsoup.parse(response)
 
-                                    val urlsToTry = doc.select("iframe[src]").map { it.attr("src") } +
-                                        listOfNotNull(Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""").find(response)?.value)
-
-                                    urlsToTry.map { url -> async { safeTryExtractor(url) } }.awaitAll()
+                                            val urlsToTry = doc.select("iframe[src]").map { it.attr("src") } +
+                                                listOfNotNull(Regex("""https://[^"']+cimanowtv\.com/e/[^"']+""").find(response)?.value)
+                                            
+                                            // If we found links, try them and break the retry loop
+                                            if (urlsToTry.isNotEmpty()) {
+                                                urlsToTry.map { url -> async { safeTryExtractor(url) } }.awaitAll()
+                                                break
+                                            }
+                                            // If no links found, it might have been an "ad" response, so retry
+                                            delay(500)
+                                        }
+                                    }
                                 } catch (e: Exception) {
                                     // Ignore individual AJAX failures
                                 }
