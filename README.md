@@ -68,6 +68,7 @@ graph TD
 | **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
 | **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
+| **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
@@ -111,6 +112,9 @@ https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
 > [!NOTE]
 > This project is a refined fork of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
 > Re-architected and maintained by **ramailo1**.
+>
+> **Special Thanks**:
+> *   [Abodabodd](https://github.com/Abodabodd) for their contributions to the CimaNow provider logic.
 
 Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
 

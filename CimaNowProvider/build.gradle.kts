@@ -2,7 +2,7 @@ version = 24
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "CimaNow Provider - (In Progress)"
+    description = "CimaNow Provider"
 
 	language = "ar"
 	
