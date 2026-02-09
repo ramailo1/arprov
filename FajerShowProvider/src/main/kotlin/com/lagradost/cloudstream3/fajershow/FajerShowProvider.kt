@@ -22,7 +22,7 @@ class FajerShowProvider : MainAPI() {
     override var mainUrl = "https://fajer.show"
     override var name = "FajerShow (Blocked by Cloudflare)"
     override val usesWebView = false
-    override val hasMainPage = true
+    override val hasMainPage = false
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
     private fun String.getIntFromText(): Int? {
@@ -74,14 +74,7 @@ class FajerShowProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        val document = app.get(request.data + page, headers = headers).document
-        val home = document.select("article.item").mapNotNull {
-            it.toSearchResponse(true)
-        }
-        return newHomePageResponse(request.name, home)
+        throw ErrorLoadingException("This source is currently blocked by Cloudflare protection.")
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -95,58 +88,7 @@ class FajerShowProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
-        val isMovie = url.contains("/movies/")
-
-        val posterUrl = doc.select("div.poster > img").attr("src")
-        val rating = doc.select("span[itemprop=\"ratingValue\"]").text().toIntOrNull()
-        val title = doc.select("div.data > h1").text()
-        val synopsis = doc.select("div.wp-content > p").text()
-
-        val tags = doc.select("a[rel=\"tag\"]")?.map { it.text() }
-
-        val actors = doc.select("div.person").mapNotNull {
-            val name = it.selectFirst("div > a > img")?.attr("alt") ?: return@mapNotNull null
-            val image = it.selectFirst("div > a > img")?.attr("src") ?: return@mapNotNull null
-            val roleString = it.select("div.data > div.caracter").text()
-            val mainActor = Actor(name, image)
-            ActorData(actor = mainActor, roleString = roleString)
-        }
-
-        return if (isMovie) {
-            val recommendations = doc.select(".owl-item article").mapNotNull { element ->
-                element.toSearchResponse(true)
-            }
-
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                url
-            ) {
-                this.posterUrl = posterUrl
-                this.recommendations = recommendations
-                this.plot = synopsis
-                this.tags = tags
-                this.actors = actors
-                // this.rating = rating
-            }
-        } else {
-            val episodes = doc.select(".se-c ul > li").map {
-                newEpisode(it.select("div.episodiotitle > a").attr("href")) {
-                    this.name = it.select("div.episodiotitle > a").text()
-                    this.season = it.select("div.numerando").text().split(" - ")[0].toIntOrNull()
-                    this.episode = it.select("div.numerando").text().split(" - ")[1].toIntOrNull()
-                    this.posterUrl = it.select("div.imagen a img").attr("src")
-                }
-            }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
-                this.posterUrl = posterUrl
-                this.tags = tags
-                this.plot = synopsis
-                this.actors = actors
-            }
-        }
+        throw ErrorLoadingException("This source is currently blocked by Cloudflare protection.")
     }
 
     data class FajerLive (

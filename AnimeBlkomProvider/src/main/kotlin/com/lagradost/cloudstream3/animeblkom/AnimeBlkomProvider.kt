@@ -11,7 +11,7 @@ class AnimeBlkomProvider : MainAPI() {
 
     override var name = "AnimeBlkom (Blocked)"
     override var lang = "ar"
-    override val hasMainPage = true
+    override val hasMainPage = false
     override val hasDownloadSupport = true
     override val usesWebView = false 
 
@@ -81,15 +81,7 @@ class AnimeBlkomProvider : MainAPI() {
 
     // ================= MAIN PAGE =================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val homeList = mutableListOf<HomePageList>()
-        val doc = getDoc(mainUrl)
-
-        val recentList = doc.select(".content .item").mapNotNull { it.toSearch() }
-        if (recentList.isNotEmpty()) {
-            homeList.add(HomePageList("Recently Added", recentList))
-        }
-
-        return newHomePageResponse(homeList, hasNext = false)
+        throw ErrorLoadingException("This source is currently blocked by Cloudflare protection.")
     }
 
     // ================= SEARCH =================
@@ -101,34 +93,7 @@ class AnimeBlkomProvider : MainAPI() {
 
     // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse {
-        val doc = getDoc(url)
-
-        val title = doc.selectFirst("h1.name")?.text()?.trim() ?: "Unknown"
-        val poster = doc.selectFirst(".poster img")?.absUrl("src")
-        val description = doc.selectFirst(".story")?.text()?.trim()
-        val tags = doc.select(".genre a").map { it.text() }
-        val statusText = doc.selectFirst(".info .status")?.text()
-        val status = when {
-            statusText?.contains("مستمر") == true -> ShowStatus.Ongoing
-            statusText?.contains("منتهي") == true -> ShowStatus.Completed
-            else -> null
-        }
-        
-        val episodes = doc.select(".episodes .episode a").mapNotNull {
-            val epNum = it.text().filter { c -> c.isDigit() }.toIntOrNull()
-            val link = it.absUrl("href")
-            newEpisode(link) {
-                 this.episode = epNum
-            }
-        }.reversed()
-
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
-            this.posterUrl = poster
-            this.plot = description
-            this.tags = tags
-            this.showStatus = status
-            addEpisodes(DubStatus.Subbed, episodes)
-        }
+        throw ErrorLoadingException("This source is currently blocked by Cloudflare protection.")
     }
 
     // ================= LOAD LINKS =================

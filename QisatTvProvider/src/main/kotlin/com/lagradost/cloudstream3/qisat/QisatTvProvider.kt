@@ -9,8 +9,11 @@ import org.mozilla.javascript.Scriptable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import android.util.Base64
 
 class QisatTvProvider : MainAPI() {
+    data class ServerItem(val name: String, val id: String)
+
     // New domain: qesset.com
     override var mainUrl = "https://qesset.com"
     override var name = "Qisat"
@@ -95,9 +98,9 @@ class QisatTvProvider : MainAPI() {
         }
 
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
-        val poster = doc.selectFirst("div.imgBg")?.attr("style")?.let { style ->
-            Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
-        }?.let { fixUrl(it) } ?: doc.selectFirst("div.poster img")?.let { img ->
+        val poster = doc.selectFirst("div.cover div.imgBg, div.cover div.img")?.attr("style")?.let { style ->
+            Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("\'", "")
+        }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
         }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
              img.attr("data-src").ifBlank { img.attr("src") }
@@ -123,8 +126,8 @@ class QisatTvProvider : MainAPI() {
                 val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
                     ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
 
-                val epPoster = a.selectFirst("div.imgBg")?.attr("style")?.let { style ->
-                    Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
+                val poster = a.selectFirst("div.imgBg, div.imgSer")?.attr("style")?.let { style ->
+                    Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("\'", "")
                 }?.let { fixUrl(it) } ?: a.selectFirst("img")?.let { img ->
                     img.attr("data-src").ifBlank { img.attr("src") }
                 }?.let { fixUrl(it) }
@@ -132,7 +135,7 @@ class QisatTvProvider : MainAPI() {
                 newEpisode(epUrl) {
                     this.name = epName
                     this.episode = epNum
-                    this.posterUrl = epPoster
+                    this.posterUrl = poster
                 }
             }
             episodes.addAll(pagedEps)
@@ -157,6 +160,8 @@ class QisatTvProvider : MainAPI() {
     }
 
     // ---------- Load Links (Video Sources) ----------
+    // ---------- Load Links (Video Sources) ----------
+    // ---------- Load Links (Video Sources) ----------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -164,150 +169,126 @@ class QisatTvProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        
-        // Extract the player iframe
-        // Extract the player iframe or watch link
-        var playerUrl = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='/albaplayer/']")?.attr("src")?.let { fixUrl(it) }
 
-        if (playerUrl == null) {
-             // Fallback to fullscreen identifier if iframe is hidden/lazy
-             val watchLink = doc.selectFirst("a.fullscreen-clickable")?.attr("href")
-             if (watchLink?.contains("watch?post=") == true) {
-                 playerUrl = fixUrl(watchLink)
-             }
-        }
+        var playerUrl = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='qesset.com/watch']")?.attr("src")
+            ?: doc.selectFirst("a.watch-btn")?.attr("href")
+            ?: doc.selectFirst("a.fullscreen-clickable")?.attr("href")
 
-        if (playerUrl == null) return false
+        playerUrl = fixUrl(playerUrl ?: return false)
 
-        if (playerUrl.contains("watch?post=")) {
-            val base64Data = playerUrl.substringAfter("watch?post=").substringBefore("&")
-            val decoded = try {
-                val json = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                // Result: {"codeDaily":"...","servers":[{"name":"...","id":"..."}],"postID":"..."}
-                json
-            } catch (e: Exception) {
-                null
-            }
+        val servers = mutableListOf<ServerItem>()
 
-            if (decoded != null) {
-                // We'll extract servers using Regex to avoid heavy JSON libraries if possible
-                val serverPattern = """\{"name":"([^"]+)","id":"([^"]+)"\}""".toRegex()
-                serverPattern.findAll(decoded).forEach { match ->
-                    val name = match.groupValues[1]
-                    val id = match.groupValues[2]
-                    
-                    // Most IDs are keys for extractors or absolute URLs
-                    if (id.startsWith("http")) {
-                        loadExtractor(id, data, subtitleCallback, callback)
-                    } else {
-                        // Some common hosts used by Qisat
-                        val hostUrl = when (name.lowercase()) {
-                            "arab hd", "pro hd" -> "https://mixdrop.co/e/$id"
-                            "estream" -> "https://estream.to/$id"
-                            "ok" -> "https://ok.ru/videoembed/$id"
-                            else -> null
-                        }
-                        hostUrl?.let { loadExtractor(it, data, subtitleCallback, callback) }
+        // Try parsing from "post" param first (no network call needed)
+        val postParam = Regex("post=([^&]+)").find(playerUrl)?.groupValues?.get(1)
+        if (postParam != null) {
+            try {
+                val decoded = String(Base64.decode(postParam, Base64.DEFAULT))
+                // safe parse json
+                val json = try {
+                    AppUtils.parseJson<Map<String, Any>>(decoded)
+                } catch (e: Exception) {
+                    null
+                }
+                val serverList = json?.get("servers") as? List<Map<String, String>>
+                serverList?.forEach {
+                    val name = it["name"] ?: ""
+                    val id = it["id"] ?: ""
+                    if (name.isNotBlank() && id.isNotBlank()) {
+                        servers.add(ServerItem(name, id))
                     }
                 }
-                return true
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
-        // Determine base player URL for server switching
-        // e.g., https://w.shadwo.pro/albaplayer/slug
-        // val playerBaseUrl = playerUrl.substringBefore("?")
-
-        // Fetch the player page to get dynamic server list
-        val playerDoc = app.get(playerUrl, referer = data).document
-        val servers = playerDoc.select("ul.aplr-menu li a.aplr-link").mapNotNull { a ->
-            val name = a.text().trim()
-            val href = a.attr("href")
-            if (href.isBlank() || href == "javascript:void(0)" || href.contains("javascript:")) return@mapNotNull null
-            name to fixUrl(href)
-        }
-
+        // Fallback to fetching page if no servers found via param
         if (servers.isEmpty()) {
-             // Fallback to main player URL if no list found (though unlikely based on site structure)
-             // functionality for single server handling remains similar to loop logic below
-             // but strictly speaking we expect the list.
-             // We can at least try the current playerUrl as a fallback
-             val serverUrl = playerUrl
-             
-             // ... extract logic for single server ...
-             try {
-                val response = app.get(serverUrl, referer = data).text
-                val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
-                if (!innerIframeSrc.isNullOrBlank()) {
-                     val fixedInnerSrc = fixUrl(innerIframeSrc)
-                     if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
-                         // Specific handling for CDNPlus
-                         val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
-                         val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
-                         if (packed != null) {
-                             val unpacked = runJS(packed.replace("eval", ""))
-                             val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
-                             if (m3u8 != null) {
-                                 callback(
-                                     newExtractorLink(
-                                         "CdnPlus",
-                                         "CdnPlus",
-                                         m3u8,
-                                         ExtractorLinkType.M3U8
-                                     ) {
-                                         this.referer = fixedInnerSrc
-                                         this.quality = Qualities.Unknown.value
-                                     }
-                                 )
-                             }
-                         }
-                     } else {
-                         loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback, callback = callback)
-                     }
+            try {
+                val response = app.get(playerUrl).text
+                val extractedServers =
+                    Regex("""var\s+servers\s*=\s*(\[.*?\])""").find(response)?.groupValues?.get(1)
+                if (!extractedServers.isNullOrBlank()) {
+                    try {
+                        AppUtils.parseJson<List<ServerItem>>(extractedServers).let { servers.addAll(it) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
-            } catch (e: Exception) { }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
+        if (servers.isEmpty()) return false
+
+        // Parallel fetch servers
         coroutineScope {
-            servers.map { (name, serverUrl) ->
+            servers.map { server ->
                 async {
-                    // Use concurrent requests for speed
                     try {
-                        // Determine referer: The player URL usually expects the episode page as referer
-                        val response = app.get(serverUrl, referer = data).text
-                        
-                        // Extract inner iframe (the actual video host)
+                        val serverUrl = if (playerUrl.contains("?")) {
+                            "$playerUrl&server=${server.id}"
+                        } else {
+                            "$playerUrl?server=${server.id}"
+                        }
+
+                        // Referer must be the player URL
+                        val response = app.get(serverUrl, referer = playerUrl).text
                         val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
-                        
+
                         if (!innerIframeSrc.isNullOrBlank()) {
-                             val fixedInnerSrc = fixUrl(innerIframeSrc)
-                             if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
-                                 // Specific handling for CDNPlus which uses packed JS
-                                 val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
-                                 val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
-                                 if (packed != null) {
-                                     val unpacked = runJS(packed.replace("eval", ""))
-                                     val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
-                                     if (m3u8 != null) {
-                                         callback(
-                                             newExtractorLink(
-                                                 "CdnPlus",
-                                                 "$name (CdnPlus)",
-                                                 m3u8,
-                                                 ExtractorLinkType.M3U8
-                                             ) {
-                                                 this.referer = fixedInnerSrc
-                                                 this.quality = Qualities.Unknown.value
-                                             }
-                                         )
-                                     }
-                                 }
-                             } else {
-                                 loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback, callback = callback)
-                             }
+                            val fixedInnerSrc = fixUrl(innerIframeSrc)
+                            if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
+                                // Specific handling for CDNPlus
+                                val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
+                                val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
+                                if (packed != null) {
+                                    val unpacked = runJS(packed.replace("eval", ""))
+                                    val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
+                                    if (m3u8 != null) {
+                                        callback(
+                                            newExtractorLink(
+                                                "CdnPlus",
+                                                "${server.name} (CdnPlus)",
+                                                m3u8,
+                                                ExtractorLinkType.M3U8
+                                            ) {
+                                                this.referer = fixedInnerSrc
+                                                this.quality = Qualities.Unknown.value
+                                            }
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Try to load extractors
+                                val extractedLinks = mutableListOf<ExtractorLink>()
+                                loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback) { link ->
+                                    extractedLinks.add(link)
+                                }
+                                
+                                extractedLinks.forEach { link ->
+                                    if (link.name.startsWith(link.source)) {
+                                        val type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        callback(
+                                            newExtractorLink(
+                                                link.source,
+                                                "${server.name} - ${link.name}",
+                                                link.url,
+                                                type
+                                            ) {
+                                                this.referer = link.referer
+                                                this.quality = link.quality
+                                            }
+                                        )
+                                    } else {
+                                        callback(link)
+                                    }
+                                }
+                            }
                         }
                     } catch (e: Exception) {
-                        // Ignore errors
+                        // Ignore failing servers
                     }
                 }
             }.awaitAll()
