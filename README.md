@@ -69,7 +69,7 @@ graph TD
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
 | **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
 | **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
-72: | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
+| **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
@@ -78,6 +78,7 @@ graph TD
 
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
+- [ ] **ShahidMBC** - `Under Development`
 - [ ] **Fushaar** - `Planned`
 - [ ] **GateAnime** - `Planned`
 

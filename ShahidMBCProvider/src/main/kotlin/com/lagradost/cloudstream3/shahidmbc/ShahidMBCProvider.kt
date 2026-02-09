@@ -9,7 +9,7 @@ import org.jsoup.nodes.Element
 
 class ShahidMBCProvider : MainAPI() {
     override var mainUrl = "https://shahid.mbc.net"
-    override var name = "ShahidMBC (In Progress)"
+    override var name = "ShahidMBC (Under Development)"
     override val hasMainPage = true
     override var lang = "ar"
     override val hasDownloadSupport = true
@@ -33,143 +33,131 @@ class ShahidMBCProvider : MainAPI() {
     private fun getRandomUserAgent(): String = userAgents.random()
     private fun getRandomDelay(): Long = (2000..4000).random().toLong()
 
+    // Data classes for JSON parsing (Simplified)
+    data class ShahidMedia(
+        val title: String,
+        val url: String,
+        val poster: String?,
+        val year: Int?,
+        val type: TvType
+    )
+
     override val mainPage = mainPageOf(
         "$mainUrl/ar/movies" to "أفلام شاهد",
         "$mainUrl/ar/series" to "مسلسلات شاهد",
         "$mainUrl/ar/anime" to "انمي شاهد",
-        "$mainUrl/ar/live" to "بث مباشر"
+        "$mainUrl/ar/sports" to "رياضة"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        Thread.sleep(getRandomDelay())
-        
-        val home = doc.select("div.slider-slide, .media-item").mapNotNull { element ->
-            element.toSearchResponse()
-        }
-
-        return newHomePageResponse(request.name, home)
+    private fun extractNextData(html: String): String? {
+        val pattern = """<script id="__NEXT_DATA__" type="application/json">(.*?)</script>""".toRegex()
+        return pattern.find(html)?.groupValues?.get(1)
     }
 
-    private fun Element.toSearchResponse(): SearchResponse? {
-        val linkElement = this.selectFirst("a") ?: return null
-        val href = fixUrl(linkElement.attr("href") ?: "")
-        val img = this.selectFirst("img")
-        val posterUrl = fixUrl(img?.attr("src") ?: "")
-        val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
-        val quality = this.selectFirst(".quality, .resolution")?.text()?.trim()
-        val title = linkElement.attr("title").ifEmpty { this.selectFirst(".title, h3, h2")?.text() } ?: ""
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val response = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        val nextData = extractNextData(response.text) ?: return newHomePageResponse(request.name, emptyList())
         
-        return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
-            this.year = year
-            this.quality = getSearchQualityFromString(quality ?: "")
+        // Use regex for lightweight JSON navigation if possible, or Jsoup/Regex for links
+        // For simplicity and speed without a full JSON library, we'll parse predictable patterns
+        val items = mutableListOf<SearchResponse>()
+        
+        // Extract items from JSON sections (this is a simplified heuristic)
+        // Actual implementation would map the specific JSON structure found in Phase 1
+        val itemPattern = """"title":"([^"]+)".*?"productPath":"([^"]+)"(?:.*?"path":"([^"]+)")?""".toRegex()
+        itemPattern.findAll(nextData).take(20).forEach { match ->
+            val title = match.groupValues[1]
+            val path = match.groupValues[2]
+            val poster = match.groupValues.getOrNull(3)
+            
+            items.add(newMovieSearchResponse(title, fixUrl(path), TvType.Movie) {
+                this.posterUrl = poster?.let { fixUrl(it) }
+            })
         }
+
+        return newHomePageResponse(request.name, items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/ar/search?q=${query.replace(" ", "+")}"
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val url = "$mainUrl/ar/search?term=${query.replace(" ", "+")}"
+        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        val nextData = extractNextData(response.text) ?: return emptyList()
         
-        return doc.select(".search-results .media-item, .results .content-item, .search-item").mapNotNull { element ->
-            element.toSearchResponse()
+        val items = mutableListOf<SearchResponse>()
+        val resultPattern = """"title":"([^"]+)".*?"productPath":"([^"]+)"""".toRegex()
+        resultPattern.findAll(nextData).forEach { match ->
+            val title = match.groupValues[1]
+            val path = match.groupValues[2]
+            
+            items.add(newMovieSearchResponse(title, fixUrl(path), TvType.Movie))
         }
+        
+        return items
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        val nextData = extractNextData(response.text) ?: return null
         
-        val title = doc.selectFirst(".media-title, .content-title, h1")?.text()?.trim() ?: return null
-        val poster = fixUrl(doc.selectFirst(".poster img, .media-poster img")?.attr("src") ?: "")
-        val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
-        val description = doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
-        val rating = doc.selectFirst(".rating, .imdb-rating")?.text()?.trim()?.toFloatOrNull()
-        val duration = doc.selectFirst(".duration, .runtime")?.text()?.trim()?.toIntOrNull()
-        val tags = doc.select(".genres a, .categories a, .tags a").map { it.text().trim() }
+        val title = Regex(""""title":"([^"]+)"""").find(nextData)?.groupValues?.get(1) ?: return null
+        val poster = Regex(""""path":"([^"]+\?(?:height|width)=[^"]+)"""").find(nextData)?.groupValues?.get(1)
+        val plot = Regex(""""description":"([^"]+)"""").find(nextData)?.groupValues?.get(1)
+        val year = Regex(""""releaseDate":(\d{4})""").find(nextData)?.groupValues?.get(1)?.toIntOrNull()
         
-        val isSeries = doc.select(".episodes, .seasons, .episode-list").isNotEmpty()
+        val isSeries = url.contains("/series/") || nextData.contains("\"seasons\":")
         
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            for (episodeElement in doc.select(".episode-item, .episodes li")) {
-                val episodeName = episodeElement.selectFirst(".episode-title, .episode-name")?.text()?.trim()
-                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
-                val episodeNumber = episodeElement.selectFirst(".episode-number")?.text()?.trim()?.toIntOrNull()
-                val seasonNumber = episodeElement.selectFirst(".season-number")?.text()?.trim()?.toIntOrNull() ?: 1
+            // Extract episodes from JSON (heuristic based on common Shahid structure)
+            val epPattern = """"episodeNumber":(\d+).*?"title":"([^"]+)".*?"productPath":"([^"]+)"""".toRegex()
+            epPattern.findAll(nextData).forEach { match ->
+                val epNum = match.groupValues[1].toIntOrNull()
+                val epTitle = match.groupValues[2]
+                val epPath = match.groupValues[3]
                 
-                if (episodeName != null && episodeUrl != null) {
-                    episodes.add(newEpisode(episodeUrl) {
-                        this.name = episodeName
-                        this.episode = episodeNumber
-                        this.season = seasonNumber
-                    })
-                }
+                episodes.add(newEpisode(fixUrl(epPath)) {
+                    this.name = epTitle
+                    this.episode = epNum
+                })
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
+                this.posterUrl = poster?.let { fixUrl(it) }
                 this.year = year
-                this.plot = description
-                // this.score = rating
-                this.tags = tags
-                this.duration = duration
+                this.plot = plot
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
+                this.posterUrl = poster?.let { fixUrl(it) }
                 this.year = year
-                this.plot = description
-                // this.score = rating
-                this.tags = tags
-                this.duration = duration
+                this.plot = plot
             }
         }
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        Thread.sleep(getRandomDelay() + 1000)
-        val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
+        val response = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
+        val nextData = extractNextData(response.text) ?: return false
         
-        for (linkElement in doc.select(".video-links a, .download-links a, .watch-links a")) {
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: continue
-            val quality = linkElement.select(".quality, .resolution").text().trim()
-            val serverName = linkElement.select(".server-name, .host").text().trim()
-            
+        // Shahid uses dynamic stream tokens. This is the hardest part.
+        // We look for any obvious manifest URLs or stream IDs in the JSON.
+        val manifestUrl = Regex("""(https?://[^"]+\.m3u8[^"]*)""").find(nextData)?.groupValues?.get(1)
+        
+        if (manifestUrl != null) {
             callback.invoke(
                 newExtractorLink(
-                    serverName.ifEmpty { "ShahidMBC" },
-                    serverName.ifEmpty { "ShahidMBC" },
-                    linkUrl,
-                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    "Shahid",
+                    "Shahid",
+                    fixUrl(manifestUrl),
+                    ExtractorLinkType.M3U8
                 ) {
-                    this.quality = getQualityFromString(quality)
+                    this.quality = Qualities.Unknown.value
                     this.referer = mainUrl
                 }
             )
+            return true
         }
         
-        return true
-    }
-
-    private fun getQualityFromString(quality: String): Int {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
-            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
-            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
-            else -> Qualities.Unknown.value
-        }
-    }
-
-    private fun getSearchQualityFromString(quality: String): SearchQuality? {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("720", ignoreCase = true) -> SearchQuality.HD
-            quality.contains("480", ignoreCase = true) -> SearchQuality.SD
-            quality.contains("360", ignoreCase = true) -> SearchQuality.SD
-            else -> null
-        }
+        return false
     }
 }
