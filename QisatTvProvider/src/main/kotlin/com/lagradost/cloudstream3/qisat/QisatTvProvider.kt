@@ -10,16 +10,37 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import android.util.Base64
+import java.net.URI
 
 class QisatTvProvider : MainAPI() {
     data class ServerItem(val name: String, val id: String)
+
+    private fun Element.extractPoster(): String? {
+        return this.selectFirst("[style*=background-image]")?.attr("style")?.let {
+            Regex("""url\((['"]?)(.*?)\1\)""").find(it)?.groupValues?.get(2)
+        }
+            ?: this.attr("data-bg")
+            ?: this.selectFirst("img")?.let {
+                it.attr("data-src").ifBlank { it.attr("src") }
+            }
+    }
+
+    private fun String.normalizeNumbers(): String {
+        val arabic = "٠١٢٣٤٥٦٧٨٩"
+        val latin = "0123456789"
+        var result = this
+        for (i in arabic.indices) {
+            result = result.replace(arabic[i], latin[i])
+        }
+        return result
+    }
 
     // New domain: qesset.com
     override var mainUrl = "https://qesset.com"
     override var name = "Qisat"
     override val hasMainPage = true
     override var lang = "ar"
-    override val supportedTypes = setOf(TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
 
     // ---------- Main Page ----------
     override val mainPage = mainPageOf(
@@ -40,22 +61,26 @@ class QisatTvProvider : MainAPI() {
             val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
             if (title.isEmpty()) return@forEach
 
-            val poster = element.selectFirst("div.imgBg")?.attr("style")?.let { style ->
-                Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
-            }?.let { fixUrl(it) } ?: element.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("src") }
-            }?.let { fixUrl(it) }
+
+            val poster = element.extractPoster()?.let { fixUrl(it) }
 
             val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
 
-            items.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                this.posterUrl = poster
-                this.year = year
-            })
+            if (url.contains("/movie") || url.contains("/film")) {
+                items.add(newMovieSearchResponse(title, url, TvType.Movie) {
+                    this.posterUrl = poster
+                    this.year = year
+                })
+            } else {
+                items.add(newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+                    this.posterUrl = poster
+                    this.year = year
+                })
+            }
         }
 
         return newHomePageResponse(
-            list = HomePageList(request.name, items.distinctBy { it.url }, isHorizontalImages = false),
+            list = HomePageList(request.name, items.distinctBy { it.url }, isHorizontalImages = true),
             hasNext = false
         )
     }
@@ -69,14 +94,16 @@ class QisatTvProvider : MainAPI() {
             val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
             if (title.isEmpty()) return@mapNotNull null
             
-            val poster = element.selectFirst("div.imgBg")?.attr("style")?.let { style ->
-                Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
-            }?.let { fixUrl(it) } ?: element.selectFirst("img")?.let { img ->
-                img.attr("data-src").ifBlank { img.attr("src") }
-            }?.let { fixUrl(it) }
+            val poster = element.extractPoster()?.let { fixUrl(it) }
 
-            newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
-                this.posterUrl = poster
+            if (url.contains("/movie") || url.contains("/film")) {
+                newMovieSearchResponse(title, url, TvType.Movie) {
+                    this.posterUrl = poster
+                }
+            } else {
+                newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+                    this.posterUrl = poster
+                }
             }
         }.distinctBy { it.url }
     }
@@ -87,8 +114,9 @@ class QisatTvProvider : MainAPI() {
         var finalUrl = url
 
         // Fix for missing episodes: If we are on an episode page, fetch the series page
+        // Fix for missing episodes: If we are on an episode page, fetch the series page
         val seriesLink = doc.selectFirst("div.singleSeries .info h2 a")?.attr("href")
-        if (!seriesLink.isNullOrBlank() && url.contains("/episode/")) {
+        if (!seriesLink.isNullOrBlank() && !url.contains("/series/")) {
              try {
                  finalUrl = fixUrl(seriesLink)
                  doc = app.get(finalUrl).document
@@ -98,20 +126,16 @@ class QisatTvProvider : MainAPI() {
         }
 
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
-        val poster = doc.selectFirst("div.cover div.imgBg, div.cover div.img")?.attr("style")?.let { style ->
-            Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("\'", "")
-        }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
-            img.attr("data-src").ifBlank { img.attr("src") }
-        }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
-             img.attr("data-src").ifBlank { img.attr("src") }
-        }?.let { fixUrl(it) }
+
+        val poster = doc.selectFirst("div.cover div.imgBg, div.cover div.img")?.extractPoster()?.let { fixUrl(it) } 
+            ?: doc.selectFirst("div.cover img")?.extractPoster()?.let { fixUrl(it) }
 
         val plot = doc.selectFirst("div.story p")?.text()?.trim() ?: doc.selectFirst("div.story")?.text()?.trim()
         val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
 
         // Check if page has episodes list (new structure check)
-        val isSeries = doc.select("body").hasClass("single-series") || 
-                       doc.select("article.postEp").isNotEmpty() ||
+        val isSeries = doc.select("article.postEp, div.postEp, a.ep-item").isNotEmpty() ||
+                       doc.select("body").hasClass("single-series") || 
                        finalUrl.contains("/series/")
 
         if (isSeries) {
@@ -120,27 +144,42 @@ class QisatTvProvider : MainAPI() {
             // But we should still check for pagination just in case
             
             // Initial parsing of episodes on the current page
-            val pagedEps = doc.select("article.postEp a").mapNotNull { a ->
+            val pagedEps = doc.select("article.postEp a, div.postEp a, a.ep-item").mapNotNull { a ->
                 val epUrl = fixUrl(a.attr("href"))
                 val epName = a.selectFirst(".title")?.text()?.trim() ?: a.attr("title").trim()
-                val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
-                    ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
+                val cleanName = epName.normalizeNumbers()
 
-                val poster = a.selectFirst("div.imgBg, div.imgSer")?.attr("style")?.let { style ->
-                    Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("\'", "")
-                }?.let { fixUrl(it) } ?: a.selectFirst("img")?.let { img ->
-                    img.attr("data-src").ifBlank { img.attr("src") }
-                }?.let { fixUrl(it) }
+                val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.normalizeNumbers()?.toIntOrNull()
+                    ?: Regex("""(?:^|\s)(?:episode|ep|حلقة|الحلقة)\s*(\d+)(?:\s|$)""", RegexOption.IGNORE_CASE)
+                        .find(cleanName)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.toIntOrNull()
+
+                val poster = a.selectFirst("div.imgBg, div.imgSer")?.extractPoster()?.let { fixUrl(it) }
+                    ?: a.selectFirst("img")?.extractPoster()?.let { fixUrl(it) }
+
+                val displayName = if (epNum != null) "الحلقة $epNum" else epName
 
                 newEpisode(epUrl) {
-                    this.name = epName
+                    this.name = displayName
                     this.episode = epNum
+                    this.season = 1
                     this.posterUrl = poster
                 }
             }
             episodes.addAll(pagedEps)
 
-            val finalEpisodes = episodes.distinctBy { it.data }.sortedByDescending { it.episode }
+            val finalEpisodes = episodes.distinctBy { it.data }.sortedWith(
+                compareByDescending<Episode> { it.episode ?: 0 }
+                    .thenByDescending { it.name }
+            ).toMutableList()
+
+            finalEpisodes.forEachIndexed { index, ep ->
+                if (ep.episode == null) {
+                    ep.episode = index + 1
+                }
+            }
 
             if (finalEpisodes.isNotEmpty()) {
                 return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, finalEpisodes) {
@@ -152,11 +191,8 @@ class QisatTvProvider : MainAPI() {
         } 
         
         // Single Episode or Movie Logic
-        return newMovieLoadResponse(title, finalUrl, TvType.Movie, finalUrl) {
-            this.posterUrl = poster
-            this.plot = plot
-            this.year = year
-        }
+        // Single Episode or Movie Logic
+        throw ErrorLoadingException("No episodes found")
     }
 
     // ---------- Load Links (Video Sources) ----------
@@ -173,16 +209,22 @@ class QisatTvProvider : MainAPI() {
         var playerUrl = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='qesset.com/watch']")?.attr("src")
             ?: doc.selectFirst("a.watch-btn")?.attr("href")
             ?: doc.selectFirst("a.fullscreen-clickable")?.attr("href")
+            ?: doc.selectFirst("a[href*='post=']")?.attr("href")
 
         playerUrl = fixUrl(playerUrl ?: return false)
 
+        var hasLinks = false
         val servers = mutableListOf<ServerItem>()
 
         // Try parsing from "post" param first (no network call needed)
         val postParam = Regex("post=([^&]+)").find(playerUrl)?.groupValues?.get(1)
         if (postParam != null) {
             try {
-                val decoded = String(Base64.decode(postParam, Base64.DEFAULT))
+                val decoded = try {
+                    String(Base64.decode(postParam, Base64.URL_SAFE or Base64.NO_WRAP))
+                } catch (e: Exception) {
+                    String(Base64.decode(postParam, Base64.DEFAULT))
+                }
                 // safe parse json
                 val json = try {
                     AppUtils.parseJson<Map<String, Any>>(decoded)
@@ -224,7 +266,7 @@ class QisatTvProvider : MainAPI() {
 
         // Parallel fetch servers
         coroutineScope {
-            servers.map { server ->
+            servers.take(4).map { server ->
                 async {
                     try {
                         val serverUrl = if (playerUrl.contains("?")) {
@@ -238,10 +280,16 @@ class QisatTvProvider : MainAPI() {
                         val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
 
                         if (!innerIframeSrc.isNullOrBlank()) {
-                            val fixedInnerSrc = fixUrl(innerIframeSrc)
+                            val fixedInnerSrc = try {
+                                URI(serverUrl).resolve(innerIframeSrc).toString()
+                            } catch (e: Exception) {
+                                fixUrl(innerIframeSrc)
+                            }
+                            
                             if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
                                 // Specific handling for CDNPlus
                                 val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
+                                if (!cdnResponse.contains("eval(function(p,a,c,k,e,d)")) return@async
                                 val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
                                 if (packed != null) {
                                     val unpacked = runJS(packed.replace("eval", ""))
@@ -258,12 +306,13 @@ class QisatTvProvider : MainAPI() {
                                                 this.quality = Qualities.Unknown.value
                                             }
                                         )
+                                        hasLinks = true
                                     }
                                 }
                             } else {
                                 // Try to load extractors
                                 val extractedLinks = mutableListOf<ExtractorLink>()
-                                loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback) { link ->
+                                loadExtractor(fixedInnerSrc, referer = serverUrl, subtitleCallback = subtitleCallback) { link ->
                                     extractedLinks.add(link)
                                 }
                                 
@@ -284,17 +333,18 @@ class QisatTvProvider : MainAPI() {
                                     } else {
                                         callback(link)
                                     }
+                                    hasLinks = true
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        // Ignore failing servers
+                        e.printStackTrace()
                     }
                 }
             }.awaitAll()
         }
 
-        return true
+        return hasLinks
     }
 
     private fun runJS(script: String): String {
