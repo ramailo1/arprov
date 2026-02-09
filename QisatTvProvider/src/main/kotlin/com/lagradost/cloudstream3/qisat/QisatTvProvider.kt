@@ -6,6 +6,9 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.mozilla.javascript.Context
 import org.mozilla.javascript.Scriptable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class QisatTvProvider : MainAPI() {
     override var mainUrl = "https://www.qisat.tv"
@@ -138,35 +141,33 @@ class QisatTvProvider : MainAPI() {
 
         // Determine base player URL for server switching
         // e.g., https://w.shadwo.pro/albaplayer/slug
-        val playerBaseUrl = playerUrl.substringBefore("?")
+        // val playerBaseUrl = playerUrl.substringBefore("?")
 
-        // Server mapping
-        val servers = listOf(
-            "Main" to 0, // Sometimes 0 is valid
-            "CDNPlus" to 1,
-            "MP4Plus" to 2,
-            "AnaFast" to 3,
-            "Vidoba" to 4,
-            "VidSpeed" to 5,
-            "Larhu" to 6,
-            "VK" to 7,
-            "OK" to 8
-        )
+        // Fetch the player page to get dynamic server list
+        val playerDoc = app.get(playerUrl, referer = data).document
+        val servers = playerDoc.select("ul.aplr-menu li a.aplr-link").mapNotNull { a ->
+            val name = a.text().trim()
+            val href = a.attr("href")
+            if (href.isBlank() || href == "javascript:void(0)" || href.contains("javascript:")) return@mapNotNull null
+            name to fixUrl(href)
+        }
 
-        servers.amap { (_, index) ->
-            // Use concurrent requests for speed
-            val serverUrl = "$playerBaseUrl?serv=$index"
-            try {
-                // Determine referer: The player URL usually expects the episode page as referer
+        if (servers.isEmpty()) {
+             // Fallback to main player URL if no list found (though unlikely based on site structure)
+             // functionality for single server handling remains similar to loop logic below
+             // but strictly speaking we expect the list.
+             // We can at least try the current playerUrl as a fallback
+             val serverName = "Main"
+             val serverUrl = playerUrl
+             
+             // ... extract logic for single server ...
+             try {
                 val response = app.get(serverUrl, referer = data).text
-                
-                // Extract inner iframe (the actual video host)
                 val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
-                
                 if (!innerIframeSrc.isNullOrBlank()) {
                      val fixedInnerSrc = fixUrl(innerIframeSrc)
                      if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
-                         // Specific handling for CDNPlus which uses packed JS
+                         // Specific handling for CDNPlus
                          val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
                          val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
                          if (packed != null) {
@@ -190,9 +191,52 @@ class QisatTvProvider : MainAPI() {
                          loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback, callback = callback)
                      }
                 }
-            } catch (e: Exception) {
-                // Ignore errors
-            }
+            } catch (e: Exception) { }
+        }
+
+        coroutineScope {
+            servers.map { (name, serverUrl) ->
+                async {
+                    // Use concurrent requests for speed
+                    try {
+                        // Determine referer: The player URL usually expects the episode page as referer
+                        val response = app.get(serverUrl, referer = data).text
+                        
+                        // Extract inner iframe (the actual video host)
+                        val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
+                        
+                        if (!innerIframeSrc.isNullOrBlank()) {
+                             val fixedInnerSrc = fixUrl(innerIframeSrc)
+                             if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
+                                 // Specific handling for CDNPlus which uses packed JS
+                                 val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
+                                 val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
+                                 if (packed != null) {
+                                     val unpacked = runJS(packed.replace("eval", ""))
+                                     val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
+                                     if (m3u8 != null) {
+                                         callback(
+                                             newExtractorLink(
+                                                 "CdnPlus",
+                                                 "$name (CdnPlus)",
+                                                 m3u8,
+                                                 ExtractorLinkType.M3U8
+                                             ) {
+                                                 this.referer = fixedInnerSrc
+                                                 this.quality = Qualities.Unknown.value
+                                             }
+                                         )
+                                     }
+                                 }
+                             } else {
+                                 loadExtractor(fixedInnerSrc, referer = data, subtitleCallback = subtitleCallback, callback = callback)
+                             }
+                        }
+                    } catch (e: Exception) {
+                        // Ignore errors
+                    }
+                }
+            }.awaitAll()
         }
 
         return true
