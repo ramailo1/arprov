@@ -262,7 +262,8 @@ class CimaNowProvider : MainAPI() {
             var postId: String? = null
             
             for (doc in docs) {
-                postId = doc.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
+                postId = doc.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("p=")
+                    ?: doc.selectFirst("input[name='comment_post_ID']")?.attr("value")
                     ?: doc.selectFirst("body")?.className()?.split(" ")?.find { it.startsWith("postid-") }
                         ?.substringAfter("postid-")
                 
