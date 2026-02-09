@@ -11,7 +11,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class QisatTvProvider : MainAPI() {
-    override var mainUrl = "https://www.qisat.tv"
+    override var mainUrl = "https://qesset.com"
     override var name = "Qisat"
     override val hasMainPage = true
     override var lang = "ar"
@@ -19,16 +19,16 @@ class QisatTvProvider : MainAPI() {
 
     // ---------- Main Page ----------
     override val mainPage = mainPageOf(
-        "/" to "أحدث الحلقات",
-        "/turkish-series/" to "المسلسلات التركية",
-        "/turkish-movies/" to "افلام تركية"
+        "/yeni-bolumler/" to "أحدث الحلقات",
+        "/diziler/" to "المسلسلات التركية",
+        "/category/filmler/" to "افلام تركية"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(fixUrl(request.data)).document
         val items = mutableListOf<SearchResponse>()
 
-        val selector = if (request.data == "/") "div.episode-block, div.block-post, a[href*=/episode/]" else "div.block-post, a[href*=/series/], a[href*=/movie/]"
+        val selector = "a[href*=\"-episode-\"], div.post-card a, div.block-post, a[href*=/series/], a[href*=/movie/]"
         
         doc.select(selector).forEach { element ->
             val a = if (element.tagName() == "a") element else element.selectFirst("a") ?: return@forEach
@@ -179,9 +179,44 @@ class QisatTvProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // Extract the player iframe directly
-        val playerIframe = doc.selectFirst("iframe[src*='/albaplayer/']")
+        // Extract the player iframe
+        val playerIframe = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='/albaplayer/']")
         val playerUrl = playerIframe?.attr("src")?.let { fixUrl(it) } ?: return false
+
+        if (playerUrl.contains("watch?post=")) {
+            val base64Data = playerUrl.substringAfter("watch?post=").substringBefore("&")
+            val decoded = try {
+                val json = String(android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                // Result: {"codeDaily":"...","servers":[{"name":"...","id":"..."}],"postID":"..."}
+                json
+            } catch (e: Exception) {
+                null
+            }
+
+            if (decoded != null) {
+                // We'll extract servers using Regex to avoid heavy JSON libraries if possible
+                val serverPattern = """\{"name":"([^"]+)","id":"([^"]+)"\}""".toRegex()
+                serverPattern.findAll(decoded).forEach { match ->
+                    val name = match.groupValues[1]
+                    val id = match.groupValues[2]
+                    
+                    // Most IDs are keys for extractors or absolute URLs
+                    if (id.startsWith("http")) {
+                        loadExtractor(id, data, subtitleCallback, callback)
+                    } else {
+                        // Some common hosts used by Qisat
+                        val hostUrl = when (name.lowercase()) {
+                            "arab hd", "pro hd" -> "https://mixdrop.co/e/$id"
+                            "estream" -> "https://estream.to/$id"
+                            "ok" -> "https://ok.ru/videoembed/$id"
+                            else -> null
+                        }
+                        hostUrl?.let { loadExtractor(it, data, subtitleCallback, callback) }
+                    }
+                }
+                return true
+            }
+        }
 
         // Determine base player URL for server switching
         // e.g., https://w.shadwo.pro/albaplayer/slug

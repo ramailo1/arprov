@@ -60,19 +60,24 @@ class ShahidMBCProvider : MainAPI() {
         
         val items = mutableListOf<SearchResponse>()
         
-        // Robust regex to capture title, product URL, and image path
-        // Pattern: "title":"...", "productUrl":{"url":"..."}, "image":{"path":"..."}
-        val itemPattern = """"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)".*?"image":\{"path":"([^"]+)"""".toRegex()
-        itemPattern.findAll(nextData).take(40).forEach { match ->
+        // More flexible parsing for title, productUrl, and image path
+        // We match the block first and then extract fields to handle varying orders
+        val blockPattern = """\{"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
+        val imagePattern = """"image":\{"path":"([^"]+)"""".toRegex()
+        
+        blockPattern.findAll(nextData).forEach { match ->
             val title = match.groupValues[1]
             val url = match.groupValues[2]
-            val poster = match.groupValues[3]
+            
+            // Search for the image path in the vicinity (the match block or immediately after)
+            val subData = nextData.substring(match.range.first, (match.range.last + 500).coerceAtMost(nextData.length))
+            val poster = imagePattern.find(subData)?.groupValues?.get(1)
             
             // Map to movie or series based on URL pattern
             val type = if (url.contains("/series/")) TvType.TvSeries else TvType.Movie
             
             items.add(newMovieSearchResponse(title, fixUrl(url), type) {
-                this.posterUrl = fixUrl(poster)
+                this.posterUrl = poster?.let { fixUrl(it) }
             })
         }
 
