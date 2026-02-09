@@ -20,6 +20,10 @@ import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import android.util.Log
+import android.util.Base64
+import kotlin.text.Charsets
+import com.lagradost.cloudstream3.utils.getQualityFromName
 
 class CimaNowProvider : MainAPI() {
     override var lang = "ar"
@@ -51,6 +55,98 @@ class CimaNowProvider : MainAPI() {
     }
 
     private fun String.cleanHtml(): String = this.replace(Regex("<[^>]*>"), "").trim()
+
+    private fun decodeHtml(doc: Document): Document {
+        val docStr = doc.toString()
+        if (!docStr.contains("hide_my_HTML_")) {
+            return doc
+        }
+        val script = doc.selectFirst("script") ?: return doc
+        val scriptData = script.data() ?: return doc
+
+        var hideMyHtmlContent = scriptData.substringAfter("var hide_my_HTML_", "")
+        if (hideMyHtmlContent.isBlank()) return doc
+
+        hideMyHtmlContent = hideMyHtmlContent.substringAfter("=", "")
+        hideMyHtmlContent = hideMyHtmlContent.substringBeforeLast("';", hideMyHtmlContent)
+        hideMyHtmlContent = hideMyHtmlContent.replace(Regex("['+\\n\" ]"), "")
+
+        val lastNumber = Regex("-\\d+").findAll(scriptData).lastOrNull()?.value?.toIntOrNull() ?: 0
+        val decodedHtml1 = decodeObfuscatedString(hideMyHtmlContent, lastNumber)
+        val encodedHtml = String(decodedHtml1.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+
+        return Jsoup.parse(encodedHtml)
+    }
+
+    private fun decodeObfuscatedString(concatenated: String, lastNumber: Int): String {
+        val output = StringBuilder()
+        var start = 0
+        for (i in concatenated.indices) {
+            if (concatenated[i] == '.') {
+                decodeAndAppend(output, lastNumber, concatenated.substring(start, i))
+                start = i + 1
+            }
+        }
+        if (start < concatenated.length) {
+            decodeAndAppend(output, lastNumber, concatenated.substring(start))
+        }
+        return output.toString()
+    }
+
+    private fun decodeAndAppend(output: StringBuilder, lastNumber: Int, segment: String) {
+        try {
+            val decodedBytes = try {
+                Base64.decode(segment, Base64.DEFAULT)
+            } catch (e: Exception) {
+                null
+            }
+            if (decodedBytes != null) {
+                val decoded = String(decodedBytes, Charsets.UTF_8)
+                val digits = decoded.filter { it.isDigit() }
+                if (digits.isNotEmpty()) {
+                    val num = digits.toIntOrNull()
+                    if (num != null) {
+                        output.append((num + lastNumber).toChar())
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore errors
+        }
+    }
+
+    private suspend fun handlecima(iframeUrl: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val finalUrl = if (iframeUrl.startsWith("//")) "https:$iframeUrl" else iframeUrl
+            val iframeResponse = app.get(finalUrl, referer = finalUrl).text
+
+            val regex = Regex("""\[(\d+p)]\s+(/uploads/[^\"]+\.mp4)""")
+            val baseUrl = Regex("""(https?://[^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: ""
+            val links = mutableListOf<ExtractorLink>()
+            regex.findAll(iframeResponse).forEach { match ->
+                val qualityStr = match.groupValues[1]
+                val filePath = match.groupValues[2]
+                val videoUrl = baseUrl + filePath
+
+                links.add(
+                    newExtractorLink(
+                        source = "CimaNow",
+                        name = "CimaNow",
+                        url = videoUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ).apply {
+                        this.referer = finalUrl
+                        this.quality = getQualityFromName(qualityStr)
+                    }
+                )
+            }
+            links.sortByDescending { it.quality }
+            links.forEach { callback(it) }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val isAnchor = tagName().equals("a", ignoreCase = true)
@@ -132,7 +228,7 @@ class CimaNowProvider : MainAPI() {
                     val deferredLists = homeSections.map { (name, url) ->
                         async {
                             try {
-                                val doc = app.get(url).document
+                                val doc = decodeHtml(app.get(url).document)
                                 val items = doc.select("section > article[aria-label='post']")
                                     .mapNotNull { it.toSearchResponse() }
                                     .distinctBy { it.url }
@@ -148,7 +244,7 @@ class CimaNowProvider : MainAPI() {
                 newHomePageResponse(homePageLists)
             } else {
                 val base = sectionPaginationMap[request.name] ?: return newHomePageResponse(emptyList())
-                val doc = app.get("$base/page/$page/").document
+                val doc = decodeHtml(app.get("$base/page/$page/").document)
                 val items = doc.select("section > article[aria-label='post']")
                     .mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
                 newHomePageResponse(listOf(HomePageList(request.name, items)))
@@ -157,7 +253,7 @@ class CimaNowProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/page/1/?s=$query").document
+        val doc = decodeHtml(app.get("$mainUrl/page/1/?s=$query").document)
         return doc.select("section > article[aria-label='post']")
             .mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
     }
@@ -177,7 +273,7 @@ class CimaNowProvider : MainAPI() {
         }.distinctBy { it.first }.sortedBy { it.first }
 
     private suspend fun loadSeasonEpisodes(seasonNumber: Int, seasonUrl: String): List<Episode> {
-        val doc = app.get(seasonUrl).document
+        val doc = decodeHtml(app.get(seasonUrl).document)
         return doc.select("ul#eps li").mapNotNull { ep ->
             val epUrl = fixUrlNull(ep.selectFirst("a")?.attr("href")) ?: return@mapNotNull null
             val epNum = ep.select("a em").text().toIntOrNull()
@@ -193,7 +289,7 @@ class CimaNowProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+        val doc = decodeHtml(app.get(url).document)
         val posterUrl = doc.select("meta[property=\"og:image\"]").attr("content")
         val year = doc.select("article ul:nth-child(1) li a").lastOrNull()?.text()?.toIntOrNull()
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
@@ -250,9 +346,9 @@ class CimaNowProvider : MainAPI() {
             println("DEBUG loadLinks: Main page URL: $mainPageUrl")
 
             val headers = mapOf("Referer" to mainUrl)
-            val mainDoc = app.get(mainPageUrl, headers = headers).document
+            val mainDoc = decodeHtml(app.get(mainPageUrl, headers = headers).document)
             // If data == mainPageUrl, we can reuse mainDoc, but keeping separate is safer for 'watching' pages
-            val watchingDoc = if (data == mainPageUrl) mainDoc else app.get(data, headers = headers).document
+            val watchingDoc = if (data == mainPageUrl) mainDoc else decodeHtml(app.get(data, headers = headers).document)
 
             // Extract post ID safely from both docs
             val docs = listOf(mainDoc, watchingDoc)
@@ -301,6 +397,7 @@ class CimaNowProvider : MainAPI() {
                                     val serverId = li.attr("data-index")
                                     // Skip if no ID or if it looks like an ad/fake tab
                                     if (serverId.isNotBlank()) {
+                                        val serverName = li.text().trim()
                                         // Retry up to 3 times to simulate clicking through ads
                                         for (attempt in 1..3) {
                                             val ajaxUrl = "$mainUrl/wp-content/themes/$themePath/core.php?action=switch&index=$serverId&id=$postId"
@@ -312,7 +409,15 @@ class CimaNowProvider : MainAPI() {
                                             
                                             // If we found links, try them and break the retry loop
                                             if (urlsToTry.isNotEmpty()) {
-                                                urlsToTry.map { url -> async { safeTryExtractor(url) } }.awaitAll()
+                                                urlsToTry.map { url -> 
+                                                    async { 
+                                                        if (serverName.contains("Cima Now", true)) {
+                                                            handlecima(url, callbackWrapper)
+                                                        } else {
+                                                            safeTryExtractor(url) 
+                                                        }
+                                                    } 
+                                                }.awaitAll()
                                                 break
                                             }
                                             // If no links found, it might have been an "ad" response, so retry
