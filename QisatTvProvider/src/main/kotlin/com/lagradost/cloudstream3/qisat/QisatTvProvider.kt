@@ -181,18 +181,19 @@ class QisatTvProvider : MainAPI() {
                 }
             }
 
-            if (finalEpisodes.isNotEmpty()) {
-                return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, finalEpisodes) {
-                    this.posterUrl = poster
-                    this.plot = plot
-                    this.year = year
-                }
+            return newTvSeriesLoadResponse(title, finalUrl, TvType.TvSeries, finalEpisodes) {
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
             }
         } 
         
-        // Single Episode or Movie Logic
-        // Single Episode or Movie Logic
-        throw ErrorLoadingException("No episodes found")
+        // Movie Logic
+        return newMovieLoadResponse(title, finalUrl, TvType.Movie, finalUrl) {
+            this.posterUrl = poster
+            this.plot = plot
+            this.year = year
+        }
     }
 
     // ---------- Load Links (Video Sources) ----------
@@ -265,80 +266,108 @@ class QisatTvProvider : MainAPI() {
         if (servers.isEmpty()) return false
 
         // Parallel fetch servers
+        // We construct the "direct" embed URLs based on the server ID and name mapping
+        // This bypasses the need to visit the blocked/maintenance 'watch' page
         coroutineScope {
-            servers.take(4).map { server ->
+            servers.mapNotNull { server ->
+                val serverName = server.name.lowercase()
+                val serverId = server.id
+                var fixedUrl: String? = null
+
+                when {
+                    serverName.contains("arab") || serverName.contains("المشغل الأول") -> {
+                        fixedUrl = "https://v.turkvearab.com/embed-$serverId.html"
+                    }
+                    serverName.contains("estream") || serverName.contains("turk") || serverName.contains("المشغل الثاني") -> {
+                        fixedUrl = "https://arabveturk.com/embed-$serverId.html"
+                    }
+                    serverName.contains("ok") || serverName.contains("المشغل الرابع") -> {
+                        fixedUrl = "https://ok.ru/videoembed/$serverId"
+                    }
+                    serverName.contains("pro") || serverName.contains("المشغل الخامس") -> {
+                        fixedUrl = "https://w.larhu.website/play.php?id=$serverId"
+                    }
+                    serverName.contains("red") || serverName.contains("المشغل السادس") -> {
+                        fixedUrl = "https://iplayerhls.com/e/$serverId"
+                    }
+                    serverName.contains("express") || serverName.contains("المشغل الثالث") -> {
+                        fixedUrl = serverId // The ID is the direct link for express
+                    }
+                    // Add more mappings as discovered
+                    else -> {
+                         // Fallback: Try to use the ID as a direct URL if it looks like one
+                         if (serverId.startsWith("http")) {
+                             fixedUrl = serverId
+                         }
+                    }
+                }
+
+                if (fixedUrl != null) {
+                    Pair(server, fixedUrl)
+                } else {
+                    null
+                }
+            }.map { (server, url) ->
                 async {
-                    try {
-                        val serverUrl = if (playerUrl.contains("?")) {
-                            "$playerUrl&server=${server.id}"
-                        } else {
-                            "$playerUrl?server=${server.id}"
-                        }
-
-                        // Referer must be the player URL
-                        val response = app.get(serverUrl, referer = playerUrl).text
-                        val innerIframeSrc = Jsoup.parse(response).selectFirst("iframe")?.attr("src")
-
-                        if (!innerIframeSrc.isNullOrBlank()) {
-                            val fixedInnerSrc = try {
-                                URI(serverUrl).resolve(innerIframeSrc).toString()
-                            } catch (e: Exception) {
-                                fixUrl(innerIframeSrc)
+                    val fixedInnerSrc = url // It is already fixed
+                     if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
+                        // Specific handling for CDNPlus
+                        try {
+                            val cdnResponse = app.get(fixedInnerSrc, referer = playerUrl).text
+                            if (cdnResponse.contains("eval(function(p,a,c,k,e,d)")) {
+                                 val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
+                                 if (packed != null) {
+                                     val unpacked = runJS(packed.replace("eval", ""))
+                                     val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
+                                     if (m3u8 != null) {
+                                         callback(
+                                             newExtractorLink(
+                                                 "CdnPlus",
+                                                 "${server.name} (CdnPlus)",
+                                                 m3u8,
+                                                 ExtractorLinkType.M3U8
+                                             ) {
+                                                 this.referer = fixedInnerSrc
+                                                 this.quality = Qualities.Unknown.value
+                                             }
+                                         )
+                                         hasLinks = true
+                                     }
+                                 }
                             }
-                            
-                            if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
-                                // Specific handling for CDNPlus
-                                val cdnResponse = app.get(fixedInnerSrc, referer = serverUrl).text
-                                if (!cdnResponse.contains("eval(function(p,a,c,k,e,d)")) return@async
-                                val packed = Regex("""eval\(function\(p,a,c,k,e,d\).*?\.split\('\|'\)\)\)""").find(cdnResponse)?.value
-                                if (packed != null) {
-                                    val unpacked = runJS(packed.replace("eval", ""))
-                                    val m3u8 = Regex("""file:\s*["']([^"']+)["']""").find(unpacked)?.groupValues?.get(1)
-                                    if (m3u8 != null) {
-                                        callback(
-                                            newExtractorLink(
-                                                "CdnPlus",
-                                                "${server.name} (CdnPlus)",
-                                                m3u8,
-                                                ExtractorLinkType.M3U8
-                                            ) {
-                                                this.referer = fixedInnerSrc
-                                                this.quality = Qualities.Unknown.value
-                                            }
-                                        )
-                                        hasLinks = true
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    } else {
+                        // Try to load extractors
+                        val extractedLinks = mutableListOf<ExtractorLink>()
+                        try {
+                             loadExtractor(fixedInnerSrc, referer = playerUrl, subtitleCallback = subtitleCallback) { link ->
+                                extractedLinks.add(link)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        
+                        extractedLinks.forEach { link ->
+                            if (link.name.startsWith(link.source)) {
+                                val type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                callback(
+                                    newExtractorLink(
+                                        link.source,
+                                        "${server.name} - ${link.name}",
+                                        link.url,
+                                        type
+                                    ) {
+                                        this.referer = link.referer
+                                        this.quality = link.quality
                                     }
-                                }
+                                )
                             } else {
-                                // Try to load extractors
-                                val extractedLinks = mutableListOf<ExtractorLink>()
-                                loadExtractor(fixedInnerSrc, referer = serverUrl, subtitleCallback = subtitleCallback) { link ->
-                                    extractedLinks.add(link)
-                                }
-                                
-                                extractedLinks.forEach { link ->
-                                    if (link.name.startsWith(link.source)) {
-                                        val type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                        callback(
-                                            newExtractorLink(
-                                                link.source,
-                                                "${server.name} - ${link.name}",
-                                                link.url,
-                                                type
-                                            ) {
-                                                this.referer = link.referer
-                                                this.quality = link.quality
-                                            }
-                                        )
-                                    } else {
-                                        callback(link)
-                                    }
-                                    hasLinks = true
-                                }
+                                callback(link)
                             }
+                            hasLinks = true
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
             }.awaitAll()
