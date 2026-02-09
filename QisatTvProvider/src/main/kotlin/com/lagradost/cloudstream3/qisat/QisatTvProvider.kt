@@ -11,6 +11,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 class QisatTvProvider : MainAPI() {
+    // New domain: qesset.com
     override var mainUrl = "https://qesset.com"
     override var name = "Qisat"
     override val hasMainPage = true
