@@ -37,7 +37,9 @@ class QisatTvProvider : MainAPI() {
             val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
             if (title.isEmpty()) return@forEach
 
-            val poster = element.selectFirst("img")?.let { img ->
+            val poster = element.selectFirst("div.imgBg")?.attr("style")?.let { style ->
+                Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
+            }?.let { fixUrl(it) } ?: element.selectFirst("img")?.let { img ->
                 img.attr("data-src").ifBlank { img.attr("src") }
             }?.let { fixUrl(it) }
 
@@ -64,7 +66,9 @@ class QisatTvProvider : MainAPI() {
             val title = element.selectFirst(".title, h3")?.text()?.trim() ?: a.attr("title").trim()
             if (title.isEmpty()) return@mapNotNull null
             
-            val poster = element.selectFirst("img")?.let { img ->
+            val poster = element.selectFirst("div.imgBg")?.attr("style")?.let { style ->
+                Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
+            }?.let { fixUrl(it) } ?: element.selectFirst("img")?.let { img ->
                 img.attr("data-src").ifBlank { img.attr("src") }
             }?.let { fixUrl(it) }
 
@@ -91,7 +95,9 @@ class QisatTvProvider : MainAPI() {
         }
 
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: doc.title().substringBefore(" - ").trim()
-        val poster = doc.selectFirst("div.poster img")?.let { img ->
+        val poster = doc.selectFirst("div.imgBg")?.attr("style")?.let { style ->
+            Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
+        }?.let { fixUrl(it) } ?: doc.selectFirst("div.poster img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
         }?.let { fixUrl(it) } ?: doc.selectFirst("div.cover img")?.let { img ->
              img.attr("data-src").ifBlank { img.attr("src") }
@@ -100,57 +106,36 @@ class QisatTvProvider : MainAPI() {
         val plot = doc.selectFirst("div.story p")?.text()?.trim() ?: doc.selectFirst("div.story")?.text()?.trim()
         val year = Regex("""\d{4}""").find(title)?.value?.toIntOrNull()
 
-        // Check if page has episodes list (even if it's an episode URL)
-        val episodesTab = doc.select("#episodes-tab, .episodes-list").firstOrNull()
-        
-        if (finalUrl.contains("/series/") || episodesTab != null) {
+        // Check if page has episodes list (new structure check)
+        val isSeries = doc.select("body").hasClass("single-series") || 
+                       doc.select("article.postEp").isNotEmpty() ||
+                       finalUrl.contains("/series/")
+
+        if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            var page = 1
-            var hasNext = true
+            // QisatTv apparently loads all episodes in the grid on the single-series page
+            // But we should still check for pagination just in case
+            
+            // Initial parsing of episodes on the current page
+            val pagedEps = doc.select("article.postEp a").mapNotNull { a ->
+                val epUrl = fixUrl(a.attr("href"))
+                val epName = a.selectFirst(".title")?.text()?.trim() ?: a.attr("title").trim()
+                val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
+                    ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
 
-            while (hasNext) {
-                val pageUrl = if (page == 1) finalUrl else "${finalUrl.removeSuffix("/")}/page/$page/"
-                val pageDoc = try {
-                    app.get(pageUrl).document
-                } catch (e: Exception) {
-                    break
+                val epPoster = a.selectFirst("div.imgBg")?.attr("style")?.let { style ->
+                    Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.replace("\"", "")?.replace("'", "")
+                }?.let { fixUrl(it) } ?: a.selectFirst("img")?.let { img ->
+                    img.attr("data-src").ifBlank { img.attr("src") }
+                }?.let { fixUrl(it) }
+
+                newEpisode(epUrl) {
+                    this.name = epName
+                    this.episode = epNum
+                    this.posterUrl = epPoster
                 }
-
-                val pagedEps = pageDoc.select("div.episodes-list a, div.block-post a, #episodes-tab a.block-post, #episodes-tab div.block-post a").mapNotNull { a ->
-                    val epUrl = fixUrl(a.attr("href"))
-                    if (!epUrl.contains("/episode/")) return@mapNotNull null
-                    
-                    val epName = a.selectFirst(".title")?.text()?.trim() ?: a.text().trim()
-                    val epNum = a.selectFirst(".episodeNum span:last-child")?.text()?.toIntOrNull()
-                        ?: Regex("""(\d+)""").find(epName)?.value?.toIntOrNull()
-
-                    val epPoster = a.selectFirst("img")?.let { img ->
-                        img.attr("data-src").ifBlank { img.attr("src") }
-                    }?.let { fixUrl(it) }
-
-                    newEpisode(epUrl) {
-                        this.name = epName
-                        this.episode = epNum
-                        this.posterUrl = epPoster
-                    }
-                }
-
-                if (pagedEps.isEmpty()) {
-                    hasNext = false
-                } else {
-                    episodes.addAll(pagedEps)
-                    // Check for next page link to avoid unnecessary requests
-                    val nextLink = pageDoc.selectFirst("a.next.page-numbers")
-                    if (nextLink == null) {
-                        hasNext = false
-                    } else {
-                        page++
-                    }
-                }
-                
-                // Safety break to prevent infinite loops if something goes wrong
-                if (page > 50) break 
             }
+            episodes.addAll(pagedEps)
 
             val finalEpisodes = episodes.distinctBy { it.data }.sortedByDescending { it.episode }
 
@@ -181,8 +166,18 @@ class QisatTvProvider : MainAPI() {
         val doc = app.get(data).document
         
         // Extract the player iframe
-        val playerIframe = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='/albaplayer/']")
-        val playerUrl = playerIframe?.attr("src")?.let { fixUrl(it) } ?: return false
+        // Extract the player iframe or watch link
+        var playerUrl = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='/albaplayer/']")?.attr("src")?.let { fixUrl(it) }
+
+        if (playerUrl == null) {
+             // Fallback to fullscreen identifier if iframe is hidden/lazy
+             val watchLink = doc.selectFirst("a.fullscreen-clickable")?.attr("href")
+             if (watchLink?.contains("watch?post=") == true) {
+                 playerUrl = fixUrl(watchLink)
+             }
+        }
+
+        if (playerUrl == null) return false
 
         if (playerUrl.contains("watch?post=")) {
             val base64Data = playerUrl.substringAfter("watch?post=").substringBefore("&")

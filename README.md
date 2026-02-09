@@ -78,14 +78,14 @@ graph TD
 
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
-- [ ] **ShahidMBC** - `Under Development`
 - [ ] **Fushaar** - `Planned`
 - [ ] **GateAnime** - `Planned`
 
-### 🚫 Blocked by Cloudflare
-The following providers are currently inaccessible due to high-security Cloudflare protection.
+### 🚫 Blocked by Cloudflare / DRM
+The following providers are currently inaccessible due to high-security protection or DRM.
 - [ ] **AnimeBlkom** - `Pending Bypass Research`
 - [ ] **FajerShow** - `Cloudflare Protection`
+- [ ] **ShahidMBC** - `Widevine DRM Protected`
 
 ---
 

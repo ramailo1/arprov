@@ -1,170 +1,176 @@
 package com.lagradost.cloudstream3.shahidmbc
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import org.jsoup.nodes.Element
+import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.delay
 
 class ShahidMBCProvider : MainAPI() {
-    override var mainUrl = "https://shahid.mbc.net"
-    override var name = "ShahidMBC (Under Development)"
-    override val hasMainPage = true
-    override var lang = "ar"
-    override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-    // Anti-bot configuration
-    private val userAgents = listOf(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    override var name = "Shahid"
+    override var mainUrl = "https://shahid.mbc.net"
+    override var lang = "ar"
+    override val hasMainPage = false
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.Anime
     )
 
     private val headers = mapOf(
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1"
-    )
-
-    private fun getRandomUserAgent(): String = userAgents.random()
-    private fun getRandomDelay(): Long = (2000..4000).random().toLong()
-
-    // Data classes for JSON parsing (Simplified)
-    data class ShahidMedia(
-        val title: String,
-        val url: String,
-        val poster: String?,
-        val year: Int?,
-        val type: TvType
+        "User-Agent" to USER_AGENT,
+        "Accept-Language" to "ar,en-US;q=0.8"
     )
 
     override val mainPage = mainPageOf(
         "$mainUrl/ar/movies" to "أفلام شاهد",
         "$mainUrl/ar/series" to "مسلسلات شاهد",
-        "$mainUrl/ar/anime" to "انمي شاهد",
+        "$mainUrl/ar/anime" to "أنمي",
         "$mainUrl/ar/sports" to "رياضة"
     )
 
-    private fun extractNextData(html: String): String? {
-        val pattern = """<script id="__NEXT_DATA__" type="application/json">(.*?)</script>""".toRegex()
-        return pattern.find(html)?.groupValues?.get(1)
+    // ---------------- UTIL ----------------
+
+    private fun extractNextData(html: String): JsonNode? {
+        val json = Regex(
+            """<script id="__NEXT_DATA__" type="application/json">(.*?)</script>""",
+            RegexOption.DOT_MATCHES_ALL
+        ).find(html)?.groupValues?.get(1) ?: return null
+
+        return mapper.readTree(json)
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val response = app.get(request.data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
-        val nextData = extractNextData(response.text) ?: return newHomePageResponse(request.name, emptyList())
-        
+    private fun parseRails(node: JsonNode): List<JsonNode> {
+        return node["props"]?.get("pageProps")
+            ?.get("initialState")
+            ?.get("content")
+            ?.get("rails")
+            ?.toList()
+            ?: emptyList()
+    }
+
+    // ---------------- MAIN PAGE ----------------
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+
+        val res = app.get(request.data, headers = headers)
+        val json = extractNextData(res.text) ?: return newHomePageResponse(
+            request.name,
+            emptyList()
+        )
+
         val items = mutableListOf<SearchResponse>()
-        
-        // More flexible parsing for title, productUrl, and image path
-        // We match the block first and then extract fields to handle varying orders
-        val blockPattern = """\{"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
-        val imagePattern = """"image":\{"path":"([^"]+)"""".toRegex()
-        
-        blockPattern.findAll(nextData).forEach { match ->
-            val title = match.groupValues[1]
-            val url = match.groupValues[2]
-            
-            // Search for the image path in the vicinity (the match block or immediately after)
-            val subData = nextData.substring(match.range.first, (match.range.last + 500).coerceAtMost(nextData.length))
-            val poster = imagePattern.find(subData)?.groupValues?.get(1)
-            
-            // Map to movie or series based on URL pattern
-            val type = if (url.contains("/series/")) TvType.TvSeries else TvType.Movie
-            
-            items.add(newMovieSearchResponse(title, fixUrl(url), type) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-            })
+
+        parseRails(json).forEach { rail ->
+            rail["items"]?.forEach { item ->
+                val title = item["title"]?.textValue() ?: return@forEach
+                val url = item["url"]?.textValue() ?: return@forEach
+                val poster = item["image"]?.get("path")?.textValue()
+
+                val type = if (url.contains("/series/"))
+                    TvType.TvSeries else TvType.Movie
+
+                items.add(
+                    newMovieSearchResponse(title, fixUrl(url), type) {
+                        posterUrl = poster?.let { fixUrl(it) }
+                    }
+                )
+            }
         }
 
         return newHomePageResponse(request.name, items)
     }
 
+    // ---------------- SEARCH ----------------
+
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/ar/search?term=${query.replace(" ", "+")}"
-        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
-        val nextData = extractNextData(response.text) ?: return emptyList()
-        
-        val items = mutableListOf<SearchResponse>()
-        // Simplified search pattern
-        val resultPattern = """"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
-        resultPattern.findAll(nextData).forEach { match ->
-            val title = match.groupValues[1]
-            val path = match.groupValues[2]
-            
-            items.add(newMovieSearchResponse(title, fixUrl(path), TvType.Movie))
+        val url = "$mainUrl/ar/search?term=${java.net.URLEncoder.encode(query, "UTF-8")}"
+        val res = app.get(url, headers = headers)
+        val json = extractNextData(res.text) ?: return emptyList()
+
+        val results = mutableListOf<SearchResponse>()
+
+        parseRails(json).forEach { rail ->
+            rail["items"]?.forEach { item ->
+                val title = item["title"]?.textValue() ?: return@forEach
+                val urlPath = item["url"]?.textValue() ?: return@forEach
+                val poster = item["image"]?.get("path")?.textValue()
+
+                results.add(
+                    newMovieSearchResponse(title, fixUrl(urlPath), TvType.Movie) {
+                        posterUrl = poster?.let { fixUrl(it) }
+                    }
+                )
+            }
         }
-        
-        return items
+
+        return results
     }
+
+    // ---------------- LOAD ----------------
 
     override suspend fun load(url: String): LoadResponse? {
-        val response = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
-        val nextData = extractNextData(response.text) ?: return null
-        
-        val title = Regex(""""title":"([^"]+)"""").find(nextData)?.groupValues?.get(1) ?: return null
-        val poster = Regex(""""image":\{"path":"([^"]+)"""").find(nextData)?.groupValues?.get(1)
-        val plot = Regex(""""description":"([^"]+)"""").find(nextData)?.groupValues?.get(1)
-        val year = Regex(""""releaseDate":(\d{4})""").find(nextData)?.groupValues?.get(1)?.toIntOrNull()
-        
-        val isSeries = url.contains("/series/") || nextData.contains("\"seasons\":")
-        
-        if (isSeries) {
-            val episodes = mutableListOf<Episode>()
-            // Extract episodes from JSON
-            val epPattern = """"episodeNumber":(\d+).*?"title":"([^"]+)".*?"productUrl":\{"url":"([^"]+)"""".toRegex()
-            epPattern.findAll(nextData).forEach { match ->
-                val epNum = match.groupValues[1].toIntOrNull()
-                val epTitle = match.groupValues[2]
-                val epUrl = match.groupValues[3]
-                
-                episodes.add(newEpisode(fixUrl(epUrl)) {
-                    this.name = epTitle
-                    this.episode = epNum
-                })
-            }
-            
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.year = year
-                this.plot = plot
-            }
-        } else {
+        val res = app.get(url, headers = headers)
+        val json = extractNextData(res.text) ?: return null
+
+        val meta = json["props"]["pageProps"]["initialState"]["content"]["metadata"]
+            ?: return null
+
+        val title = meta["title"]?.textValue() ?: return null
+        val poster = meta["image"]?.get("path")?.textValue()
+        val plot = meta["description"]?.textValue()
+        val year = meta["releaseYear"]?.intValue()
+
+        val isSeries = url.contains("/series/")
+
+        if (!isSeries) {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster?.let { fixUrl(it) }
-                this.year = year
+                posterUrl = poster?.let { fixUrl(it) }
                 this.plot = plot
+                this.year = year
             }
+        }
+
+        val episodes = mutableListOf<Episode>()
+
+        json["props"]["pageProps"]["initialState"]["content"]["episodes"]
+            ?.forEach { ep ->
+                val epNum = ep["episodeNumber"]?.intValue()
+                val epTitle = ep["title"]?.textValue() ?: "Episode $epNum"
+                val epUrl = ep["url"]?.textValue() ?: return@forEach
+
+                episodes.add(
+                    newEpisode(fixUrl(epUrl)) {
+                        name = epTitle
+                        episode = epNum
+                    }
+                )
+            }
+
+        return newTvSeriesLoadResponse(
+            title,
+            url,
+            TvType.TvSeries,
+            episodes
+        ) {
+            posterUrl = poster?.let { fixUrl(it) }
+            this.plot = plot
+            this.year = year
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val response = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent()))
-        val nextData = extractNextData(response.text) ?: return false
-        
-        // Shahid uses dynamic stream tokens. This is the hardest part.
-        // We look for any obvious manifest URLs or stream IDs in the JSON.
-        val manifestUrl = Regex("""(https?://[^"]+\.m3u8[^"]*)""").find(nextData)?.groupValues?.get(1)
-        
-        if (manifestUrl != null) {
-            callback.invoke(
-                newExtractorLink(
-                    "Shahid",
-                    "Shahid",
-                    fixUrl(manifestUrl),
-                    ExtractorLinkType.M3U8
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = mainUrl
-                }
-            )
-            return true
-        }
-        
-        return false
+    // ---------------- STREAMS ----------------
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        // Shahid uses Widevine DRM which is not supported
+        throw ErrorLoadingException("This content is DRM protected (Widevine) and cannot be played.")
     }
 }
