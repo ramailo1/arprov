@@ -218,68 +218,137 @@ class QisatTvProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
+        var directUrlFound = false
+
+        // 1. Direct Iframe Check (Episode Page)
+        // Some/Old episodes might have the iframe directly on the episode page
+        doc.selectFirst("div.getEmbed iframe, iframe[src*='embed'], iframe[src*='video']")?.attr("src")?.let { iframeUrl ->
+            val fixedUrl = fixUrl(iframeUrl)
+            if (fixedUrl.isNotBlank() && !fixedUrl.contains("facebook") && !fixedUrl.contains("twitter")) {
+                loadExtractor(fixedUrl, referer = data, subtitleCallback = subtitleCallback, callback = callback)
+                directUrlFound = true
+            }
+        }
+
+        val servers = mutableListOf<ServerItem>()
+
+        // 1.5 Check for server list on the Episode Page itself (Old Episodes often have it here)
+        doc.select("ul.serversList li").forEach { li ->
+            val name = li.attr("data-name").trim()
+            val id = li.attr("data-server").trim()
+            
+            if (name.isNotBlank()) {
+                if (id.isNotBlank()) {
+                     servers.add(ServerItem(name, id))
+                } else {
+                    val codeLink = li.selectFirst("code a")?.attr("href")?.trim()
+                    if (!codeLink.isNullOrEmpty()) {
+                         callback(newExtractorLink(name, name, codeLink, ExtractorLinkType.VIDEO))
+                         directUrlFound = true
+                    }
+                }
+            }
+        }
 
         var playerUrl = doc.selectFirst("iframe[src*='qesen.net/watch'], iframe[src*='qesset.com/watch']")?.attr("src")
             ?: doc.selectFirst("a.watch-btn")?.attr("href")
             ?: doc.selectFirst("a.fullscreen-clickable")?.attr("href")
             ?: doc.selectFirst("a[href*='post=']")?.attr("href")
 
-        playerUrl = fixUrl(playerUrl ?: return false)
+        // If no player URL found, and we haven't found any direct links or servers, we can't do much more.
+        if (playerUrl == null) {
+             return directUrlFound || servers.isNotEmpty()
+        }
 
-        val servers = mutableListOf<ServerItem>()
+        playerUrl = fixUrl(playerUrl)
 
-        // Try parsing from "post" param first (no network call needed)
-        val postParam = Regex("post=([^&]+)").find(playerUrl)?.groupValues?.get(1)
-        if (postParam != null) {
-            try {
-                val decoded = try {
-                    String(Base64.decode(postParam, Base64.URL_SAFE or Base64.NO_WRAP))
-                } catch (e: Exception) {
-                    String(Base64.decode(postParam, Base64.DEFAULT))
-                }
-                // safe parse json
-                val json = try {
-                    AppUtils.parseJson<Map<String, Any>>(decoded)
-                } catch (e: Exception) {
-                    null
-                }
-                val serverList = json?.get("servers") as? List<Map<String, String>>
-                serverList?.forEach {
-                    val name = it["name"] ?: ""
-                    val id = it["id"] ?: ""
-                    if (name.isNotBlank() && id.isNotBlank()) {
-                        servers.add(ServerItem(name, id))
+        // 2. Try parsing from "post" param first (Fast Path for New Episodes)
+        // Only if we don't have servers yet? Or maybe "post" param has *better* servers? 
+        // Usually if serversList is present on page, it's the source of truth. 
+        // But "post" param is used when serversList is NOT on the page.
+        if (servers.isEmpty()) {
+            val postParam = Regex("post=([^&]+)").find(playerUrl)?.groupValues?.get(1)
+            if (postParam != null) {
+                try {
+                    val decoded = try {
+                        String(Base64.decode(postParam, Base64.URL_SAFE or Base64.NO_WRAP))
+                    } catch (e: Exception) {
+                        String(Base64.decode(postParam, Base64.DEFAULT))
                     }
+                    // safe parse json
+                    val json = try {
+                        AppUtils.parseJson<Map<String, Any>>(decoded)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val serverList = json?.get("servers") as? List<Map<String, String>>
+                    serverList?.forEach {
+                        val name = it["name"] ?: ""
+                        val id = it["id"] ?: ""
+                        if (name.isNotBlank() && id.isNotBlank()) {
+                            servers.add(ServerItem(name, id))
+                        }
+                    }
+                } catch (e: Exception) {
+                    // ignore
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
 
-        // Fallback to fetching page if no servers found via param
+        // 3. Fallback to fetching page (Old Episodes or failed Post param)
+        // Only fetch if we still don't have servers.
         if (servers.isEmpty()) {
             try {
-                val response = app.get(playerUrl).text
-                val extractedServers =
-                    Regex("""var\s+servers\s*=\s*(\[.*?\])""").find(response)?.groupValues?.get(1)
-                if (!extractedServers.isNullOrBlank()) {
-                    try {
-                        AppUtils.parseJson<List<ServerItem>>(extractedServers).let { servers.addAll(it) }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                val responseDoc = app.get(playerUrl).document
+                val responseText = responseDoc.html()
+
+                // 3a. Check for direct iframe on the player page
+                responseDoc.selectFirst("div.getEmbed iframe")?.attr("src")?.let { iframeUrl ->
+                     val fixedUrl = fixUrl(iframeUrl)
+                     if (fixedUrl.isNotBlank()) {
+                         loadExtractor(fixedUrl, referer = playerUrl, subtitleCallback = subtitleCallback, callback = callback)
+                         directUrlFound = true
+                     }
+                }
+
+                // 3b. Check for server list (ul.serversList)
+                responseDoc.select("ul.serversList li").forEach { li ->
+                    val name = li.attr("data-name").trim()
+                    val id = li.attr("data-server").trim()
+                    
+                    if (name.isNotBlank()) {
+                        if (id.isNotBlank()) {
+                             servers.add(ServerItem(name, id))
+                        } else {
+                            val codeLink = li.selectFirst("code a")?.attr("href")?.trim()
+                            if (!codeLink.isNullOrEmpty()) {
+                                 callback(newExtractorLink(name, name, codeLink, ExtractorLinkType.VIDEO))
+                                 directUrlFound = true
+                            }
+                        }
+                    }
+                }
+
+                // 3c. Check for JS variable (Legacy fallback)
+                if (servers.isEmpty()) {
+                    val extractedServers =
+                        Regex("""var\s+servers\s*=\s*(\[.*?\])""").find(responseText)?.groupValues?.get(1)
+                    if (!extractedServers.isNullOrBlank()) {
+                        try {
+                            AppUtils.parseJson<List<ServerItem>>(extractedServers).let { servers.addAll(it) }
+                        } catch (e: Exception) {
+                            // ignore
+                        }
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // ignore
             }
         }
 
-        if (servers.isEmpty()) return false
+        if (servers.isEmpty() && !directUrlFound) return false
 
-        // Parallel fetch servers
-        // We construct the "direct" embed URLs based on the server ID and name mapping
-        // This bypasses the need to visit the blocked/maintenance 'watch' page
-        return coroutineScope {
+        val serverResults = coroutineScope {
             val results = servers.mapNotNull { server ->
                 val serverName = server.name.lowercase()
                 val serverId = server.id
@@ -302,7 +371,7 @@ class QisatTvProvider : MainAPI() {
                         fixedUrl = "https://iplayerhls.com/e/$serverId"
                     }
                     serverName.contains("express") || serverName.contains("المشغل الثالث") -> {
-                        fixedUrl = serverId // The ID is the direct link for express
+                        fixedUrl = serverId 
                     }
                     // Add more mappings as discovered
                     else -> {
@@ -321,7 +390,7 @@ class QisatTvProvider : MainAPI() {
             }.map { (server, url) ->
                 async {
                     var found = false
-                    val fixedInnerSrc = url // It is already fixed
+                    val fixedInnerSrc = url 
                      if (fixedInnerSrc.contains("cdnplus.cyou") || fixedInnerSrc.contains("cdnplus.online")) {
                         // Specific handling for CDNPlus
                         try {
@@ -348,7 +417,7 @@ class QisatTvProvider : MainAPI() {
                                  }
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            // ignore
                         }
                     } else {
                         // Try to load extractors
@@ -358,7 +427,7 @@ class QisatTvProvider : MainAPI() {
                                 extractedLinks.add(link)
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            // ignore
                         }
                         
                         extractedLinks.forEach { link ->
@@ -387,6 +456,8 @@ class QisatTvProvider : MainAPI() {
             
             results.any { it }
         }
+        
+        return directUrlFound || serverResults
     }
 
     private fun runJS(script: String): String {
