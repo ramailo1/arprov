@@ -69,18 +69,40 @@ class EgyBestProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val url = this.attr("href") ?: return null
+        // Get URL
+        val href = this.attr("href").takeIf { it.isNotBlank() } ?: return null
+        val decodedUrl = decode(href)
+
+        // Extract poster
         val posterUrl = this.extractPoster(this.ownerDocument())
-        var title = select(".title").text().ifEmpty { this.attr("title") }
+
+        // Extract title
+        var title = select(".title").text().ifEmpty { this.attr("title") }.cleanName()
+
+        // Extract year
         val year = title.getYearFromTitle()
-        val tvType = if (isMovie(url)) TvType.Movie else TvType.TvSeries
-        title = if (year != null) title else title.split(" (")[0].trim()
-        val quality = select("span.ribbon span").text().replace("-", "")
-        return newMovieSearchResponse(title, fixUrl(url), tvType) {
+
+        // Determine type
+        val tvType = if (isMovie(decodedUrl)) TvType.Movie else TvType.TvSeries
+
+        // Remove year from title if present
+        title = year?.let { title.replace("($it)", "").trim() } ?: title
+
+        // Extract quality
+        val qualityString = select("span.ribbon span").text().replace("-", "")
+        val quality = getQualityFromString(qualityString)
+
+        return newMovieSearchResponse(title, fixUrl(href), tvType) {
             this.posterUrl = posterUrl
             this.year = year
-            this.quality = getQualityFromString(quality)
+            this.quality = quality
         }
+
+    }
+
+    private fun org.jsoup.nodes.Document.extractRecommendations(): List<SearchResponse> {
+        return this.select(".movies_small .postBlock, .movies_small .postBlockCol, .related .postBlock")
+            .mapNotNull { it.toSearchResponse() }
     }
 
     // ======= PAGINATION HELPER =======
@@ -92,20 +114,19 @@ class EgyBestProvider : MainAPI() {
     ): List<SearchResponse> {
         val result = mutableListOf<SearchResponse>()
         var page = 1
-        var continuePaging = true
         var paginationType: PaginationType? = paginationCache[baseUrl]
 
-        while (continuePaging && page <= maxPages) {
-            val url = if (page == 1) baseUrl else {
-                when (paginationType) {
-                    PaginationType.PATH -> "$baseUrl/page/$page/"
-                    PaginationType.QUERY -> if (baseUrl.contains("?")) "$baseUrl&page=$page" else "$baseUrl?page=$page"
-                    null -> baseUrl
-                }
+        while (page <= maxPages) {
+            val url = when {
+                page == 1 -> baseUrl
+                paginationType == PaginationType.PATH -> "$baseUrl/page/$page/"
+                paginationType == PaginationType.QUERY -> if (baseUrl.contains("?")) "$baseUrl&page=$page" else "$baseUrl?page=$page"
+                else -> baseUrl
             }
 
             val doc = fetchDoc(url)
 
+            // Detect pagination type if not cached
             if (paginationType == null) {
                 val nextPageLink = doc.select("a.page-numbers, a.next, li a").firstOrNull()?.attr("href") ?: ""
                 paginationType = when {
@@ -118,13 +139,16 @@ class EgyBestProvider : MainAPI() {
 
             val items = extractItems(doc)
             if (items.isEmpty()) break
+
             result.addAll(items)
 
+            // Stop if no next page link
             val nextLink = doc.select("a.page-numbers, a.next, li a")
                 .firstOrNull { it.text().matches(Regex("\\d+|التالي|Next")) }
                 ?.attr("href")
 
-            continuePaging = !nextLink.isNullOrBlank()
+            if (nextLink.isNullOrBlank()) break
+
             page++
         }
 
@@ -139,29 +163,31 @@ class EgyBestProvider : MainAPI() {
         "$mainUrl/category/anime/" to "انمي",
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse =
-        newHomePageResponse(
-            request.name,
-            paginatedFetch(
-                baseUrl = request.data,
-                maxPages = 1,
-                fetchDoc = { app.get(it).document },
-                extractItems = { doc ->
-                    doc.select(".postBlock, .postBlockCol")
-                        .filter { element -> element.parents().none { it.id() == "postSlider" } }
-                        .mapNotNull { it.toSearchResponse() }
-                }
-            )
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val items = paginatedFetch(
+            baseUrl = request.data,
+            maxPages = 1,
+            fetchDoc = { app.get(it).document },
+            extractItems = { doc ->
+                doc.select(".postBlock, .postBlockCol")
+                    .filter { element -> element.parents().none { it.id() == "postSlider" } }
+                    .mapNotNull { it.toSearchResponse() }
+            }
         )
+        return newHomePageResponse(request.name, items)
+    }
 
     // ======= SEARCH =======
-    override suspend fun search(query: String): List<SearchResponse> =
-        paginatedFetch(
-            baseUrl = "$mainUrl/explore/?q=$query",
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/explore/?q=$query"
+        return paginatedFetch(
+            baseUrl = url,
             maxPages = 3,
             fetchDoc = { app.get(it).document },
             extractItems = { doc -> doc.select(".postBlock").mapNotNull { it.toSearchResponse() } }
         )
+    }
+
 
     // ======= LOAD =======
     override suspend fun load(url: String): LoadResponse {
@@ -187,24 +213,24 @@ class EgyBestProvider : MainAPI() {
 
         val synopsis = doc.select("p.description, .postStory, .story").text()
 
-        val actors = doc.select("div.cast_list .cast_item, .story div a").mapNotNull {
-            val imgTag = it.selectFirst("img")
-            val name = imgTag?.attr("alt") ?: it.text()
+        val actors = doc.select("div.cast_list .cast_item, .story div a").mapNotNull { element ->
+            val imgTag = element.selectFirst("img")
+            val name = imgTag?.attr("alt") ?: element.text()
             val image = imgTag?.extractPoster()
-            val roleString = it.selectFirst("span")?.text() ?: ""
+            val roleString = element.selectFirst("span")?.text() ?: ""
             ActorData(actor = Actor(name, image), roleString = roleString)
         }
 
-        val recommendations = doc.select(".movies_small .postBlock, .movies_small .postBlockCol, .related .postBlock")
-            .mapNotNull { it.toSearchResponse() }
+        // === Recommendations using toSearchResponse ===
+        val recommendations = doc.extractRecommendations()
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = posterUrl
             this.year = year
-            this.recommendations = recommendations
             this.plot = synopsis
             this.tags = tags
             this.actors = actors
+            this.recommendations = recommendations
         }
     }
 
@@ -229,16 +255,14 @@ class EgyBestProvider : MainAPI() {
             val roleString = it.selectFirst("span")?.text() ?: ""
             ActorData(actor = Actor(name, image), roleString = roleString)
         }
-
         val episodes = ArrayList<Episode>()
 
+        // === Process season and episode links ===
         // Get all season links
-        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList()
-            .filter { it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") } }
-            .map { it.attr("href") }
-            .distinct()
+        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList().filter {
+            it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") }
+        }.map { it.attr("href") }.distinct()
 
-        // Function to process episode links
         val processEpisodeLinks: (List<Element>, Int?, String?) -> Unit = { episodeLinks, seasonNum, defaultPoster ->
             val thumbMap = episodeLinks.associate { ep ->
                 ep.attr("href") to (ep.selectFirst("img")?.extractPoster() ?: defaultPoster)
@@ -248,12 +272,9 @@ class EgyBestProvider : MainAPI() {
                 val href = epLink.attr("href")
                 val decodedHref = decode(href)
                 val epText = epLink.text().cleanName()
-
-                // Normalize Arabic numerals
                 val hrefDigits = decodedHref.toWesternDigits()
                 val textDigits = epText.toWesternDigits()
 
-                // Extract episode number from href or text
                 val epNumber = Regex("""(?:ep|الحلقة|episode)[^\d]*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(hrefDigits)?.groupValues?.get(1)?.toIntOrNull()
                     ?: Regex("""(?:ep|الحلقة|episode)[^\d]*(\d+)""", RegexOption.IGNORE_CASE)
@@ -271,7 +292,6 @@ class EgyBestProvider : MainAPI() {
         }
 
         if (seasonLinks.isNotEmpty()) {
-            // Loop through each season
             seasonLinks.forEach { seasonUrl ->
                 val d = app.get(fixUrl(seasonUrl)).document
                 val normalizedSeasonUrl = seasonUrl.toWesternDigits()
@@ -289,7 +309,7 @@ class EgyBestProvider : MainAPI() {
                 processEpisodeLinks(episodeLinks, seasonNum, posterUrl)
             }
         } else {
-            // Single season / no seasons
+            // Single season / no season links
             val episodeLinks = doc.select(".all-episodes a").ifEmpty {
                 doc.select("a:contains(الحلقة)").toList().filter { el ->
                     el.parents().none { p ->
@@ -297,9 +317,10 @@ class EgyBestProvider : MainAPI() {
                     }
                 }
             }
-
             processEpisodeLinks(episodeLinks, 1, posterUrl)
         }
+
+        val recommendations = doc.extractRecommendations()
 
         return newTvSeriesLoadResponse(
             title,
@@ -312,29 +333,35 @@ class EgyBestProvider : MainAPI() {
             this.year = year
             this.plot = synopsis
             this.actors = actors
+            this.recommendations = recommendations
         }
     }
 
 
     // ======= LOAD LINKS =======
     @TargetApi(Build.VERSION_CODES.O)
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val doc = app.get(data).document
 
-        // List of extractor sources
-        val extractorSources = listOf(
-            // Server list items
-            doc.select("ul#watch-servers-list li, .servList li").mapNotNull { li ->
-                Regex("loadIframe\\(this, '(.*?)'\\)").find(li.attr("onclick"))?.groupValues?.getOrNull(1)
-            },
-            // Direct iframe
-            doc.select("iframe#videoPlayer").mapNotNull { iframe ->
-                iframe.attr("src").takeIf { it.isNotBlank() }
-            }
-        )
+        // Collect extractor URLs from multiple sources
+        val extractorUrls = mutableListOf<String>()
 
-        // Flatten and load all extractors
-        extractorSources.flatten().forEach { url ->
+        // 1. Server list items
+        doc.select("ul#watch-servers-list li, .servList li").forEach { li ->
+            Regex("loadIframe\\(this, '(.*?)'\\)").find(li.attr("onclick"))?.groupValues?.getOrNull(1)?.let { extractorUrls.add(it) }
+        }
+
+        // 2. Direct iframe
+        doc.select("iframe#videoPlayer").mapNotNull { it.attr("src").takeIf { src -> src.isNotBlank() } }
+            .forEach { extractorUrls.add(it) }
+
+        // 3. Flatten and load all extractors
+        extractorUrls.distinct().forEach { url ->
             loadExtractor(fixUrl(url), subtitleCallback, callback)
         }
 

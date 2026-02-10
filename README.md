@@ -70,6 +70,10 @@ graph TD
 | **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
 | **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
 | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
+| **Fushaar** | Movies & Series | `com.lagradost.cloudstream3.fushaar` |
+
+> [!NOTE]
+> **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **EgyBest** - `Legacy Porting`
@@ -78,7 +82,6 @@ graph TD
 
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
-- [ ] **Fushaar** - `Planned`
 - [ ] **GateAnime** - `Planned`
 
 ### 🚫 Blocked by Cloudflare / DRM
