@@ -301,7 +301,9 @@ class EgyBestProvider : MainAPI() {
                 val episodeLinks = d.select(".all-episodes a").ifEmpty {
                     d.select("a:contains(الحلقة)").toList().filter { el ->
                         el.parents().none { p ->
-                            p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
+                            p.hasClass("slider") || p.id() == "postSlider" || p.hasClass("owl-carousel") || 
+                            p.hasClass("related") || p.hasClass("movies_small") || p.hasClass("auto-load") ||
+                            p.hasClass("box") || p.tagName() == "footer"
                         }
                     }
                 }
@@ -313,7 +315,9 @@ class EgyBestProvider : MainAPI() {
             val episodeLinks = doc.select(".all-episodes a").ifEmpty {
                 doc.select("a:contains(الحلقة)").toList().filter { el ->
                     el.parents().none { p ->
-                        p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
+                        p.hasClass("slider") || p.id() == "postSlider" || p.hasClass("owl-carousel") || 
+                        p.hasClass("related") || p.hasClass("movies_small") || p.hasClass("auto-load") ||
+                        p.hasClass("box") || p.tagName() == "footer"
                     }
                 }
             }

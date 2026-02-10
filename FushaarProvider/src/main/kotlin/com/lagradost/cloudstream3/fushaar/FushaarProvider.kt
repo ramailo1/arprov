@@ -113,6 +113,42 @@ class FushaarProvider : MainAPI() {
 
         // Normal extraction fallback
         val doc = app.get(data).document
+        
+        // New Logic: Check for direct player button (FCplayer)
+        val playerUrl = doc.select("div#FCplayer a.video-play-button, div#FCplayer a.controls-play-pause-big").attr("href")
+        if (playerUrl.isNotBlank()) {
+            val validPlayerUrl = fixUrl(playerUrl)
+            try {
+                val playerDoc = app.get(validPlayerUrl).document
+                val iframeSrc = playerDoc.select("iframe").attr("src")
+                if (iframeSrc.isNotBlank()) {
+                    loadExtractor(fixUrl(iframeSrc), validPlayerUrl, subtitleCallback, callback)
+                    return true
+                }
+            } catch (e: Exception) {
+                // Log or ignore, fallback to other methods
+            }
+        }
+
+        // Maintain old logic as fallback (Hash decoding)
+        val hashVal = Regex("""hash=([^&\s]+)""").find(data)?.groupValues?.get(1)
+        
+        if (hashVal != null) {
+            try {
+                // Decode hash: __ -> / and _ -> +
+                val cleanHash = hashVal.replace("__", "/").replace("_", "+")
+                val decoded = String(Base64.decode(cleanHash, Base64.DEFAULT))
+                
+                // Parse decoded string: "key =? URL" or "key => URL"
+                Regex("""(.*?)\s*[=\-][>?]\s*(https?://[^\s\n]+)""").findAll(decoded).forEach { match ->
+                    val url = match.groupValues[2].trim()
+                    loadExtractor(url, data, subtitleCallback, callback)
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        // Direct iframe fallback
         doc.select("iframe").mapNotNull { it.attr("src").takeIf { s -> s.isNotBlank() } }.forEach {
             loadExtractor(fixUrl(it), data, subtitleCallback, callback)
         }
