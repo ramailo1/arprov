@@ -298,28 +298,17 @@ class EgyBestProvider : MainAPI() {
                 val seasonNum = Regex("""(?:season|الموسم)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(normalizedSeasonUrl)?.groupValues?.get(1)?.toIntOrNull()
 
-                val episodeLinks = d.select(".all-episodes a").ifEmpty {
-                    d.select("a:contains(الحلقة)").toList().filter { el ->
-                        el.parents().none { p ->
-                            p.hasClass("slider") || p.id() == "postSlider" || p.hasClass("owl-carousel") || 
-                            p.hasClass("related") || p.hasClass("movies_small") || p.hasClass("auto-load") ||
-                            p.hasClass("box") || p.tagName() == "footer"
-                        }
-                    }
+                val episodeLinks = d.select(".all-episodes a, #mso .movies_small a, #mso .postBlock").ifEmpty {
+                    // Strict fallback: scan for explicit episode containers only, never global 
+                    d.select(".movies_small .postBlock")
                 }
 
                 processEpisodeLinks(episodeLinks, seasonNum, posterUrl)
             }
         } else {
             // Single season / no season links
-            val episodeLinks = doc.select(".all-episodes a").ifEmpty {
-                doc.select("a:contains(الحلقة)").toList().filter { el ->
-                    el.parents().none { p ->
-                        p.hasClass("slider") || p.id() == "postSlider" || p.hasClass("owl-carousel") || 
-                        p.hasClass("related") || p.hasClass("movies_small") || p.hasClass("auto-load") ||
-                        p.hasClass("box") || p.tagName() == "footer"
-                    }
-                }
+            val episodeLinks = doc.select(".all-episodes a, #mso .movies_small a, #mso .postBlock").ifEmpty {
+                 doc.select(".movies_small .postBlock")
             }
             processEpisodeLinks(episodeLinks, 1, posterUrl)
         }

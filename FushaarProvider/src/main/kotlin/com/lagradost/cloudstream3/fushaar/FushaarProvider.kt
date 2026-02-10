@@ -94,7 +94,14 @@ class FushaarProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        loadExtractor(data, data, subtitleCallback, callback)
+        // 1. Parse the main page (Static HTML) to find the player button
+        val doc = app.get(data).document
+        val playerUrl = doc.select("div#FCplayer a.video-play-button, div#FCplayer a.controls-play-pause-big")
+            .mapNotNull { it.attr("href").takeIf { s -> s.isNotBlank() } }
+            .firstOrNull() ?: data // Fallback to main page if button not found
+
+        // 2. Load the player URL (or main URL) using WebView logic
+        loadExtractor(fixUrl(playerUrl), data, subtitleCallback, callback)
         return true
     }
 }
