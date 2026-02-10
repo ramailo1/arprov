@@ -33,8 +33,10 @@ class EgyBestProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = this.attr("href") ?: return null
+        // Browser inspection confirmed 'data-img' holds the real image, 'src' is placeholder.
         val posterUrl = select("img").attr("data-img").ifBlank { select("img").attr("src") }
-        var title = select("h3").text()
+        // Browser inspection confirmed title is in 'div.title', not 'h3'
+        var title = select(".title").text()
         if (title.isEmpty()) title = this.attr("title")
         val year = title.getYearFromTitle()
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
@@ -100,16 +102,24 @@ class EgyBestProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
-        val posterUrl = doc.select("div.movie_img a img")?.attr("data-img")?.ifBlank { doc.select("div.movie_img a img")?.attr("src") }
-        val year = doc.select("div.movie_title h1 a")?.text()?.toIntOrNull()
-        val title = doc.select("div.movie_title h1 span").text()
-        val youtubeTrailer = doc.select("div.play")?.attr("url")
+        
+        // Browser verification: Poster is in .postImg or .postCover, real img in data-img
+        val posterUrl = doc.select(".postImg img, .postCover img").let { imgs ->
+             imgs.attr("data-img").ifBlank { imgs.attr("src") }
+        }
+
+        val title = doc.select("h1.title").text()
+
+        // Metadata table uses table.full or .table, not .movieTable
+        val table = doc.select("table.full, table.table")
+        
+        val year = table.select("tr").firstOrNull { it.text().contains("سنة الإنتاج") }
+                   ?.select("td")?.lastOrNull()?.text()?.toIntOrNull()
+        
+        val tags = table.select("tr").firstOrNull { it.text().contains("النوع") }
+                   ?.select("a")?.map { it.text() }
 
         val synopsis = doc.select(".story").text()
-
-        val tags = doc.select("table.movieTable tbody tr").firstOrNull {
-            it.text().contains("النوع")
-        }?.select("a")?.map { it.text() }
 
         val actors = doc.select("div.cast_list .cast_item").mapNotNull {
             val name = it.selectFirst("div > a > img")?.attr("alt") ?: return@mapNotNull null
