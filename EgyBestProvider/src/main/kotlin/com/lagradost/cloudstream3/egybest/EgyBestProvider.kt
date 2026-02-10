@@ -68,13 +68,17 @@ class EgyBestProvider : MainAPI() {
         }
         
         val doc = app.get(url).document
-        // Target specific grid excluding the global slider to prevent duplicates
-        // ".movies_small .postBlock" or just excluding the slider
-        val list = doc.select("div:not(#postSlider) > .postBlock").ifEmpty { 
-             doc.select(".postBlock") 
-        }.mapNotNull { element ->
-            element.toSearchResponse()
-        }
+        
+        // Homepage uses .postBlock (often in sliders)
+        // Grid pages (Recent, Movies, etc.) use .postBlockCol
+        val list = doc.select(".postBlock, .postBlockCol")
+            .filter { element ->
+                // Robustly exclude the main slider duplicates on the homepage
+                element.parents().none { it.id() == "postSlider" }
+            }
+            .mapNotNull { element ->
+                element.toSearchResponse()
+            }
         return newHomePageResponse(request.name, list)
     }
 
@@ -101,9 +105,7 @@ class EgyBestProvider : MainAPI() {
         val title = doc.select("div.movie_title h1 span").text()
         val youtubeTrailer = doc.select("div.play")?.attr("url")
 
-        val synopsis = doc.select("div.mbox").firstOrNull {
-            it.text().contains("القصة")
-        }?.text()?.replace("القصة ", "")
+        val synopsis = doc.select(".story").text()
 
         val tags = doc.select("table.movieTable tbody tr").firstOrNull {
             it.text().contains("النوع")
@@ -118,7 +120,7 @@ class EgyBestProvider : MainAPI() {
         }
 
         return if (isMovie) {
-            val recommendations = doc.select(".movies_small .movie").mapNotNull { element ->
+            val recommendations = doc.select(".movies_small .postBlock, .movies_small .postBlockCol, .related .postBlock").mapNotNull { element ->
                 element.toSearchResponse()
             }
 
@@ -138,37 +140,46 @@ class EgyBestProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            doc.select("#mainLoad > div:nth-child(2) > div.h_scroll > div a").map {
-                it.attr("href")
-            }.forEach {
-                val d = app.get(fixUrl(it)).document
-                val season = Regex("season-(.....)").find(it)?.groupValues?.getOrNull(1)?.getIntFromText()
-                if(d.select("tr.published").isNotEmpty()) {
-                    d.select("tr.published").map { element ->
-                        val ep = Regex("ep-(.....)").find(element.select(".ep_title a").attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
+            val seasonLinks = doc.select("div.h_scroll a, a:contains(الموسم)").map { it.attr("href") }.distinct()
+            
+            if (seasonLinks.isNotEmpty()) {
+                seasonLinks.forEach { seasonUrl ->
+                     val d = app.get(fixUrl(seasonUrl)).document
+                     val season = Regex("season-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText() ?: 
+                                  Regex("الموسم-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText()
+                     
+                     d.select("a:contains(الحلقة)").forEach { epLink ->
+                        val href = epLink.attr("href")
+                        val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
+                                 Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
+                        
                         episodes.add(
-                            newEpisode(fixUrl(element.select(".ep_title a").attr("href"))) {
-                                this.name = element.select("td.ep_title").html().replace(".*</span>|</a>".toRegex(), "")
-                                this.season = season
-                                this.episode = ep
-                                // this.rating = ...
-                            }
-                        )
-                    }
-                } else {
-                    d.select("#mainLoad > div:nth-child(3) > div.movies_small a").map { eit ->
-                        val ep = Regex("ep-(.....)").find(eit.attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
-                        episodes.add(
-                            newEpisode(fixUrl(eit.attr("href"))) {
-                                this.name = eit.select("span.title").text()
+                            newEpisode(fixUrl(href)) {
+                                this.name = epLink.text()
                                 this.season = season
                                 this.episode = ep
                             }
                         )
-                    }
+                     }
+                }
+            } else {
+                // Try finding episodes on the current page if no season links
+                doc.select("a:contains(الحلقة)").forEach { epLink ->
+                        val href = epLink.attr("href")
+                        val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
+                                 Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
+                        
+                        episodes.add(
+                            newEpisode(fixUrl(href)) {
+                                this.name = epLink.text()
+                                this.season = 1
+                                this.episode = ep
+                            }
+                        )
                 }
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
+            
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.year = year
