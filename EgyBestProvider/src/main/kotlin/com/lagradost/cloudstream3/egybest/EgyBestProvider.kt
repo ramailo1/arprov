@@ -31,10 +31,23 @@ class EgyBestProvider : MainAPI() {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
 
+    private fun Element?.extractPoster(): String? {
+        if (this == null) return null
+        val img = when {
+            this.tagName() == "img" -> this
+            else -> this.selectFirst("img")
+        } ?: return null
+
+        return img.attr("data-img")
+            .ifBlank { img.attr("data-src") }
+            .ifBlank { img.attr("src") }
+            .takeIf { it.isNotBlank() }
+            ?.let { fixUrl(it) }
+    }
+
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = this.attr("href") ?: return null
-        // Browser inspection confirmed 'data-img' holds the real image, 'src' is placeholder.
-        val posterUrl = select("img").attr("data-img").ifBlank { select("img").attr("src") }
+        val posterUrl = this.extractPoster()
         // Browser inspection confirmed title is in 'div.title', not 'h3'
         var title = select(".title").text()
         if (title.isEmpty()) title = this.attr("title")
@@ -104,9 +117,7 @@ class EgyBestProvider : MainAPI() {
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
         
         // Browser verification: Poster is in .postImg or .postCover, real img in data-img
-        val posterUrl = doc.select(".postImg img, .postCover img, .postBlockColImg img").let { imgs ->
-             imgs.attr("data-img").ifBlank { imgs.attr("src") }
-        }
+        val posterUrl = doc.selectFirst(".postImg img, .postCover img, .postBlockColImg img, .poster img").extractPoster()
 
         // Title is often in .postTitle h1, or just h1
         val title = doc.select(".postTitle h1, h1.title, h1").text()
