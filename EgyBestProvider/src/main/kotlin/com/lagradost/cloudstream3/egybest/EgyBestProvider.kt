@@ -263,11 +263,24 @@ class EgyBestProvider : MainAPI() {
     @TargetApi(Build.VERSION_CODES.O)
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val doc = app.get(data).document
-        doc.select("ul#watch-servers-list li, .servList li").mapNotNull {
-            Regex("loadIframe\\(this, '(.*?)'\\)").find(it.attr("onclick"))?.groupValues?.getOrNull(1)
-        }.forEach { loadExtractor(fixUrl(it), subtitleCallback, callback) }
 
-        doc.select("iframe#videoPlayer").attr("src").takeIf { it.isNotBlank() }?.let { loadExtractor(fixUrl(it), subtitleCallback, callback) }
+        // List of extractor sources
+        val extractorSources = listOf(
+            // Server list items
+            doc.select("ul#watch-servers-list li, .servList li").mapNotNull { li ->
+                Regex("loadIframe\\(this, '(.*?)'\\)").find(li.attr("onclick"))?.groupValues?.getOrNull(1)
+            },
+            // Direct iframe
+            doc.select("iframe#videoPlayer").mapNotNull { iframe ->
+                iframe.attr("src").takeIf { it.isNotBlank() }
+            }
+        )
+
+        // Flatten and load all extractors
+        extractorSources.flatten().forEach { url ->
+            loadExtractor(fixUrl(url), subtitleCallback, callback)
+        }
+
         return true
     }
 }
