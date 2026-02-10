@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream3.egybest
 
+import java.net.URLDecoder
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -27,6 +28,18 @@ class EgyBestProvider : MainAPI() {
     private enum class PaginationType { PATH, QUERY }
 
     // ======= UTILITIES =======
+    private fun decode(url: String): String = try { URLDecoder.decode(url, "UTF-8") } catch (e: Exception) { url }
+
+    private fun String.cleanName(): String = this
+        .replace(Regex("(?i)مشاهدة|فيلم|مسلسل|اون لاين|مترجم|مترجمة|مدبلج|مدبلجة|اونلاين|بجودة|تحميل|كامل|HD|BRRip|WEB-DL|BluRay|720p|1080p|480p|Series|Movie|Full"), "")
+        .replace(Regex("\\s+"), " ").trim()
+
+    private fun isMovie(url: String): Boolean {
+        val decoded = decode(url)
+        return (decoded.contains("فيلم") || decoded.contains("movie") || decoded.contains("masrahiya") || decoded.contains("مسرحية")) 
+            && !decoded.contains("الحلقة") && !decoded.contains("episode")
+    }
+
     private fun String.getYearFromTitle(): Int? =
         Regex("""\((\d{4})\)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
 
@@ -52,8 +65,7 @@ class EgyBestProvider : MainAPI() {
         val posterUrl = this.extractPoster(this.ownerDocument())
         var title = select(".title").text().ifEmpty { this.attr("title") }
         val year = title.getYearFromTitle()
-        val isMovie = Regex(".*/(movie|masrahiya)/").containsMatchIn(url)
-        val tvType = if (isMovie) TvType.Movie else TvType.TvSeries
+        val tvType = if (isMovie(url)) TvType.Movie else TvType.TvSeries
         title = if (year != null) title else title.split(" (")[0].trim()
         val quality = select("span.ribbon span").text().replace("-", "")
         return newMovieSearchResponse(title, fixUrl(url), tvType) {
@@ -146,7 +158,7 @@ class EgyBestProvider : MainAPI() {
     // ======= LOAD =======
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
-        return if (Regex(".*/(movie|masrahiya)/").containsMatchIn(url)) {
+        return if (isMovie(url)) {
             loadMovie(doc, url)
         } else {
             loadTvSeries(doc, url)
@@ -219,9 +231,14 @@ class EgyBestProvider : MainAPI() {
             val thumbMap = episodeLinks.associate { ep -> ep.attr("href") to (ep.selectFirst("img")?.extractPoster() ?: defaultPoster) }
             episodeLinks.forEach { epLink ->
                 val href = epLink.attr("href")
-                val ep = Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(href)?.groupValues?.get(2)?.toIntOrNull()
+                val decodedHref = decode(href)
+                val epText = epLink.text()
+                
+                val ep = Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(decodedHref)?.groupValues?.get(2)?.toIntOrNull()
+                    ?: Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(epText)?.groupValues?.get(2)?.toIntOrNull()
+                
                 episodes.add(newEpisode(fixUrl(href)) {
-                    this.name = ep?.let { "الحلقة $it" } ?: epLink.text()
+                    this.name = ep?.let { "الحلقة $it" } ?: epText.cleanName()
                     this.season = season ?: 1
                     this.episode = ep
                     this.posterUrl = thumbMap[href]
