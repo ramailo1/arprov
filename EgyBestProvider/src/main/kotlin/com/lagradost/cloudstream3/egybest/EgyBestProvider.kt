@@ -58,23 +58,6 @@ class EgyBestProvider : MainAPI() {
         "$mainUrl/category/movies/" to "أفلام",
         "$mainUrl/series/" to "مسلسلات",
         "$mainUrl/category/anime/" to "انمي",
-        "$mainUrl/trending/" to "الأفلام الأكثر مشاهدة",
-        "$mainUrl/category/series/مسلسلات-كورية/" to "الدراما الكورية ",
-        "$mainUrl/category/anime/مسلسلات-انمي/" to "مسلسلات الانمي",
-        "$mainUrl/category/wwe/" to "عروض المصارعة ",
-        "$mainUrl/movies/bluray/" to "أفلام جديدة BluRay",
-        "$mainUrl/masrahiyat/" to "مسرحيات ",
-        "$mainUrl/category/movies/افلام-كوميدي/" to "أفلام كوميدية",
-        "$mainUrl/explore/?q=superhero/" to "أفلام سوبر هيرو",
-        "$mainUrl/category/movies/افلام-كرتون/" to "أفلام انمي و كرتون",
-        "$mainUrl/category/movies/افلام-رومانسية/" to "أفلام رومانسية",
-        "$mainUrl/category/movies/افلام-دراما/" to "أفلام دراما",
-        "$mainUrl/category/movies/افلام-رومانسية/" to "أفلام رومانسية", // Duplicate removed/fixed if needed, but keeping structure
-        "$mainUrl/category/movies/افلام-رعب/" to "أفلام رعب",
-        "$mainUrl/category/movies/افلام-وثائقية/" to "أفلام وثائقية",
-        "$mainUrl/World-War-Movies/" to "أفلام عن الحرب العالمية ☢",
-        "$mainUrl/End-Of-The-World-Movies/" to "أفلام عن نهاية العالم",
-        "$mainUrl/category/movies/افلام-عربية/" to "أفلام عربية ",
     )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
