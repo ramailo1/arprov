@@ -2,12 +2,13 @@ package com.lagradost.cloudstream3.egybest
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.nicehttp.Requests
 import com.lagradost.nicehttp.Session
+
 
 
 import android.annotation.TargetApi
@@ -54,7 +55,7 @@ class EgyBestProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = this.attr("href") ?: return null
-        val posterUrl = select("img").attr("src") ?: select("img").attr("data-src")
+        val posterUrl = select("img").attr("data-img").ifBlank { select("img").attr("src") }
         var title = select("h3").text()
         if (title.isEmpty()) title = this.attr("title")
         val year = title.getYearFromTitle()
@@ -75,29 +76,36 @@ class EgyBestProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/trending/?page=" to "الأفلام الأكثر مشاهدة",
-        "$mainUrl/movies/?page=" to "أفلام جديدة",
-        "$mainUrl/tv/?page=" to "مسلسلات جديدة ",
-        "$mainUrl/tv/korean?page=" to "الدراما الكورية ",
-        "$mainUrl/animes/popular?page=" to "مسلسلات الانمي",
-        "$mainUrl/wwe/?page=" to "عروض المصارعة ",
-        "$mainUrl/movies/latest-bluray-2020-2019?page=" to "أفلام جديدة BluRay",
-        "$mainUrl/masrahiyat/?page=" to "مسرحيات ",
-        "$mainUrl/movies/latest?page=" to "أحدث الاضافات",
-        "$mainUrl/movies/comedy?page=" to "أفلام كوميدية",
+        "$mainUrl/recent" to "أحدث الاضافات",
+        "$mainUrl/category/movies/" to "أفلام",
+        "$mainUrl/series/" to "مسلسلات",
+        "$mainUrl/category/anime/" to "انمي",
+        "$mainUrl/trending/" to "الأفلام الأكثر مشاهدة",
+        "$mainUrl/category/series/مسلسلات-كورية/" to "الدراما الكورية ",
+        "$mainUrl/category/anime/مسلسلات-انمي/" to "مسلسلات الانمي",
+        "$mainUrl/category/wwe/" to "عروض المصارعة ",
+        "$mainUrl/movies/bluray/" to "أفلام جديدة BluRay",
+        "$mainUrl/masrahiyat/" to "مسرحيات ",
+        "$mainUrl/category/movies/افلام-كوميدي/" to "أفلام كوميدية",
         "$mainUrl/explore/?q=superhero/" to "أفلام سوبر هيرو",
-        "$mainUrl/movies/animation?page=" to "أفلام انمي و كرتون",
-        "$mainUrl/movies/romance?page=" to "أفلام رومانسية",
-        "$mainUrl/movies/drama?page=" to "أفلام دراما",
-        "$mainUrl/movies/horror?page=" to "أفلام رعب",
-        "$mainUrl/movies/documentary?page=" to "أفلام وثائقية",
-        "$mainUrl/World-War-Movies/?page=" to "أفلام عن الحرب العالمية ☢",
-        "$mainUrl/End-Of-The-World-Movies/?page=" to "أفلام عن نهاية العالم",
-        "$mainUrl/movies/arab?page=" to "أفلام عربية ",
+        "$mainUrl/category/movies/افلام-كرتون/" to "أفلام انمي و كرتون",
+        "$mainUrl/category/movies/افلام-رومانسية/" to "أفلام رومانسية",
+        "$mainUrl/category/movies/افلام-دراما/" to "أفلام دراما",
+        "$mainUrl/category/movies/افلام-رعب/" to "أفلام رعب",
+        "$mainUrl/category/movies/افلام-وثائقية/" to "أفلام وثائقية",
+        "$mainUrl/World-War-Movies/" to "أفلام عن الحرب العالمية ☢",
+        "$mainUrl/End-Of-The-World-Movies/" to "أفلام عن نهاية العالم",
+        "$mainUrl/category/movies/افلام-عربية/" to "أفلام عربية ",
     )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + page).document
+        val url = if(page > 1) {
+             if(request.data.endsWith("/")) "${request.data}page/$page/" else "${request.data}/page/$page/"
+        } else {
+            request.data
+        }
+        
+        val doc = app.get(url).document
         val list = doc.select(".postBlock")
             .mapNotNull { element ->
                 element.toSearchResponse()
@@ -123,7 +131,7 @@ class EgyBestProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
-        val posterUrl = doc.select("div.movie_img a img")?.attr("src")
+        val posterUrl = doc.select("div.movie_img a img")?.attr("data-img")?.ifBlank { doc.select("div.movie_img a img")?.attr("src") }
         val year = doc.select("div.movie_title h1 a")?.text()?.toIntOrNull()
         val title = doc.select("div.movie_title h1 span").text()
         val youtubeTrailer = doc.select("div.play")?.attr("url")
@@ -138,7 +146,7 @@ class EgyBestProvider : MainAPI() {
 
         val actors = doc.select("div.cast_list .cast_item").mapNotNull {
             val name = it.selectFirst("div > a > img")?.attr("alt") ?: return@mapNotNull null
-            val image = it.selectFirst("div > a > img")?.attr("src") ?: return@mapNotNull null
+            val image = it.selectFirst("div > a > img")?.attr("data-img") ?: it.selectFirst("div > a > img")?.attr("src") ?: return@mapNotNull null
             val roleString = it.selectFirst("div > span")!!.text()
             val mainActor = Actor(name, image)
             ActorData(actor = mainActor, roleString = roleString)
@@ -213,65 +221,21 @@ class EgyBestProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val baseURL = data.split("/")[0] + "//" + data.split("/")[2]
-        val client = Requests().baseClient
-        val session = Session(client)
-        println(baseURL)
-        println(data)
-        val doc = session.get(data).document
-
-        val vidstreamURL = baseURL + doc.select("iframe.auto-size").attr("src")
-
-        val videoSoup = session.get(vidstreamURL, cookies = mapOf(
-            "PSSID" to this@EgyBestProvider.pssid,
-        )).document
-        videoSoup.select("source").firstOrNull { it.hasAttr("src") }?.attr("src")?.let {
-            M3u8Helper.generateM3u8(
-                this.name,
-                it,
-                referer = mainUrl,
-                headers = mapOf("range" to "bytes=0-")
-            ).forEach(callback)
-        } ?: run {
-            var jsCode = videoSoup.select("script")[1].html()
-            val function = videoSoup.select("script")[2].attr("onload")
-            val verificationToken = Regex("\\{'[0-9a-zA-Z_]*':'ok'\\}").findAll(jsCode).first().value.replace("\\{'|':.*".toRegex(), "")
-            val encodedAdLinkVar = Regex("\\([0-9a-zA-Z_]{2,12}\\[Math").findAll(jsCode).first().value.replace("\\(|\\[M.*".toRegex(),"")
-            val encodingArraysRegEx = Regex(",[0-9a-zA-Z_]{2,12}=\\[]").findAll(jsCode).toList()
-            val firstEncodingArray = encodingArraysRegEx[1].value.replace(",|=.*".toRegex(),"")
-            val secondEncodingArray = encodingArraysRegEx[2].value.replace(",|=.*".toRegex(),"")
-            
-            jsCode = jsCode.replace("^<script type=\"text/javascript\">".toRegex(),"")
-            jsCode = jsCode.replace(",\\\$\\('\\*'\\).*".toRegex(),";")
-            jsCode = jsCode.replace(",ismob=(.*)\\(navigator\\[(.*)\\]\\)[,;]".toRegex(),";")
-            jsCode = jsCode.replace("var a0b=\\(function\\(\\)(.*)a0a\\(\\);".toRegex(),"")
-            jsCode = "$jsCode var link = ''; for (var i = 0; i <= $secondEncodingArray['length']; i++) { link += $firstEncodingArray[$secondEncodingArray[i]] || ''; } return [link, $encodedAdLinkVar[0]] };var result = $function"
-
-            val javascriptResult = jsCode.runJS("result").split(",")
-            val verificationPath = javascriptResult[0]
-            val encodedAdPath = javascriptResult[1]
-            println(javascriptResult)
-
-            val encodedString = encodedAdPath + "=".repeat(encodedAdPath.length % 4)
-            val decodedPath = String(Base64.getDecoder().decode(encodedString))
-            println("String( $encodedString ) -> Decoded( $decodedPath )")
-            val adLink = "$baseURL/$decodedPath"
-            println(adLink)
-            val verificationLink = "$baseURL/tvc.php?verify=$verificationPath"
-            session.get(adLink)
-            session.post(verificationLink, data=mapOf(verificationToken to "ok"))
-
-            val vidstreamResponse = session.get(vidstreamURL).document
-            val mediaLink = baseURL + vidstreamResponse.select("source").attr("src")
-            println("mediaLink: $mediaLink")
-            println("Cookies: ${session.baseClient.cookieJar.loadForRequest(data.toHttpUrl())}")
-            M3u8Helper.generateM3u8(
-                this.name,
-                mediaLink,
-                referer = mainUrl,
-                headers = mapOf("range" to "bytes=0-")
-            ).forEach(callback)
+        val doc = app.get(data).document
+        
+        doc.select("ul#watch-servers-list li, .servList li").mapNotNull {
+            val onclick = it.attr("onclick")
+            val url = Regex("loadIframe\\(this, '(.*?)'\\)").find(onclick)?.groupValues?.get(1)
+            url
+        }.forEach { url ->
+             loadExtractor(url, subtitleCallback, callback)
         }
+        
+        // Fallback for default iframe if list is empty or logic fails
+        doc.select("iframe#videoPlayer").attr("src").takeIf { it.isNotBlank() }?.let { url ->
+            loadExtractor(url, subtitleCallback, callback)
+        }
+
         return true
     }
 }
