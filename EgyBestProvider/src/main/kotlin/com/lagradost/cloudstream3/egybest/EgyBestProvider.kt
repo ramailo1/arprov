@@ -31,23 +31,37 @@ class EgyBestProvider : MainAPI() {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
 
-    private fun Element?.extractPoster(): String? {
+    private fun Element?.extractPoster(doc: Element? = null): String? {
         if (this == null) return null
         val img = when {
             this.tagName() == "img" -> this
             else -> this.selectFirst("img")
-        } ?: return null
+        }
 
-        return img.attr("data-img")
-            .ifBlank { img.attr("data-src") }
-            .ifBlank { img.attr("src") }
-            .takeIf { it.isNotBlank() }
+        val poster = img?.attr("data-img")
+            ?.ifBlank { img.attr("data-src") }
+            ?.ifBlank { img.attr("src") }
+            ?.takeIf { it.isNotBlank() }
+
+        if (poster != null) return fixUrl(poster)
+
+        // OpenGraph fallback (page-level)
+        val og = doc?.selectFirst("meta[property=og:image]")
+            ?.attr("content")
+            ?.takeIf { it.isNotBlank() }
+
+        if (og != null) return fixUrl(og)
+
+        // Twitter card fallback
+        return doc?.selectFirst("meta[name=twitter:image]")
+            ?.attr("content")
+            ?.takeIf { it.isNotBlank() }
             ?.let { fixUrl(it) }
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val url = this.attr("href") ?: return null
-        val posterUrl = this.extractPoster()
+        val posterUrl = this.extractPoster(this.ownerDocument())
         // Browser inspection confirmed title is in 'div.title', not 'h3'
         var title = select(".title").text()
         if (title.isEmpty()) title = this.attr("title")
@@ -117,12 +131,13 @@ class EgyBestProvider : MainAPI() {
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
         
         // Browser verification: Poster is in .postImg or .postCover, real img in data-img
-        val posterUrl = doc.selectFirst(".postImg img, .postCover img, .postBlockColImg img, .poster img").extractPoster()
+        val posterUrl = doc.selectFirst(".postImg, .postCover, .postBlockColImg, .poster")
+            .extractPoster(doc)
 
         // Title is often in .postTitle h1, or just h1
         val title = doc.select(".postTitle h1, h1.title, h1").text()
 
-        // Metadata table uses table.full or .table, not .movieTable
+        // Metadata table uses table.postTable, table.full or .table, not .movieTable
         val table = doc.select("table.postTable, table.full, table.table")
         
         val year = table.select("tr").firstOrNull { it.text().contains("سنة الإنتاج") }
@@ -138,7 +153,12 @@ class EgyBestProvider : MainAPI() {
             // .story div a structure from user snippet: <a ...><img ...><span>Role</span></a>
             val imgTag = it.selectFirst("img")
             val name = imgTag?.attr("alt") ?: it.text()
-            val image = imgTag?.attr("data-img") ?: imgTag?.attr("src") 
+            val image = imgTag?.attr("data-img")
+                ?.ifBlank { imgTag.attr("data-src") }
+                ?.ifBlank { imgTag.attr("src") }
+                ?.takeIf { it.isNotBlank() }
+                ?.let { url -> fixUrl(url) }
+                
             val roleString = it.selectFirst("span")?.text() ?: ""
             if (image == null) return@mapNotNull null
             
@@ -175,8 +195,16 @@ class EgyBestProvider : MainAPI() {
                      val season = Regex("season-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText() ?: 
                                   Regex("الموسم-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText()
                      
+                     // Thumbnail detection for episodes (from season page)
+                     // val thumb = d.selectFirst("iframe, video, .postImg, .player")?.extractPoster(d)
+
                      d.select("a:contains(الحلقة)").forEach { epLink ->
                         val href = epLink.attr("href")
+                        
+                        // Per-episode request for best thumbnail accuracy
+                        val epDoc = app.get(fixUrl(href)).document
+                        val epThumb = epDoc.selectFirst(".postImg, .player, iframe")?.extractPoster(epDoc)
+
                         val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
                                  Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
                         
@@ -185,12 +213,15 @@ class EgyBestProvider : MainAPI() {
                                 this.name = epLink.text()
                                 this.season = season
                                 this.episode = ep
+                                this.posterUrl = epThumb ?: posterUrl
                             }
                         )
                      }
                 }
             } else {
                 // Try finding episodes on the current page if no season links
+                val thumb = doc.selectFirst("iframe, video, .postImg, .player")?.extractPoster(doc)
+
                 doc.select("a:contains(الحلقة)").forEach { epLink ->
                         val href = epLink.attr("href")
                         val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
@@ -201,6 +232,7 @@ class EgyBestProvider : MainAPI() {
                                 this.name = epLink.text()
                                 this.season = 1
                                 this.episode = ep
+                                this.posterUrl = thumb
                             }
                         )
                 }
