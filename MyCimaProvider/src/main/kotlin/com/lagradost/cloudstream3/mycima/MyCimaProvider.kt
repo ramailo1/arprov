@@ -1,274 +1,202 @@
 package com.lagradost.cloudstream3.mycima
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import org.jsoup.Jsoup
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
-import com.fasterxml.jackson.module.kotlin.readValue
 
 class MyCimaProvider : MainAPI() {
-    private inline fun <reified T> parseJson(text: String): T {
-        return mapper.readValue(text)
-    }
-
-    override var lang = "ar"
     override var mainUrl = "https://mycima.rip"
-    private val alternativeUrl = "https://wecima.click"
-    override var name = "MyCima (In Progress)"
-    override val usesWebView = false
+    override var name = "MyCima"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
+    override var lang = "ar"
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.Anime
+    )
 
-    private fun String.getImageURL(): String? {
-        return this.replace("--im(age|g):url\\(|\\);".toRegex(), "")
-    }
+    // Headers to bypass bot protection
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
+        "Referer" to mainUrl
+    )
 
-    private fun String.getIntFromText(): Int? {
-        return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
-    }
-
-    private fun Element.toSearchResponse(): SearchResponse? {
-        val url = select("div.Thumb--GridItem a")
-        val posterUrl = select("span.BG--GridItem").let { it.attr("data-lazy-style").ifEmpty { it.attr("style") } }
-            ?.getImageURL()
-        val year = select("div.GridItem span.year")?.text()
-        val title = select("div.Thumb--GridItem strong").text()
-            .replace("$year", "")
-            .replace("مشاهدة|فيلم|مسلسل|مترجم".toRegex(), "")
-            .replace("( نسخة مدبلجة )", " ( نسخة مدبلجة ) ")
-        // If you need to differentiate use the url.
-        return newMovieSearchResponse(
-            title,
-            url.attr("href"),
-            if(url.attr("title").contains("فيلم")) TvType.Movie else TvType.TvSeries,
-        ) {
-            this.posterUrl = posterUrl
-            this.year = year?.getIntFromText()
-        }
-    }
     override val mainPage = mainPageOf(
-            "$mainUrl/movies/page/" to "Movies",
-            "$mainUrl/episodes/page/" to "Latest Episodes",
-            "$mainUrl/seriestv/page/" to "Series",
-            "$mainUrl/movies/top/page/" to "Top Movies",
-            "$mainUrl/seriestv/top/page/" to "Top Series",
-        )
+        "$mainUrl/" to "جديد سيما  ",
+        "$mainUrl/movies/" to "أفلام جديدة",
+        "$mainUrl/episodes/" to "آخر الحلقات",
+        "$mainUrl/series/" to "مسلسلات جديدة",
+        "$mainUrl/category/برامج-تلفزيونية/" to "برامج تلفزيونية"
+    )
 
-    override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + page).document
-        val list = doc.select("div.Grid--WecimaPosts div.GridItem").mapNotNull { element ->
-            element.toSearchResponse()
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = request.data + if (page > 1) "page/$page/" else ""
+        val document = app.get(url, headers = headers).document
+        val home = document.select("div#MainFiltar > a.GridItem, .GridItem").mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(request.name, home)
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val anchor = this.selectFirst("a")
+        val title = anchor?.selectFirst("strong")?.text()?.trim() 
+            ?: anchor?.attr("title")?.trim()
+            ?: this.selectFirst("strong")?.text()?.trim()
+            ?: return null
+            
+        val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
+        val posterUrl = extractPosterUrl(this)
+        
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
         }
-        return newHomePageResponse(request.name, list)
+    }
+
+    private fun extractPosterUrl(element: Element, document: Element? = null): String? {
+        val cssUrlRegex = Regex("""url\(['"]?([^'")]+)['"]?\)""")
+        val attrs = listOf("style", "data-lazy-style", "data-style", "data-bg", "data-bgset")
+        
+        // 1. Check the element itself and common child elements
+        // Added 'wecima' as it's a custom tag used on this site for poster containers
+        val elems = listOf(element) + element.select(".BG--GridItem, .BG--Single-begin, .Img--Poster--Single-begin, .Thumb--GridItem, span, a, picture, img, wecima")
+        
+        for (el in elems) {
+            // a) Check attributes for CSS url(...) or direct link
+            for (attr in attrs) {
+                el.attr(attr).takeIf { it.isNotBlank() }?.let { value ->
+                    // CSS url(...)
+                    cssUrlRegex.find(value)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
+                    // Direct HTTP/HTTPS or protocol-relative
+                    if (value.startsWith("http")) return fixUrl(value)
+                    if (value.startsWith("//")) return fixUrl("https:$value")
+                }
+            }
+
+            // b) Check <img> tags
+            el.select("img[data-src], img[data-lazy-src], img[src], img[data-srcset]").forEach { img ->
+                val url = img.attr("data-src").ifBlank {
+                    img.attr("data-lazy-src").ifBlank { img.attr("src").ifBlank { img.attr("data-srcset") } }
+                }
+                if (url.isNotBlank()) return fixUrl(url)
+            }
+
+            // c) Check <picture> sources
+            el.select("picture source[data-srcset], picture img[data-src]").forEach { pic ->
+                val url = pic.attr("data-srcset").ifBlank { pic.attr("data-src") }
+                if (url.isNotBlank()) return fixUrl(url)
+            }
+        }
+
+        // 2. Check meta tags in the document (if provided)
+        document?.let { doc ->
+            listOf("meta[property=og:image]", "meta[name=twitter:image]", "link[rel=image_src]").forEach { selector ->
+                doc.selectFirst(selector)?.attr("content")?.takeIf { it.isNotBlank() && !it.contains("logo") && !it.contains("default") }?.let { return fixUrl(it) }
+            }
+        }
+
+        return null // fallback if nothing found
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val q = query.replace(" ", "%20")
-        val result = arrayListOf<SearchResponse>()
-        listOf(
-            "$mainUrl/search/$q",
-            "$mainUrl/search/$q/list/series/",
-            "$mainUrl/search/$q/list/anime/"
-        ).forEach { url ->
-            val d = app.get(url).document
-            d.select("div.Grid--WecimaPosts div.GridItem").mapNotNull {
-                if (it.text().contains("اعلان")) return@mapNotNull null
-                it.toSearchResponse()?.let { it1 -> result.add(it1) }
-            }
-        }
-        return result.distinct().sortedBy { it.name }
+        val document = app.get("$mainUrl/?s=$query", headers = headers).document
+        return document.select("div#MainFiltar > .GridItem, .GridItem").mapNotNull { it.toSearchResult() }
     }
 
-    data class MoreEPS(
-        val output: String
-    )
+    @Suppress("DEPRECATION")
+    override suspend fun load(url: String): LoadResponse? {
+        val fixedUrl = fixUrl(url)
+        val document = app.get(fixedUrl, headers = headers).document
+        
+        val title = document.selectFirst("h1")?.text()?.trim() ?: return null
+        
+        // TIERED POSTER EXTRACTION (Final fix for black posters + Red Oaks protection)
+        val posterUrl = 
+            document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it, document) }
+            ?: extractPosterUrl(document.selectFirst(".Poster--Single-begin") ?: document, document)
 
-    override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
-        val isMovie = doc.select("ol li:nth-child(3)").text().contains("افلام")
-        val posterUrl =
-            doc.select("wecima.separated--top")?.attr("data-lazy-style")?.getImageURL()
-                ?.ifEmpty { doc.select("meta[itemprop=\"thumbnailUrl\"]")?.attr("content") }
-                ?.ifEmpty { doc.select("wecima.separated--top")?.attr("style")?.getImageURL() }
-        val year =
-            doc.select("div.Title--Content--Single-begin h1 a.unline")?.text()?.getIntFromText()
-        val title = doc.select("div.Title--Content--Single-begin h1").text()
-            .replace("($year)", "")
-            .replace("مشاهدة|فيلم|مسلسل|مترجم|انمي".toRegex(), "")
-        // A bit iffy to parse twice like this, but it'll do.
-        val duration =
-            doc.select("ul.Terms--Content--Single-begin li").firstOrNull {
-                it.text().contains("المدة")
-            }?.text()?.getIntFromText()
-
-        val synopsis = doc.select("div.StoryMovieContent").text()
-            .ifEmpty { doc.select("div.PostItemContent").text() }
-
-        val tags = doc.select("li:nth-child(3) > p > a").map { it.text() }
-
-        val actors = doc.select("div.List--Teamwork > ul.Inner--List--Teamwork > li")?.mapNotNull {
-            val name = it?.selectFirst("a > div.ActorName > span")?.text() ?: return@mapNotNull null
-            val image = it.attr("style")
-                ?.getImageURL()
-                ?: return@mapNotNull null
-            ActorData(actor = Actor(name, image))
+        println("DEBUG: Poster URL = $posterUrl")
+        
+        val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
+        val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
+        
+        val genres = document.select("a[href*=/genre/]").map { it.text() }
+        val actors = document.select("a[href*=/actor/], a[href*=/producer/]").map { 
+            Actor(it.text(), "")
         }
-        val recommendations =
-            doc.select("div.Grid--WecimaPosts div.GridItem")?.mapNotNull { element ->
-                element.toSearchResponse()
-            }
-
-        return if (isMovie) {
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                url
-            ) {
-                this.posterUrl = posterUrl
-                this.year = year
-                this.plot = synopsis
-                this.tags = tags
-                this.duration = duration
-                this.recommendations = recommendations
-                this.actors = actors
-            }
-        } else {
-            val episodes = ArrayList<Episode>()
-            val seasons = doc.select("div.List--Seasons--Episodes a").not(".selected").map {
-                it.attr("href")
-            }
-            val moreButton = doc.select("div.MoreEpisodes--Button")
-            val season =
-                doc.select("div.List--Seasons--Episodes a.selected").text().getIntFromText()
-            for (it in doc.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")) {
+        
+        val duration = document.selectFirst("span:contains(دقيقة)")?.text()
+            ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+        
+        // Check if it's a series
+        val isSeries = document.selectFirst("a[href*=/series/]") != null || 
+                       document.selectFirst("div.seasons, .EpisodesList") != null ||
+                       url.contains("مسلسل") ||
+                       title.contains("مسلسل")
+        
+        return if (isSeries) {
+            val episodes = mutableListOf<Episode>()
+            
+            // Get episodes from current page list or seasons
+            document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode)").forEach { ep ->
+                val epHref = ep.attr("href")
+                val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
+                val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
+                    ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                
+                if (epHref.isNotEmpty()) {
                     episodes.add(
-                        newEpisode(it.attr("href")) {
-                            this.name = it.text()
-                            this.season = season
-                            this.episode = it.text().getIntFromText()
+                        newEpisode(fixUrl(epHref)) {
+                            this.name = epName
+                            this.episode = epNum
                         }
                     )
                 }
-            if (moreButton.isNotEmpty()) {
-                val n = doc.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a").size
-                val totals =
-                    doc.select("div.Episodes--Seasons--Episodes a").first()!!.text().getIntFromText()
-                val mEPS = arrayListOf(
-                    n,
-                    n + 40,
-                    n + 80,
-                    n + 120,
-                    n + 160,
-                    n + 200,
-                    n + 240,
-                    n + 280,
-                    n + 320,
-                    n + 360,
-                    n + 400,
-                    n + 440,
-                    n + 480,
-                    n + 520,
-                    n + 660,
-                    n + 700,
-                    n + 740,
-                    n + 780,
-                    n + 820,
-                    n + 860,
-                    n + 900,
-                    n + 940,
-                    n + 980,
-                    n + 1020,
-                    n + 1060,
-                    n + 1100,
-                    n + 1140,
-                    n + 1180,
-                    n + 1220,
-                    totals
-                )
-                for (it in mEPS) {
-                    if (it != null) {
-                        if (it > totals!!) break
-                        val ajaxURL =
-                            "$mainUrl/AjaxCenter/MoreEpisodes/${moreButton.attr("data-term")}/$it"
-                        val jsonResponse = app.get(ajaxURL)
-                        val json = parseJson<MoreEPS>(jsonResponse.text)
-                        val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
-                        for (aLink in document.select("a")) {
-                            episodes.add(
-                                newEpisode(aLink.attr("href")) {
-                                    this.name = aLink.text()
-                                    this.season = season
-                                    this.episode = aLink.text().getIntFromText()
-                                }
-                            )
+            }
+            
+            // If no episodes found, try season links
+            if (episodes.isEmpty()) {
+                val seasonLinks = document.select("a[href*=/season/], a:contains(الموسم)")
+                seasonLinks.forEach { seasonLink ->
+                    val seasonHref = seasonLink.attr("href")
+                    if(seasonHref.isNotEmpty()) {
+                        val seasonDoc = app.get(fixUrl(seasonHref), headers = headers).document
+                        seasonDoc.select(".EpisodesList a, a.GridItem, a:has(span.episode)").forEach { ep ->
+                            val epHref = ep.attr("href")
+                            val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
+                            val epNum = ep.selectFirst("span.episode")?.text()
+                                ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                            
+                            if (epHref.isNotEmpty()) {
+                                episodes.add(
+                                    newEpisode(fixUrl(epHref)) {
+                                        this.name = epName
+                                        this.episode = epNum
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
-            if (seasons.isNotEmpty()) {
-                for (surl in seasons) {
-                    if (surl.contains("%d9%85%d8%af%d8%a8%d9%84%d8%ac")) continue
-                    val seasonsite = app.get(surl).document
-                    val fmoreButton = seasonsite.select("div.MoreEpisodes--Button")
-                    val fseason = seasonsite.select("div.List--Seasons--Episodes a.selected").text()
-                        .getIntFromText() ?: 1
-                    for (it in seasonsite.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a")) {
-                            episodes.add(
-                                newEpisode(it.attr("href")) {
-                                    this.name = it.text()
-                                    this.season = fseason
-                                    this.episode = it.text().getIntFromText()
-                                }
-                            )
-                        }
-                    if (fmoreButton.isNotEmpty()) {
-                        val n =
-                            seasonsite.select("div.Seasons--Episodes div.Episodes--Seasons--Episodes a").size
-                        val totals =
-                            seasonsite.select("div.Episodes--Seasons--Episodes a").first()!!.text()
-                                .getIntFromText()
-                        val mEPS = arrayListOf(
-                            n, n + 40, n + 80, n + 120, n + 160, n + 200, n + 240, n + 280, n + 320, n + 360, n + 400, n + 440, n + 480, n + 520, n + 660, n + 700, n + 740, n + 780, n + 820, n + 860, n + 900, n + 940, n + 980, n + 1020, n + 1060, n + 1100, n + 1140, n + 1180, n + 1220, totals
-                        )
-                        for (it in mEPS) {
-                            if (it != null) {
-                                if (it > totals!!) break
-                                val ajaxURL =
-                                    "$mainUrl/AjaxCenter/MoreEpisodes/${fmoreButton.attr("data-term")}/$it"
-                                val jsonResponse = app.get(ajaxURL)
-                                val json = parseJson<MoreEPS>(jsonResponse.text)
-                                val document = Jsoup.parse(json.output?.replace("""\""", "") ?: "")
-                                for (aLink in document.select("a")) {
-                                    episodes.add(
-                                        newEpisode(aLink.attr("href")) {
-                                            this.name = aLink.text()
-                                            this.season = fseason
-                                            this.episode = aLink.text().getIntFromText()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    } else continue
-                }
-            }
-            newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                episodes.distinct().sortedBy { it.episode }) {
-                this.duration = duration
+            
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = posterUrl
-                this.tags = tags
                 this.year = year
-                this.plot = synopsis
-                this.recommendations = recommendations
-                this.actors = actors
+                this.plot = description
+                this.tags = genres
+                this.duration = duration
+                addActors(actors)
+            }
+        } else {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = posterUrl
+                this.year = year
+                this.plot = description
+                this.tags = genres
+                this.duration = duration
+                addActors(actors)
             }
         }
     }
@@ -279,26 +207,37 @@ class MyCimaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
-        for (it in doc.select(".WatchServersList > ul > li")) {
-            val url = it.select("btn").attr("data-url")
-            loadExtractor(url, data, subtitleCallback, callback)
-        }
-        for (it in doc.select("ul.List--Download--Wecima--Single:nth-child(2) li")) {
-                for (linkElement in it.select("a")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            this.name,
-                            linkElement.attr("href"),
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            referer = this@MyCimaProvider.mainUrl
-                            quality = linkElement.select("resolution").text().getIntFromText() ?: 0
-                        }
-                    )
+        val document = app.get(data, headers = headers).document
+        
+        // Method 1: AJAX Player extraction (as suggested)
+        document.select(".WatchServersList li[data-id]").forEach { server ->
+            val serverId = server.attr("data-id")
+            if (serverId.isNotEmpty()) {
+                val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php?action=get_player&server=$serverId"
+                val playerResponse = app.get(ajaxUrl, headers = headers).document
+                val iframeSrc = playerResponse.selectFirst("iframe")?.attr("src")
+                if (!iframeSrc.isNullOrEmpty()) {
+                    loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
                 }
             }
+        }
+        
+        // Method 2: Standard iframe extraction (fallback)
+        document.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotEmpty() && (src.startsWith("http") || src.startsWith("//"))) {
+                loadExtractor(fixUrl(src), data, subtitleCallback, callback)
+            }
+        }
+
+        // Method 3: Direct server links (fallback)
+        document.select("ul#watch li[data-watch], a[href*=filemoon], a[href*=streamhg], a[href*=earnvids]").forEach { link ->
+            val href = link.attr("data-watch").ifEmpty { link.attr("href") }
+            if (href.isNotEmpty()) {
+                loadExtractor(fixUrl(href), data, subtitleCallback, callback)
+            }
+        }
+        
         return true
     }
 }
