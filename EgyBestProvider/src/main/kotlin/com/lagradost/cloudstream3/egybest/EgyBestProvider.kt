@@ -40,6 +40,14 @@ class EgyBestProvider : MainAPI() {
             && !decoded.contains("الحلقة") && !decoded.contains("episode")
     }
 
+    private fun String.toWesternDigits(): String {
+        val arabicDigits = mapOf(
+            '٠' to '0', '١' to '1', '٢' to '2', '٣' to '3', '٤' to '4',
+            '٥' to '5', '٦' to '6', '٧' to '7', '٨' to '8', '٩' to '9'
+        )
+        return this.map { arabicDigits[it] ?: it }.joinToString("")
+    }
+
     private fun String.getYearFromTitle(): Int? =
         Regex("""\((\d{4})\)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
 
@@ -223,51 +231,82 @@ class EgyBestProvider : MainAPI() {
         }
 
         val episodes = ArrayList<Episode>()
-        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList().filter {
-            it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") }
-        }.map { it.attr("href") }.distinct()
 
-        val processEpisodeLinks: (List<Element>, Int?, String?) -> Unit = { episodeLinks, season, defaultPoster ->
-            val thumbMap = episodeLinks.associate { ep -> ep.attr("href") to (ep.selectFirst("img")?.extractPoster() ?: defaultPoster) }
-            episodeLinks.forEach { epLink ->
+        // Get all season links
+        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList()
+            .filter { it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") } }
+            .map { it.attr("href") }
+            .distinct()
+
+        // Function to process episode links
+        val processEpisodeLinks: (List<Element>, Int?, String?) -> Unit = { episodeLinks, seasonNum, defaultPoster ->
+            val thumbMap = episodeLinks.associate { ep ->
+                ep.attr("href") to (ep.selectFirst("img")?.extractPoster() ?: defaultPoster)
+            }
+
+            episodeLinks.forEachIndexed { index, epLink ->
                 val href = epLink.attr("href")
                 val decodedHref = decode(href)
-                val epText = epLink.text()
-                
-                val ep = Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(decodedHref)?.groupValues?.get(2)?.toIntOrNull()
-                    ?: Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(epText)?.groupValues?.get(2)?.toIntOrNull()
-                
+                val epText = epLink.text().cleanName()
+
+                // Normalize Arabic numerals
+                val hrefDigits = decodedHref.toWesternDigits()
+                val textDigits = epText.toWesternDigits()
+
+                // Extract episode number from href or text
+                val epNumber = Regex("""(?:ep|الحلقة|episode)[^\d]*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(hrefDigits)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""(?:ep|الحلقة|episode)[^\d]*(\d+)""", RegexOption.IGNORE_CASE)
+                        .find(textDigits)?.groupValues?.get(1)?.toIntOrNull()
+
+                val episodeNum = epNumber ?: (index + 1)
+
                 episodes.add(newEpisode(fixUrl(href)) {
-                    this.name = ep?.let { "الحلقة $it" } ?: epText.cleanName()
-                    this.season = season ?: 1
-                    this.episode = ep
+                    this.name = epNumber?.let { "الحلقة $it" } ?: epText
+                    this.season = seasonNum ?: 1
+                    this.episode = episodeNum
                     this.posterUrl = thumbMap[href]
                 })
             }
         }
 
         if (seasonLinks.isNotEmpty()) {
+            // Loop through each season
             seasonLinks.forEach { seasonUrl ->
                 val d = app.get(fixUrl(seasonUrl)).document
-                val seasonNum = Regex("""(season|الموسم)[^\d]*(\d+)""").find(seasonUrl)?.groupValues?.get(2)?.toIntOrNull()
+                val normalizedSeasonUrl = seasonUrl.toWesternDigits()
+                val seasonNum = Regex("""(?:season|الموسم)[^\d]*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(normalizedSeasonUrl)?.groupValues?.get(1)?.toIntOrNull()
+
                 val episodeLinks = d.select(".all-episodes a").ifEmpty {
                     d.select("a:contains(الحلقة)").toList().filter { el ->
-                        el.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small") }
+                        el.parents().none { p ->
+                            p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
+                        }
                     }
                 }
+
                 processEpisodeLinks(episodeLinks, seasonNum, posterUrl)
             }
         } else {
+            // Single season / no seasons
             val episodeLinks = doc.select(".all-episodes a").ifEmpty {
                 doc.select("a:contains(الحلقة)").toList().filter { el ->
-                    el.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small") }
+                    el.parents().none { p ->
+                        p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
+                    }
                 }
             }
+
             processEpisodeLinks(episodeLinks, 1, posterUrl)
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }
-            .sortedWith(compareBy({ it.season }, { it.episode }))) {
+        return newTvSeriesLoadResponse(
+            title,
+            url,
+            TvType.TvSeries,
+            episodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode ?: Int.MAX_VALUE }))
+        ) {
             this.posterUrl = posterUrl
             this.tags = tags
             this.year = year
@@ -275,6 +314,7 @@ class EgyBestProvider : MainAPI() {
             this.actors = actors
         }
     }
+
 
     // ======= LOAD LINKS =======
     @TargetApi(Build.VERSION_CODES.O)
