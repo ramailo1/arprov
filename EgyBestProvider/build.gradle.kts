@@ -1,12 +1,12 @@
-version = 10
+version = 11
 
 cloudstream {
-    description = "EgyBest Provider - (In Progress)"
+    description = "EgyBest Provider"
     authors = listOf( "ramailo1" )
 
 	language = "ar"
 	
-    status = 0
+    status = 1
 
     tvTypes = listOf( "TvSeries" , "Movie" , "Anime" )
 
@@ -15,8 +15,4 @@ cloudstream {
 
 android {
     namespace = "com.lagradost.cloudstream3.egybest"
-}
-
-dependencies {
-    implementation("org.mozilla:rhino:1.7.14")
 }
