@@ -207,9 +207,19 @@ class MyCimaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Helper to decode govid.live/play/ proxy URLs
+        val decodeProxy: (String) -> String = { url ->
+            if (url.contains("govid.live/play/")) {
+                try {
+                    val b64 = url.substringAfter("/play/").substringBefore("/").replace("_", "/").replace("-", "+")
+                    String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+                } catch (e: Exception) { url }
+            } else url
+        }
+
         val document = app.get(data, headers = headers).document
         
-        // Method 1: AJAX Player extraction (as suggested)
+        // Method 1: AJAX Player extraction
         document.select(".WatchServersList li[data-id]").forEach { server ->
             val serverId = server.attr("data-id")
             if (serverId.isNotEmpty()) {
@@ -217,7 +227,7 @@ class MyCimaProvider : MainAPI() {
                 val playerResponse = app.get(ajaxUrl, headers = headers).document
                 val iframeSrc = playerResponse.selectFirst("iframe")?.attr("src")
                 if (!iframeSrc.isNullOrEmpty()) {
-                    loadExtractor(fixUrl(iframeSrc), data, subtitleCallback, callback)
+                    loadExtractor(fixUrl(decodeProxy(iframeSrc)), data, subtitleCallback, callback)
                 }
             }
         }
@@ -226,7 +236,7 @@ class MyCimaProvider : MainAPI() {
         document.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotEmpty() && (src.startsWith("http") || src.startsWith("//"))) {
-                loadExtractor(fixUrl(src), data, subtitleCallback, callback)
+                loadExtractor(fixUrl(decodeProxy(src)), data, subtitleCallback, callback)
             }
         }
 
@@ -234,7 +244,7 @@ class MyCimaProvider : MainAPI() {
         document.select("ul#watch li[data-watch], a[href*=filemoon], a[href*=streamhg], a[href*=earnvids]").forEach { link ->
             val href = link.attr("data-watch").ifEmpty { link.attr("href") }
             if (href.isNotEmpty()) {
-                loadExtractor(fixUrl(href), data, subtitleCallback, callback)
+                loadExtractor(fixUrl(decodeProxy(href)), data, subtitleCallback, callback)
             }
         }
         
