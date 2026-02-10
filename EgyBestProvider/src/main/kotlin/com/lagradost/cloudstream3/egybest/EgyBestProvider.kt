@@ -104,14 +104,15 @@ class EgyBestProvider : MainAPI() {
         val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
         
         // Browser verification: Poster is in .postImg or .postCover, real img in data-img
-        val posterUrl = doc.select(".postImg img, .postCover img").let { imgs ->
+        val posterUrl = doc.select(".postImg img, .postCover img, .postBlockColImg img").let { imgs ->
              imgs.attr("data-img").ifBlank { imgs.attr("src") }
         }
 
-        val title = doc.select("h1.title").text()
+        // Title is often in .postTitle h1, or just h1
+        val title = doc.select(".postTitle h1, h1.title, h1").text()
 
         // Metadata table uses table.full or .table, not .movieTable
-        val table = doc.select("table.full, table.table")
+        val table = doc.select("table.postTable, table.full, table.table")
         
         val year = table.select("tr").firstOrNull { it.text().contains("سنة الإنتاج") }
                    ?.select("td")?.lastOrNull()?.text()?.toIntOrNull()
@@ -119,12 +120,17 @@ class EgyBestProvider : MainAPI() {
         val tags = table.select("tr").firstOrNull { it.text().contains("النوع") }
                    ?.select("a")?.map { it.text() }
 
-        val synopsis = doc.select(".story").text()
+        // Plot is in p.description (User snippet), fallback to .story or .postStory
+        val synopsis = doc.select("p.description, .postStory, .story").text()
 
-        val actors = doc.select("div.cast_list .cast_item").mapNotNull {
-            val name = it.selectFirst("div > a > img")?.attr("alt") ?: return@mapNotNull null
-            val image = it.selectFirst("div > a > img")?.attr("data-img") ?: it.selectFirst("div > a > img")?.attr("src") ?: return@mapNotNull null
-            val roleString = it.selectFirst("div > span")!!.text()
+        val actors = doc.select("div.cast_list .cast_item, .story div a").mapNotNull {
+            // .story div a structure from user snippet: <a ...><img ...><span>Role</span></a>
+            val imgTag = it.selectFirst("img")
+            val name = imgTag?.attr("alt") ?: it.text()
+            val image = imgTag?.attr("data-img") ?: imgTag?.attr("src") 
+            val roleString = it.selectFirst("span")?.text() ?: ""
+            if (image == null) return@mapNotNull null
+            
             val mainActor = Actor(name, image)
             ActorData(actor = mainActor, roleString = roleString)
         }
