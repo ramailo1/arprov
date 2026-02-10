@@ -3,29 +3,29 @@ package com.lagradost.cloudstream3.egybest
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.nicehttp.Requests
-import com.lagradost.nicehttp.Session
-
-
 
 import android.annotation.TargetApi
 import android.os.Build
 
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Element
-import java.util.Base64
 
 class EgyBestProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://egibest.net"
     override var name = "EgyBest (In Progress)"
-	var pssid = ""
+
     override val usesWebView = false
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.Anime,
+        TvType.AsianDrama
+    )
+
+    private fun String.getYearFromTitle(): Int? {
+        return Regex("""\((\d{4})\)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
+    }
 
     private fun String.getIntFromText(): Int? {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
@@ -66,7 +66,7 @@ class EgyBestProvider : MainAPI() {
         var title = select(".title").text()
         if (title.isEmpty()) title = this.attr("title")
         val year = title.getYearFromTitle()
-        val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
+        val isMovie = Regex(".*/(movie|masrahiya)/").containsMatchIn(url)
         val tvType = if (isMovie) TvType.Movie else TvType.TvSeries
         title = if (year !== null) title else title.split(" (")[0].trim()
         val quality = select("span.ribbon span").text().replace("-", "")
@@ -122,15 +122,11 @@ class EgyBestProvider : MainAPI() {
         return result.distinct().sortedBy { it.name }
     }
 
-    private fun String.getYearFromTitle(): Int? {
-        return Regex("""\(\d{4}\)""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
-    }
-
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
-        val isMovie = Regex(".*/movie/.*|.*/masrahiya/.*").matches(url)
+        val isMovie = Regex(".*/(movie|masrahiya)/").containsMatchIn(url)
         
-        // Browser verification: Poster is in .postImg or .postCover, real img in data-img
+        // Browser verification: Poster is in .postImg or .postCover, or .postBlockColImg
         val posterUrl = doc.selectFirst(".postImg, .postCover, .postBlockColImg, .poster")
             .extractPoster(doc)
 
@@ -141,7 +137,7 @@ class EgyBestProvider : MainAPI() {
         val table = doc.select("table.postTable, table.full, table.table")
         
         val year = table.select("tr").firstOrNull { it.text().contains("سنة الإنتاج") }
-                   ?.select("td")?.lastOrNull()?.text()?.toIntOrNull()
+                   ?.select("td")?.lastOrNull()?.text()?.toIntOrNull() ?: title.getYearFromTitle()
         
         val tags = table.select("tr").firstOrNull { it.text().contains("النوع") }
                    ?.select("a")?.map { it.text() }
@@ -150,18 +146,12 @@ class EgyBestProvider : MainAPI() {
         val synopsis = doc.select("p.description, .postStory, .story").text()
 
         val actors = doc.select("div.cast_list .cast_item, .story div a").mapNotNull {
-            // .story div a structure from user snippet: <a ...><img ...><span>Role</span></a>
             val imgTag = it.selectFirst("img")
             val name = imgTag?.attr("alt") ?: it.text()
-            val image = imgTag?.attr("data-img")
-                ?.ifBlank { imgTag.attr("data-src") }
-                ?.ifBlank { imgTag.attr("src") }
-                ?.takeIf { it.isNotBlank() }
-                ?.let { url -> fixUrl(url) }
+            val image = imgTag?.extractPoster()
                 
             val roleString = it.selectFirst("span")?.text() ?: ""
-            if (image == null) return@mapNotNull null
-            
+            // Allow actors without images as per CloudStream best practices
             val mainActor = Actor(name, image)
             ActorData(actor = mainActor, roleString = roleString)
         }
@@ -187,71 +177,68 @@ class EgyBestProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val seasonLinks = doc.select("div.h_scroll a, a:contains(الموسم)").map { it.attr("href") }.distinct()
+            // Narrowly select season links inside specific containers to avoid random series
+            // Using .toList() to avoid Jsoup Elements/Kotlin Ambiguity in older compilers
+            val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList().filter { it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") } }.map { it.attr("href") }.distinct()
             
             if (seasonLinks.isNotEmpty()) {
                 seasonLinks.forEach { seasonUrl ->
                      val d = app.get(fixUrl(seasonUrl)).document
-                     val season = Regex("season-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText() ?: 
-                                  Regex("الموسم-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText()
+                     // Robust universal season regex
+                     val season = Regex("""(season|الموسم)[^\d]*(\d+)""").find(seasonUrl)?.groupValues?.get(2)?.toIntOrNull()
                      
                      // Prioritize .all-episodes (New Layout), fallback to filtered general links
                      var episodeLinks: List<Element> = d.select(".all-episodes a")
                      if (episodeLinks.isEmpty()) {
-                         episodeLinks = d.select("a:contains(الحلقة)").filter { element -> 
-                             element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") }
+                         episodeLinks = d.select("a:contains(الحلقة)").toList().filter { element -> 
+                             element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small") }
                          }
                      }
 
                      episodeLinks.forEach { epLink ->
                         val href = epLink.attr("href")
-                        
-                        // Per-episode request for best thumbnail accuracy
-                        val epDoc = app.get(fixUrl(href)).document
-                        val epThumb = epDoc.selectFirst(".postImg, .player, iframe")?.extractPoster(epDoc)
-
-                        val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
-                                 Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
+                        // Performance: Check current element for image first, fallback to series poster
+                        val epThumb = epLink.selectFirst("img")?.extractPoster() ?: posterUrl
+                        // Robust universal episode regex
+                        val ep = Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(href)?.groupValues?.get(2)?.toIntOrNull()
                         
                         episodes.add(
                             newEpisode(fixUrl(href)) {
-                                this.name = epLink.text()
+                                this.name = ep?.let { "الحلقة $it" } ?: epLink.text()
                                 this.season = season
                                 this.episode = ep
-                                this.posterUrl = epThumb ?: posterUrl
+                                this.posterUrl = epThumb
                             }
                         )
                      }
                 }
             } else {
-                // Try finding episodes on the current page if no season links
-                val thumb = doc.selectFirst("iframe, video, .postImg, .player")?.extractPoster(doc)
-
-                // Prioritize .all-episodes (New Layout), fallback to filtered general links
+                 // Try finding episodes on current page if no season list
                 var episodeLinks: List<Element> = doc.select(".all-episodes a")
                 if (episodeLinks.isEmpty()) {
-                     episodeLinks = doc.select("a:contains(الحلقة)").filter { element -> 
-                         element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") }
+                     episodeLinks = doc.select("a:contains(الحلقة)").toList().filter { element -> 
+                         element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small") }
                      }
                 }
 
                 episodeLinks.forEach { epLink ->
                         val href = epLink.attr("href")
-                        val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
-                                 Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
+                        val epThumb = epLink.selectFirst("img")?.extractPoster() ?: posterUrl
+                        val ep = Regex("""(ep|الحلقة)[^\d]*(\d+)""").find(href)?.groupValues?.get(2)?.toIntOrNull()
                         
                         episodes.add(
                             newEpisode(fixUrl(href)) {
-                                this.name = epLink.text()
+                                this.name = ep?.let { "الحلقة $it" } ?: epLink.text()
                                 this.season = 1
                                 this.episode = ep
-                                this.posterUrl = thumb
+                                this.posterUrl = epThumb
                             }
                         )
                 }
             }
             
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
+            // Sort by Season AND Episode key
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.year = year
@@ -261,7 +248,7 @@ class EgyBestProvider : MainAPI() {
             }
         }
     }
-	
+
     @TargetApi(Build.VERSION_CODES.O)
     override suspend fun loadLinks(
         data: String,
@@ -276,12 +263,13 @@ class EgyBestProvider : MainAPI() {
             val url = Regex("loadIframe\\(this, '(.*?)'\\)").find(onclick)?.groupValues?.get(1)
             url
         }.forEach { url ->
-             loadExtractor(url, subtitleCallback, callback)
+             // Ensure URLs are fixed (absolute)
+             loadExtractor(fixUrl(url), subtitleCallback, callback)
         }
         
         // Fallback for default iframe if list is empty or logic fails
         doc.select("iframe#videoPlayer").attr("src").takeIf { it.isNotBlank() }?.let { url ->
-            loadExtractor(url, subtitleCallback, callback)
+            loadExtractor(fixUrl(url), subtitleCallback, callback)
         }
 
         return true
