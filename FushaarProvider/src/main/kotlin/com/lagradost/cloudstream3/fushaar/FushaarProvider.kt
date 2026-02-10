@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 
 class FushaarProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://s.fushar.video/m1/"
+    override var mainUrl = "https://s.fushar.video"
     override var name = "Fushaar"
     override val usesWebView = false
     override val hasMainPage = true
@@ -39,14 +39,13 @@ class FushaarProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/category/افلام-اون-لاين-online-movies/page/" to "Movies | أفلام",
-        "$mainUrl/category/افلام-اجنبية-اون-لاين/page/" to "English Movies | أفلام أجنبية",
-        "$mainUrl/category/افلام-عربية-arabic-movies/page/" to "Arabic Movies | أفلام عربية",
-        "$mainUrl/category/مسلسلات-اون-لاين-online-series/page/" to "Series | مسلسلات",
+        "$mainUrl/category/افلام-اون-لاين-online-movies/" to "Movies | أفلام",
+        "$mainUrl/category/مسلسلات-اون-لاين-online-series/" to "Series | مسلسلات",
     )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + page).document
+        val url = if (page > 1) "${request.data}page/$page/" else request.data
+        val doc = app.get(url).document
         val list = doc.select("li.video-grid").mapNotNull { element ->
             element.toSearchResponse()
         }

@@ -257,12 +257,9 @@ class EgyBestProvider : MainAPI() {
         }
         val episodes = ArrayList<Episode>()
 
-        // Locate main content container to avoid sidebar/footer garbage
-        val mainContainer = doc.select("table.postTable, table.full, table.table").firstOrNull()?.parent() ?: doc
-
         // === Process season and episode links ===
-        // Get all season links (scoped to main container or specific classes)
-        val seasonLinks = mainContainer.select(".h_scroll a, a:contains(الموسم)").toList().filter {
+        // Get all season links
+        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم)").toList().filter {
             it.parents().none { p -> p.hasClass("related") || p.hasClass("movies_small") }
         }.map { it.attr("href") }.distinct()
 
@@ -301,11 +298,8 @@ class EgyBestProvider : MainAPI() {
                 val seasonNum = Regex("""(?:season|الموسم)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(normalizedSeasonUrl)?.groupValues?.get(1)?.toIntOrNull()
 
-                // Locate main content container in season page
-                val seasonMainContainer = d.select("table.postTable, table.full, table.table").firstOrNull()?.parent() ?: d
-
-                val episodeLinks = seasonMainContainer.select(".all-episodes a").ifEmpty {
-                    seasonMainContainer.select("a:contains(الحلقة)").toList().filter { el ->
+                val episodeLinks = d.select(".all-episodes a").ifEmpty {
+                    d.select("a:contains(الحلقة)").toList().filter { el ->
                         el.parents().none { p ->
                             p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
                         }
@@ -316,9 +310,8 @@ class EgyBestProvider : MainAPI() {
             }
         } else {
             // Single season / no season links
-            // Use mainContainer here!
-            val episodeLinks = mainContainer.select(".all-episodes a").ifEmpty {
-                mainContainer.select("a:contains(الحلقة)").toList().filter { el ->
+            val episodeLinks = doc.select(".all-episodes a").ifEmpty {
+                doc.select("a:contains(الحلقة)").toList().filter { el ->
                     el.parents().none { p ->
                         p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") || p.hasClass("movies_small")
                     }
