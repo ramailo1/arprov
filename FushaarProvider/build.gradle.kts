@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 1
+version = 2
 
 cloudstream {
     language = "ar"
@@ -7,7 +7,7 @@ cloudstream {
     status = 1
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     iconUrl = "https://www.google.com/s2/favicons?domain=fushaar.com&sz=%size%"
-    authors = listOf("AntiBotDev")
+    authors = listOf("ramailo1")
 }
 
 android {
