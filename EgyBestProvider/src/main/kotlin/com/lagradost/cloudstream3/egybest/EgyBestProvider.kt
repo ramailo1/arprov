@@ -195,10 +195,15 @@ class EgyBestProvider : MainAPI() {
                      val season = Regex("season-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText() ?: 
                                   Regex("الموسم-(.....)").find(seasonUrl)?.groupValues?.getOrNull(1)?.getIntFromText()
                      
-                     // Thumbnail detection for episodes (from season page)
-                     // val thumb = d.selectFirst("iframe, video, .postImg, .player")?.extractPoster(d)
+                     // Prioritize .all-episodes (New Layout), fallback to filtered general links
+                     var episodeLinks: List<Element> = d.select(".all-episodes a")
+                     if (episodeLinks.isEmpty()) {
+                         episodeLinks = d.select("a:contains(الحلقة)").filter { element -> 
+                             element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") }
+                         }
+                     }
 
-                     d.select("a:contains(الحلقة)").forEach { epLink ->
+                     episodeLinks.forEach { epLink ->
                         val href = epLink.attr("href")
                         
                         // Per-episode request for best thumbnail accuracy
@@ -222,7 +227,15 @@ class EgyBestProvider : MainAPI() {
                 // Try finding episodes on the current page if no season links
                 val thumb = doc.selectFirst("iframe, video, .postImg, .player")?.extractPoster(doc)
 
-                doc.select("a:contains(الحلقة)").forEach { epLink ->
+                // Prioritize .all-episodes (New Layout), fallback to filtered general links
+                var episodeLinks: List<Element> = doc.select(".all-episodes a")
+                if (episodeLinks.isEmpty()) {
+                     episodeLinks = doc.select("a:contains(الحلقة)").filter { element -> 
+                         element.parents().none { p -> p.hasClass("slider") || p.hasClass("owl-carousel") || p.hasClass("related") }
+                     }
+                }
+
+                episodeLinks.forEach { epLink ->
                         val href = epLink.attr("href")
                         val ep = Regex("ep-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText() ?:
                                  Regex("الحلقة-(.....)").find(href)?.groupValues?.getOrNull(1)?.getIntFromText()
