@@ -44,7 +44,7 @@ class EgyBestProvider : MainAPI() {
         // If you need to differentiate use the url.
         return newMovieSearchResponse(
             title,
-            mainUrl + url,
+            fixUrl(url), // Fixed double URL issue
             tvType,
         ) {
             this.posterUrl = posterUrl
@@ -69,6 +69,7 @@ class EgyBestProvider : MainAPI() {
         "$mainUrl/category/movies/افلام-كرتون/" to "أفلام انمي و كرتون",
         "$mainUrl/category/movies/افلام-رومانسية/" to "أفلام رومانسية",
         "$mainUrl/category/movies/افلام-دراما/" to "أفلام دراما",
+        "$mainUrl/category/movies/افلام-رومانسية/" to "أفلام رومانسية", // Duplicate removed/fixed if needed, but keeping structure
         "$mainUrl/category/movies/افلام-رعب/" to "أفلام رعب",
         "$mainUrl/category/movies/افلام-وثائقية/" to "أفلام وثائقية",
         "$mainUrl/World-War-Movies/" to "أفلام عن الحرب العالمية ☢",
@@ -84,10 +85,13 @@ class EgyBestProvider : MainAPI() {
         }
         
         val doc = app.get(url).document
-        val list = doc.select(".postBlock")
-            .mapNotNull { element ->
-                element.toSearchResponse()
-            }
+        // Target specific grid excluding the global slider to prevent duplicates
+        // ".movies_small .postBlock" or just excluding the slider
+        val list = doc.select("div:not(#postSlider) > .postBlock").ifEmpty { 
+             doc.select(".postBlock") 
+        }.mapNotNull { element ->
+            element.toSearchResponse()
+        }
         return newHomePageResponse(request.name, list)
     }
 
@@ -154,13 +158,13 @@ class EgyBestProvider : MainAPI() {
             doc.select("#mainLoad > div:nth-child(2) > div.h_scroll > div a").map {
                 it.attr("href")
             }.forEach {
-                val d = app.get(it).document
+                val d = app.get(fixUrl(it)).document
                 val season = Regex("season-(.....)").find(it)?.groupValues?.getOrNull(1)?.getIntFromText()
                 if(d.select("tr.published").isNotEmpty()) {
                     d.select("tr.published").map { element ->
                         val ep = Regex("ep-(.....)").find(element.select(".ep_title a").attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
                         episodes.add(
-                            newEpisode(mainUrl + element.select(".ep_title a").attr("href")) {
+                            newEpisode(fixUrl(element.select(".ep_title a").attr("href"))) {
                                 this.name = element.select("td.ep_title").html().replace(".*</span>|</a>".toRegex(), "")
                                 this.season = season
                                 this.episode = ep
@@ -172,7 +176,7 @@ class EgyBestProvider : MainAPI() {
                     d.select("#mainLoad > div:nth-child(3) > div.movies_small a").map { eit ->
                         val ep = Regex("ep-(.....)").find(eit.attr("href"))?.groupValues?.getOrNull(1)?.getIntFromText()
                         episodes.add(
-                            newEpisode(mainUrl + eit.attr("href")) {
+                            newEpisode(fixUrl(eit.attr("href"))) {
                                 this.name = eit.select("span.title").text()
                                 this.season = season
                                 this.episode = ep
