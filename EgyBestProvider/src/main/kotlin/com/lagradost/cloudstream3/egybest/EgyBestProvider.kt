@@ -27,6 +27,7 @@ class EgyBestProvider : MainAPI() {
     private val paginationCache = mutableMapOf<String, PaginationType>()
 
     private enum class PaginationType { PATH, QUERY }
+    private enum class PageType { EPISODE, SEASON, SERIES_HUB, MOVIE_LIKE }
 
     // ======= UTILITIES =======
     private fun decode(url: String): String = try { URLDecoder.decode(url, "UTF-8") } catch (e: Exception) { url }
@@ -382,6 +383,19 @@ class EgyBestProvider : MainAPI() {
         Regex("(?:الموسم|season)[ ._-]*(\\d+)", RegexOption.IGNORE_CASE)
             .find(decode(url))?.groupValues?.get(1)?.toIntOrNull() ?: 1
 
+    private fun detectPageType(doc: org.jsoup.nodes.Document): PageType {
+        val hasAllEpisodes = doc.select(".all-episodes a").isNotEmpty()
+        val hasSeasonLinks = doc.select("a:contains(الموسم), a:contains(Season)").isNotEmpty()
+        val hasServerList = doc.select("ul#watch-servers-list li, .servList li, iframe#videoPlayer").isNotEmpty()
+        
+        return when {
+            hasServerList && hasAllEpisodes -> PageType.EPISODE
+            hasSeasonLinks && !hasAllEpisodes -> PageType.SERIES_HUB
+            hasAllEpisodes -> PageType.SEASON
+            else -> PageType.MOVIE_LIKE
+        }
+    }
+
     private fun processEpisodeLinks(
         episodeLinks: Elements, 
         seasonNum: Int?, 
@@ -391,7 +405,7 @@ class EgyBestProvider : MainAPI() {
     ) {
         val thumbMap = episodeLinks.associate { it.attr("href") to (it.selectFirst("img")?.extractPoster(doc = it.ownerDocument()) ?: defaultPoster) }
 
-        episodeLinks.forEachIndexed { index, epLink ->
+        episodeLinks.forEachIndexed { _, epLink ->
             val rawHref = epLink.attr("href")
             val hrefDecodedLower = decode(rawHref).lowercase()
             val epTextLower = epLink.text().cleanName().lowercase()
@@ -399,18 +413,23 @@ class EgyBestProvider : MainAPI() {
             // Enhanced: Require keyword match (extra safety)
             if (keywords.isNotEmpty() && !keywords.any { it in hrefDecodedLower || it in epTextLower }) return@forEachIndexed
 
+            // Try multiple extraction methods for episode number
             val epNumber = Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
                 .find(hrefDecodedLower)?.groupValues?.get(1)?.toIntOrNull()
                 ?: Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
                     .find(epTextLower)?.groupValues?.get(1)?.toIntOrNull()
-                ?: (index + 1)
+                ?: Regex("""-(\\d+)-""").findAll(hrefDecodedLower).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
+                ?: null // Don't fallback to index - let it be null if we can't extract
 
-            episodes.add(newEpisode(fixUrl(rawHref)) {
-                name = "الحلقة $epNumber"
-                season = seasonNum ?: 1
-                episode = epNumber
-                posterUrl = thumbMap[rawHref]
-            })
+            // Only add episode if we successfully extracted a number
+            if (epNumber != null) {
+                episodes.add(newEpisode(fixUrl(rawHref)) {
+                    name = "الحلقة $epNumber"
+                    season = seasonNum ?: 1
+                    episode = epNumber
+                    posterUrl = thumbMap[rawHref]
+                })
+            }
         }
     }
 
