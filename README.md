@@ -94,6 +94,9 @@ The following providers are currently inaccessible due to high-security protecti
 
 ## 🔧 Installation & Setup
 
+> [!IMPORTANT]
+> **Required Component**: You **MUST** install the **Extractors** extension from this repository. Most providers (like Fushaar, Akwam, etc.) rely on the common Extractors box to retrieve video links. Without it, you will see "No link found" errors.
+
 ### Instant Repositories
 You can use the **shortcode** directly in CloudStream:
 ```text

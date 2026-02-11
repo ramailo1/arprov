@@ -45,7 +45,13 @@ class Aflamy : ExtractorApi() {
             val qualityStr = Regex("""[0-9]{3,}""").find(src)?.value
             val qualityValue = qualities[qualityStr] ?: Qualities.Unknown.value
             
-            println("Aflamy Debug: Adding source at quality: $qualityValue")
+            val headers = mapOf(
+                "Referer" to pageUrl,
+                "Origin" to pageUrl.substringBeforeLast("/"),
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            )
+
+            println("Aflamy Debug: Adding source at quality: $qualityValue with headers: $headers")
             sources.add(
                 newExtractorLink(
                     name,
@@ -55,6 +61,7 @@ class Aflamy : ExtractorApi() {
                 ).apply {
                     this.quality = qualityValue
                     this.referer = pageUrl
+                    this.headers = headers
                 }
             )
         }

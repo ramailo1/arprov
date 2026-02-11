@@ -14,7 +14,7 @@ class FushaarProvider : MainAPI() {
     override var name = "Fushaar"
     override val usesWebView = true
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Movie)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
 
     private fun String.getIntFromText(): Int? {
@@ -108,7 +108,7 @@ class FushaarProvider : MainAPI() {
                     val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
                     println("Fushaar Debug: Decoded part from data URL: $decoded")
                     val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
-                    if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro"))) {
+                    if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro") || playerUrl.contains("dazzwo.pro") || playerUrl.contains("dazwo.pro"))) {
                         println("Fushaar Debug: Targeting playerUrl (Method 0): $playerUrl")
                         if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
                     }
@@ -128,7 +128,7 @@ class FushaarProvider : MainAPI() {
                         val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
                         println("Fushaar Debug: Decoded part: $decoded")
                         val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
-                        if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro"))) {
+                        if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro") || playerUrl.contains("dazzwo.pro") || playerUrl.contains("dazwo.pro"))) {
                             println("Fushaar Debug: Targeting playerUrl: $playerUrl")
                             if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
                                 println("Fushaar Debug: Success via Method 1")
