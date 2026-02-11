@@ -301,27 +301,10 @@ class EgyBestProvider : MainAPI() {
         defaultPoster: String?, 
         episodes: ArrayList<Episode>
     ) {
-        // STRICT EPISODE SELECTORS ONLY
-        val episodeSelectors = listOf(
-            ".movies_small a[href*='الحلقة'], .movies_small a[href*='episode']",
-            ".movies_small a[title*='الحلقة'], .movies_small a[title*='episode']",
-            ".all-episodes a, .episodes-list a, .episodes a"
-        )
+        // 1. Try RELIABLE container (.all-episodes) first as requested
+        val allEpisodesDiv = doc.select(".all-episodes a")
         
-        val allLinks = episodeSelectors.flatMap { selector -> doc.select(selector) }.distinctBy { element -> element.attr("href") }
-        
-        val episodeLinks = Elements(allLinks.filter { element -> 
-            // Must contain episode indicators in text, href, or title
-            (element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
-             element.attr("title").contains("الحلقة") || 
-             element.text().contains("episode", true) || element.attr("href").contains("episode")) &&
-            // Exclude unrelated containers specifically
-            element.parents().none { p -> 
-                p.hasClass("related") || p.id() == "postSlider" || p.hasClass("recommendations") || p.hasClass("sidebar")
-            }
-        })
-
-        // Season links (more strict)
+        // 2. Season links (more strict)
         val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم), [href*=season], [href*=الموسم]")
             .filter { element -> !element.attr("href").contains("الحلقة") }
             .map { element -> fixUrl(element.attr("href")) }.distinct()
@@ -332,16 +315,33 @@ class EgyBestProvider : MainAPI() {
                 val seasonNum = Regex("""(?:season|الموسم)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(decode(seasonUrl))?.groupValues?.get(1)?.toIntOrNull()
                 
-                // For seasons, focus on episodes within that season page using same logic
-                val seasonAllLinks = episodeSelectors.flatMap { s -> seasonDoc.select(s) }.distinctBy { it.attr("href") }
-                val seasonEpisodeLinks = Elements(seasonAllLinks.filter { element -> 
-                    element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
-                    element.attr("title").contains("الحلقة")
-                })
-                processEpisodeLinks(seasonEpisodeLinks, seasonNum, defaultPoster, episodes)
+                // For seasons, prioritize .all-episodes within that season page
+                val seasonEpisodes = seasonDoc.select(".all-episodes a").ifEmpty {
+                    // Fallback to strict filtering if .all-episodes is missing
+                    Elements(seasonDoc.select(".movies_small .postBlock a").filter { element -> 
+                        (element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
+                         element.attr("title").contains("الحلقة") || 
+                         element.text().contains("episode", true) || element.attr("href").contains("episode")) &&
+                        element.parents().none { p -> 
+                            p.hasClass("related") || p.id() == "postSlider" || p.hasClass("recommendations") || p.hasClass("sidebar")
+                        }
+                    })
+                }
+                processEpisodeLinks(seasonEpisodes, seasonNum, defaultPoster, episodes)
             }
         } else {
-            processEpisodeLinks(episodeLinks, 1, defaultPoster, episodes)
+            // No season links: check .all-episodes or fallback
+            val finalEpisodes = allEpisodesDiv.ifEmpty {
+                Elements(doc.select(".movies_small .postBlock a, .episodes a").filter { element -> 
+                    (element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
+                     element.attr("title").contains("الحلقة") || 
+                     element.text().contains("episode", true) || element.attr("href").contains("episode")) &&
+                    element.parents().none { p -> 
+                        p.hasClass("related") || p.id() == "postSlider" || p.hasClass("recommendations") || p.hasClass("sidebar")
+                    }
+                })
+            }
+            processEpisodeLinks(finalEpisodes, 1, defaultPoster, episodes)
         }
     }
 
