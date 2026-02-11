@@ -99,25 +99,27 @@ class FushaarProvider : MainAPI() {
         var anySuccess = false
         val doc = app.get(data).document
         
-        // Method 1: Decode Base64 from akoam
+        // Method 1: Decode Base64 from akoam (Handle __ separator)
         doc.select("a[href*='akoam.news/article454']")
             .mapNotNull { it.attr("href").takeIf { it.isNotBlank() } }
             .forEach { link ->
-                val hashParam = Regex("""[?&]hash=([^&]+)""").find(link)?.groupValues?.get(1) ?: return@forEach
-                try {
-                    val decoded = String(android.util.Base64.decode(hashParam, android.util.Base64.DEFAULT))
-                    val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
-                    if (playerUrl?.contains("aflamy.pro/albaplayer") == true) {
-                        if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
-                    }
-                } catch (e: Exception) { }
+                val hashValue = Regex("""[?&]hash=([^&]+)""").find(link)?.groupValues?.get(1) ?: return@forEach
+                hashValue.split("__").forEach { part ->
+                    try {
+                        val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
+                        val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
+                        if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro"))) {
+                            if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
+                        }
+                    } catch (e: Exception) { }
+                }
             }
         
         if (anySuccess) return true
 
-        // Method 2: Slug fallback
+        // Method 2: Slug fallback (Improved)
         try {
-            val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/")
+            val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/").trim()
             if (slug.isNotBlank()) {
                 val playerUrl = "https://w.aflamy.pro/albaplayer/$slug"
                 if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) return true
