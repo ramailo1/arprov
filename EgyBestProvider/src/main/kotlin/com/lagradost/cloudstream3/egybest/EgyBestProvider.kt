@@ -271,11 +271,11 @@ class EgyBestProvider : MainAPI() {
             
             seriesLinks.forEach { seriesUrl ->
                 val seriesDoc = app.get(seriesUrl).document
-                extractEpisodesFromSeriesPage(seriesDoc, posterUrl, episodes)
+                extractEpisodesFromSeriesPage(seriesUrl, seriesDoc, posterUrl, episodes)
             }
         } else {
             // SERIES PAGE: Extract directly
-            extractEpisodesFromSeriesPage(doc, posterUrl, episodes)
+            extractEpisodesFromSeriesPage(url, doc, posterUrl, episodes)
         }
 
         val recommendations = doc.select(".related .postBlock, .movies_small .postBlock")
@@ -295,84 +295,104 @@ class EgyBestProvider : MainAPI() {
         }
     }
 
-    // === NEW HELPER: STRICT SERIES-PAGE EXTRACTION ===
+    // === UPDATED: STRICT SERIES-PAGE EXTRACTION WITH PAGINATION & FILTER ===
     private suspend fun extractEpisodesFromSeriesPage(
+        seriesUrl: String,
         doc: org.jsoup.nodes.Document, 
         defaultPoster: String?, 
         episodes: ArrayList<Episode>
     ) {
-        // 1. Try RELIABLE container (.all-episodes) first as requested
-        val allEpisodesDiv = doc.select(".all-episodes a")
-        
-        // 2. Season links (more strict)
-        val seasonLinks = doc.select(".h_scroll a, a:contains(الموسم), [href*=season], [href*=الموسم]")
-            .filter { element -> !element.attr("href").contains("الحلقة") }
-            .map { element -> fixUrl(element.attr("href")) }.distinct()
+        // Extract keywords/slug from h1 for filtering
+        val h1Title = doc.selectFirst(".postTitle h1, h1.title, h1")?.text()?.cleanName()?.lowercase() ?: ""
+        val keywords = h1Title.split(Regex("\\W+"))
+            .filter { it.length >= 3 && !it.matches(Regex("(?i)(الموسم|season|الموسم\\s*\\d+|s\\d+)")) }
+            .distinct()
 
-        if (seasonLinks.isNotEmpty()) {
-            seasonLinks.forEach { seasonUrl ->
-                val seasonDoc = try { app.get(seasonUrl).document } catch(e: Exception) { null } ?: return@forEach
-                val seasonNum = Regex("""(?:season|الموسم)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
-                    .find(decode(seasonUrl))?.groupValues?.get(1)?.toIntOrNull()
-                
-                // For seasons, prioritize .all-episodes within that season page
-                val seasonEpisodes = seasonDoc.select(".all-episodes a").ifEmpty {
-                    // Fallback to strict filtering if .all-episodes is missing
-                    Elements(seasonDoc.select(".movies_small .postBlock a").filter { element -> 
-                        (element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
-                         element.attr("title").contains("الحلقة") || 
-                         element.text().contains("episode", true) || element.attr("href").contains("episode")) &&
-                        element.parents().none { p -> 
-                            p.hasClass("related") || p.id() == "postSlider" || p.hasClass("recommendations") || p.hasClass("sidebar")
-                        }
-                    })
-                }
-                processEpisodeLinks(seasonEpisodes, seasonNum, defaultPoster, episodes)
-            }
-        } else {
-            // No season links: check .all-episodes or fallback
-            val finalEpisodes = allEpisodesDiv.ifEmpty {
-                Elements(doc.select(".movies_small .postBlock a, .episodes a").filter { element -> 
-                    (element.text().contains("الحلقة", true) || element.attr("href").contains("الحلقة") || 
-                     element.attr("title").contains("الحلقة") || 
-                     element.text().contains("episode", true) || element.attr("href").contains("episode")) &&
+        // 1. Paginated extraction (max 3 pages)
+        var page = 1
+        val paginationType = detectPaginationType(doc)
+        while (page <= 3) {
+            val pageUrl = if (page == 1) seriesUrl else buildPageUrl(seriesUrl, page, paginationType)
+            val pageDoc = if (page == 1) doc else try { app.get(pageUrl).document } catch(e: Exception) { null } ?: break
+
+            // Per-page episodes
+            val pageEpisodes = pageDoc.select(".all-episodes a").ifEmpty {
+                pageDoc.select(".movies_small .postBlock a, .episodes a, .season-episodes a").filter { element -> 
+                    val href = element.attr("href")
+                    val epText = element.text()
+                    (epText.contains("الحلقة", true) || href.contains("الحلقة") || 
+                     epText.contains("episode", true) || href.contains("episode")) &&
                     element.parents().none { p -> 
-                        p.hasClass("related") || p.id() == "postSlider" || p.hasClass("recommendations") || p.hasClass("sidebar")
+                        p.hasClass("related") || p.id() == "postSlider" || 
+                        p.hasClass("recommendations") || p.hasClass("sidebar") || 
+                        p.hasClass("recent") || p.text().contains("الجديد")
+                    } &&
+                    // Slug/keyword match on href & text
+                    keywords.any { kw ->
+                        decode(href).lowercase().contains(kw) || epText.lowercase().contains(kw)
                     }
-                })
+                }
             }
-            processEpisodeLinks(finalEpisodes, 1, defaultPoster, episodes)
+            processEpisodeLinks(Elements(pageEpisodes), getSeasonNum(seriesUrl), defaultPoster, episodes, keywords)
+
+            // Break if no next
+            if (!hasNextPage(pageDoc)) break
+            page++
         }
     }
+
+    private fun detectPaginationType(doc: org.jsoup.nodes.Document): PaginationType {
+        val nextLink = doc.select("a.page-numbers.next, a.next").firstOrNull()?.attr("href") ?: ""
+        return when {
+            nextLink.contains("/page/") -> PaginationType.PATH
+            nextLink.contains("?page=") || nextLink.contains("&page=") -> PaginationType.QUERY
+            else -> paginationCache.values.firstOrNull() ?: PaginationType.PATH
+        }
+    }
+
+    private fun buildPageUrl(base: String, page: Int, type: PaginationType): String {
+        val cleanBase = base.removeSuffix("/")
+        return when (type) {
+            PaginationType.PATH -> "$cleanBase/page/$page/"
+            PaginationType.QUERY -> if (cleanBase.contains("?")) "$cleanBase&page=$page" else "$cleanBase?page=$page"
+        }
+    }
+
+    private fun hasNextPage(doc: org.jsoup.nodes.Document): Boolean =
+        doc.select("a.page-numbers.next, a.next, li.current + li a").isNotEmpty()
+
+    private fun getSeasonNum(url: String): Int? =
+        Regex("(?:الموسم|season)[ ._-]*(\\d+)", RegexOption.IGNORE_CASE)
+            .find(decode(url))?.groupValues?.get(1)?.toIntOrNull() ?: 1
 
     private fun processEpisodeLinks(
         episodeLinks: Elements, 
         seasonNum: Int?, 
         defaultPoster: String?, 
-        episodes: ArrayList<Episode>
+        episodes: ArrayList<Episode>,
+        keywords: List<String>
     ) {
-        val thumbMap = episodeLinks.associate { ep ->
-            ep.attr("href") to (ep.selectFirst("img")?.extractPoster() ?: defaultPoster)
-        }
+        val thumbMap = episodeLinks.associate { it.attr("href") to (it.selectFirst("img")?.extractPoster(doc = it.ownerDocument()) ?: defaultPoster) }
 
         episodeLinks.forEachIndexed { index, epLink ->
             val rawHref = epLink.attr("href")
-            val href = fixUrl(rawHref)
-            val epText = epLink.text().cleanName()
-            val hrefDigits = decode(href).toWesternDigits()
-            val textDigits = epText.toWesternDigits()
+            val hrefDecodedLower = decode(rawHref).lowercase()
+            val epTextLower = epLink.text().cleanName().lowercase()
 
-            val epNumber = Regex("""(?:ep|الحلقة|episode)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
-                .find(hrefDigits)?.groupValues?.get(1)?.toIntOrNull()
-                ?: Regex("""(?:ep|الحلقة|episode)[ ._-]*(\d+)""", RegexOption.IGNORE_CASE)
-                    .find(textDigits)?.groupValues?.get(1)?.toIntOrNull()
+            // Enhanced: Require keyword match (extra safety)
+            if (keywords.isNotEmpty() && !keywords.any { it in hrefDecodedLower || it in epTextLower }) return@forEachIndexed
+
+            val epNumber = Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
+                .find(hrefDecodedLower)?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
+                    .find(epTextLower)?.groupValues?.get(1)?.toIntOrNull()
                 ?: (index + 1)
 
-            episodes.add(newEpisode(href) {
-                this.name = "الحلقة $epNumber"
-                this.season = seasonNum ?: 1
-                this.episode = epNumber
-                this.posterUrl = thumbMap[rawHref]
+            episodes.add(newEpisode(fixUrl(rawHref)) {
+                name = "الحلقة $epNumber"
+                season = seasonNum ?: 1
+                episode = epNumber
+                posterUrl = thumbMap[rawHref]
             })
         }
     }
