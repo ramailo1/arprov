@@ -181,7 +181,7 @@ class EgyBestProvider : MainAPI() {
 
     // ======= SEARCH =======
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/explore/?q=$query"
+        val url = "$mainUrl/?s=$query"
         return paginatedFetch(
             baseUrl = url,
             maxPages = 3,
@@ -335,7 +335,7 @@ class EgyBestProvider : MainAPI() {
 
             // Per-page episodes
             val pageEpisodes = pageDoc.select(".all-episodes a").ifEmpty {
-                pageDoc.select(".movies_small .postBlock a, .episodes a, .season-episodes a").filter { element -> 
+                pageDoc.select(".movies_small .postBlock a, .episodes a, .season-episodes a, m a").filter { element -> 
                     val href = element.attr("href")
                     val epText = element.text()
                     (epText.contains("الحلقة", true) || href.contains("الحلقة") || 
@@ -384,8 +384,8 @@ class EgyBestProvider : MainAPI() {
             .find(decode(url))?.groupValues?.get(1)?.toIntOrNull() ?: 1
 
     private fun detectPageType(doc: org.jsoup.nodes.Document): PageType {
-        val hasAllEpisodes = doc.select(".all-episodes a").isNotEmpty()
-        val hasSeasonLinks = doc.select("a:contains(الموسم), a:contains(Season)").isNotEmpty()
+        val hasAllEpisodes = doc.select(".all-episodes a, m a").isNotEmpty()
+        val hasSeasonLinks = doc.select("a:contains(الموسم), a:contains(Season), a:contains(جميع المواسم), a[href*=جميع-مواسم]").isNotEmpty()
         val hasServerList = doc.select("ul#watch-servers-list li, .servList li, iframe#videoPlayer").isNotEmpty()
         
         return when {
@@ -414,11 +414,11 @@ class EgyBestProvider : MainAPI() {
             if (keywords.isNotEmpty() && !keywords.any { it in hrefDecodedLower || it in epTextLower }) return@forEachIndexed
 
             // Try multiple extraction methods for episode number
-            val epNumber = Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
+            val epNumber = Regex("""(?:الحلقة|ep|episode)[\s\._-]*(\d+)""", RegexOption.IGNORE_CASE)
                 .find(hrefDecodedLower)?.groupValues?.get(1)?.toIntOrNull()
-                ?: Regex("""(?:الحلقة|ep|episode)[ ._-]*(\\d+)""", RegexOption.IGNORE_CASE)
+                ?: Regex("""(?:الحلقة|ep|episode)[\s\._-]*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(epTextLower)?.groupValues?.get(1)?.toIntOrNull()
-                ?: Regex("""-(\\d+)-""").findAll(hrefDecodedLower).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("""-(\d+)-""").findAll(hrefDecodedLower).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
                 ?: null // Don't fallback to index - let it be null if we can't extract
 
             // Only add episode if we successfully extracted a number
