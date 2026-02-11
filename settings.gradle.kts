@@ -1,6 +1,10 @@
 rootProject.name = "ArProv"
 
-val disabled = listOf<String>()
+val disabled = listOf<String>(
+    "AnimeBlkomProvider",
+    "FajerShowProvider", 
+    "ShahidMBCProvider"
+)
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
