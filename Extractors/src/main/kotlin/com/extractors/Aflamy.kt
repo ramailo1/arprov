@@ -60,28 +60,32 @@ class Aflamy : ExtractorApi() {
         }
 
         // 2. Process each server page
-        serverLinks.distinct().forEach { serverUrl ->
-            println("Aflamy Debug: Processing serverUrl: $serverUrl")
-            val serverResponse = app.get(serverUrl, referer = url).text
-            
-            // Search for direct links in server page first
-            hlsPattern.findAll(serverResponse).forEach { addSource(it.groupValues[1], serverUrl) }
-            srcPattern.findAll(serverResponse).forEach { addSource(it.groupValues[1], serverUrl) }
-
-            // 3. Follow embedded iframes (e.g. mp4plus.cyou, anafast.cyou)
-            val iframeSrcs = serverResponse.let { html ->
-                Regex("""<iframe\s+[^>]*src=["']([^"']+)["']""").findAll(html).map { it.groupValues[1] }.toList()
-            }.filter { it.contains(".cyou") || it.contains("embed") || it.contains("player") }
-            
-            println("Aflamy Debug: Found ${iframeSrcs.size} iframes: $iframeSrcs")
-
-            iframeSrcs.forEach { iframeUrl ->
-                val fixedIframeUrl = fixUrl(iframeUrl, serverUrl)
-                println("Aflamy Debug: Following iframe: $fixedIframeUrl")
-                val iframeResponse = app.get(fixedIframeUrl, referer = serverUrl).text
+        serverLinks.distinct().filter { it.startsWith("http") }.forEach { serverUrl ->
+            try {
+                println("Aflamy Debug: Processing serverUrl: $serverUrl")
+                val serverResponse = app.get(serverUrl, referer = url).text
                 
-                hlsPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
-                srcPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
+                // Search for direct links in server page first
+                hlsPattern.findAll(serverResponse).forEach { addSource(it.groupValues[1], serverUrl) }
+                srcPattern.findAll(serverResponse).forEach { addSource(it.groupValues[1], serverUrl) }
+
+                // 3. Follow embedded iframes (e.g. mp4plus.cyou, anafast.cyou)
+                val iframeSrcs = serverResponse.let { html ->
+                    Regex("""<iframe\s+[^>]*src=["']([^"']+)["']""").findAll(html).map { it.groupValues[1] }.toList()
+                }.filter { it.contains(".cyou") || it.contains("embed") || it.contains("player") }
+                
+                println("Aflamy Debug: Found ${iframeSrcs.size} iframes: $iframeSrcs")
+
+                iframeSrcs.forEach { iframeUrl ->
+                    val fixedIframeUrl = fixUrl(iframeUrl, serverUrl)
+                    println("Aflamy Debug: Following iframe: $fixedIframeUrl")
+                    val iframeResponse = app.get(fixedIframeUrl, referer = serverUrl).text
+                    
+                    hlsPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
+                    srcPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
+                }
+            } catch (e: Exception) {
+                println("Aflamy Debug: Error processing server $serverUrl: ${e.message}")
             }
         }
         
