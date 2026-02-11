@@ -257,24 +257,33 @@ class EgyBestProvider : MainAPI() {
             ActorData(actor = Actor(name, image), roleString = roleString)
         }
         
-        // === FIXED: STRICT EPISODE EXTRACTION ===
+        // === FIXED: DETECT EPISODE PAGES AND FOLLOW SEASON NAVIGATION ===
         val episodes = ArrayList<Episode>()
-
-        // 1. Check if this is an EPISODE PAGE (has download links/server lists)
-        val hasServerLinks = doc.select("ul#watch-servers-list li, .servList li, iframe#videoPlayer").isNotEmpty()
         
-        if (hasServerLinks) {
-            // EPISODE PAGE: Find series/season links only from navigation
-            val seriesLinks = doc.select("a:contains(الموسم), .season-tab a, [href*=season], [href*=الموسم]")
-                .filter { element -> !element.attr("href").contains("الحلقة") && !element.parents().any { p -> p.hasClass("related") || p.hasClass("movies_small") } }
-                .map { fixUrl(it.attr("href")) }.distinct()
+        // Check if this is an EPISODE PAGE (has .all-episodes container with links)
+        val isEpisodePage = doc.select(".all-episodes a").isNotEmpty()
+        
+        if (isEpisodePage) {
+            // We're on an episode page - look for season navigation to find ALL seasons
+            val seasonLinks = doc.select("a:contains(الموسم), a:contains(Season), .season-tab a, [href*=season], [href*=الموسم]")
+                .map { fixUrl(it.attr("href")) }
+                .filter { !it.contains("الحلقة") && !it.contains("episode") }
+                .distinct()
             
-            seriesLinks.forEach { seriesUrl ->
-                val seriesDoc = app.get(seriesUrl).document
-                extractEpisodesFromSeriesPage(seriesUrl, seriesDoc, posterUrl, episodes)
+            if (seasonLinks.isNotEmpty()) {
+                // Follow each season link to get episodes from all seasons
+                seasonLinks.forEach { seasonUrl ->
+                    val seasonDoc = try { app.get(seasonUrl).document } catch(e: Exception) { null }
+                    if (seasonDoc != null) {
+                        extractEpisodesFromSeriesPage(seasonUrl, seasonDoc, posterUrl, episodes)
+                    }
+                }
+            } else {
+                // No season links found - just extract from current page (single season)
+                extractEpisodesFromSeriesPage(url, doc, posterUrl, episodes)
             }
         } else {
-            // SERIES PAGE: Extract directly
+            // Regular series/season page - extract directly
             extractEpisodesFromSeriesPage(url, doc, posterUrl, episodes)
         }
 
@@ -304,8 +313,16 @@ class EgyBestProvider : MainAPI() {
     ) {
         // Extract keywords/slug from h1 for filtering
         val h1Title = doc.selectFirst(".postTitle h1, h1.title, h1")?.text()?.cleanName()?.lowercase() ?: ""
-        val keywords = h1Title.split(Regex("\\W+"))
-            .filter { it.length >= 3 && !it.matches(Regex("(?i)(الموسم|season|الموسم\\s*\\d+|s\\d+)")) }
+        
+        // Remove season/episode numbers and Arabic ordinals to get pure series name
+        val cleanedTitle = h1Title
+            .replace(Regex("(?i)(الموسم|season)\\s*\\d+"), "") // Remove "Season 2", "الموسم 2"
+            .replace(Regex("(?i)(الحلقة|episode|ep)\\s*\\d+"), "") // Remove "Episode 13", "الحلقة 13"
+            .replace(Regex("(?i)(الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)"), "") // Remove Arabic ordinals
+            .replace(Regex("\\s+"), " ").trim()
+        
+        val keywords = cleanedTitle.split(Regex("\\W+"))
+            .filter { it.length >= 3 }
             .distinct()
 
         // 1. Paginated extraction (max 3 pages)
