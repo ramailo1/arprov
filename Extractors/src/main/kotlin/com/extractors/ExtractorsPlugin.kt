@@ -15,6 +15,9 @@ class ExtractorsPlugin : BasePlugin() {
         registerExtractorAPI(MyVid())
         registerExtractorAPI(VidHD())
         registerExtractorAPI(VoeSx())
-        registerExtractorAPI(Aflamy())
+        registerExtractorAPI(Aflamy("https://w.aflamy.pro"))
+        registerExtractorAPI(Aflamy("https://w.shadwo.pro"))
+        registerExtractorAPI(Aflamy("https://w.dazzwo.pro"))
+        registerExtractorAPI(Aflamy("https://w.dazwo.pro"))
     }
 }

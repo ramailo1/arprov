@@ -8,10 +8,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.nicehttp.Requests
 
-class Aflamy : ExtractorApi() {
+class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorApi() {
     private val app = Requests()
     override val name = "Aflamy"
-    override val mainUrl = "https://w.aflamy.pro"
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
