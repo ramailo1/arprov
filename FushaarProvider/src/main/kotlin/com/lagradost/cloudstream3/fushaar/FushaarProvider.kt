@@ -63,8 +63,9 @@ class FushaarProvider : MainAPI() {
         val doc = app.get(url).document
         val title = doc.select("div.info-warpper h1").text().ifBlank { doc.title() }
         val posterUrl = doc.selectFirst("meta[property=\"og:image\"]")?.attr("content")
-        val year = doc.select("div.date").text().getIntFromText() ?: title.getIntFromText()
-        val synopsis = doc.select("div.details > p").text()
+        val year = doc.select("div.date, div.year").text().getIntFromText() ?: title.getIntFromText()
+        val synopsis = doc.select("div.details > p, div.description").text()
+        val tags = doc.select("div.categories a, div.tags a").map { it.text() }
         val recommendations = doc.select("li.video-grid").mapNotNull { element ->
             element.toSearchResponse()
         }
@@ -81,6 +82,7 @@ class FushaarProvider : MainAPI() {
             this.posterUrl = posterUrl?.let { fixUrl(it) }
             this.year = year
             this.plot = synopsis
+            this.tags = tags
             this.recommendations = recommendations
         }
     }
@@ -94,69 +96,52 @@ class FushaarProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        var anySuccess = false
         val doc = app.get(data).document
         
-        // Method 1: Decode Base64 hash from akoam.news links
-        val hashLinks = doc.select("a[href*='akoam.news/article454']")
-            .mapNotNull { it.attr("href").takeIf { s -> s.isNotBlank() } }
+        // Method 1: Decode Base64 from akoam
+        doc.select("a[href*='akoam.news/article454']")
+            .mapNotNull { it.attr("href").takeIf { it.isNotBlank() } }
+            .forEach { link ->
+                val hashParam = Regex("""[?&]hash=([^&]+)""").find(link)?.groupValues?.get(1) ?: return@forEach
+                try {
+                    val decoded = String(android.util.Base64.decode(hashParam, android.util.Base64.DEFAULT))
+                    val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
+                    if (playerUrl?.contains("aflamy.pro/albaplayer") == true) {
+                        if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
+                    }
+                } catch (e: Exception) { }
+            }
         
-        for (link in hashLinks) {
-            try {
-                val hashParam = Regex("""[?&]hash=([^&]+)""").find(link)?.groupValues?.get(1) ?: continue
-                val decoded = String(android.util.Base64.decode(hashParam, android.util.Base64.DEFAULT))
-                
-                // Extract player URL from decoded text (Format: "... = <br>https://w.aflamy.pro/albaplayer/...")
-                val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
-                if (playerUrl != null && playerUrl.contains("aflamy.pro/albaplayer")) {
-                    if (extractFromPlayerPage(playerUrl, data, subtitleCallback, callback)) return true
-                }
-            } catch (e: Exception) { }
-        }
+        if (anySuccess) return true
 
-        // Method 2: Fallback construction from slug
+        // Method 2: Slug fallback
         try {
             val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/")
             if (slug.isNotBlank()) {
                 val playerUrl = "https://w.aflamy.pro/albaplayer/$slug"
-                if (extractFromPlayerPage(playerUrl, data, subtitleCallback, callback)) return true
+                if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) return true
             }
         } catch (e: Exception) { }
 
-        // Method 3: Existing button extraction (fallback)
-        val playerUrl = doc.select("div#FCplayer a.video-play-button, div#FCplayer a.controls-play-pause-big")
-            .mapNotNull { it.attr("href").takeIf { s -> s.isNotBlank() } }
-            .firstOrNull()
-            
-        if (playerUrl != null && playerUrl != data) {
-            loadExtractor(fixUrl(playerUrl), data, subtitleCallback, callback)
+        // Method 3: Direct buttons
+        doc.select("div#FCplayer a.video-play-button, div#FCplayer a.controls-play-pause-big")
+            .mapNotNull { it.attr("href").takeIf { it.isNotBlank() && it != data } }
+            .firstOrNull()?.let { playerUrl ->
+            if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
         }
 
-        return true
+        return anySuccess
     }
 
-    private suspend fun extractFromPlayerPage(
-        playerUrl: String,
+    private suspend fun loadExtractorDirect(
+        url: String,
         referer: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val playerDoc = app.get(playerUrl).document
-            
-            // 1. Primary iframe selector
-            val iframeSrc = playerDoc.select("iframe#iframe").attr("src")
-            if (iframeSrc.isNotBlank()) {
-                loadExtractor(fixUrl(iframeSrc), referer, subtitleCallback, callback)
-                return true
-            }
-
-            // 2. Secondary iframe/link search (embed patterns)
-            playerDoc.select("a[href*='/embed-'], iframe[src*='/embed-']").forEach { element ->
-                val embedUrl = element.attr("href").ifBlank { element.attr("src") }
-                if (embedUrl.isNotBlank()) {
-                    loadExtractor(fixUrl(embedUrl), referer, subtitleCallback, callback)
-                }
-            }
+            loadExtractor(fixUrl(url), referer, subtitleCallback, callback)
             true
         } catch (e: Exception) {
             false

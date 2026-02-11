@@ -15,5 +15,6 @@ class ExtractorsPlugin : BasePlugin() {
         registerExtractorAPI(MyVid())
         registerExtractorAPI(VidHD())
         registerExtractorAPI(VoeSx())
+        registerExtractorAPI(Aflamy())
     }
 }
