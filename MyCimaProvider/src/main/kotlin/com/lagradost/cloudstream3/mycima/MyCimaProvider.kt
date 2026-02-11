@@ -110,7 +110,7 @@ class MyCimaProvider : MainAPI() {
             else -> TvType.Movie
         }
 
-        return newSearchResponse(title, href, type) {
+        return newMovieSearchResponse(title, href, type) {
             this.posterUrl = poster
         }
     }
@@ -250,16 +250,9 @@ class MyCimaProvider : MainAPI() {
 
             loadExtractor(
                 finalUrl,
-                data,
-                subtitleCallback
-            ) { link ->
-                callback.invoke(
-                    link.copy(
-                        name = "$name - $serverName",
-                        quality = quality
-                    )
-                )
-            }
+                subtitleCallback,
+                callback
+            )
         }
 
         return true
