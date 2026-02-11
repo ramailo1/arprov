@@ -99,6 +99,24 @@ class FushaarProvider : MainAPI() {
         var anySuccess = false
         val doc = app.get(data).document
         
+        // Method 0: Check if 'data' URL itself has a hash (common when load() passes an akoam redirect)
+        if (data.contains("hash=")) {
+            val hashValue = Regex("""[?&]hash=([^&]+)""").find(data)?.groupValues?.get(1)
+            println("Fushaar Debug: Found hash in data URL: $hashValue")
+            hashValue?.split("__")?.forEach { part ->
+                try {
+                    val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
+                    println("Fushaar Debug: Decoded part from data URL: $decoded")
+                    val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
+                    if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro"))) {
+                        println("Fushaar Debug: Targeting playerUrl (Method 0): $playerUrl")
+                        if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
+                    }
+                } catch (e: Exception) { }
+            }
+        }
+        if (anySuccess) return true
+
         // Method 1: Decode Base64 from akoam (Handle __ separator)
         doc.select("a[href*='akoam.news/article454']")
             .mapNotNull { it.attr("href").takeIf { it.isNotBlank() } }
@@ -110,7 +128,7 @@ class FushaarProvider : MainAPI() {
                         val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
                         println("Fushaar Debug: Decoded part: $decoded")
                         val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
-                        if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro"))) {
+                        if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro"))) {
                             println("Fushaar Debug: Targeting playerUrl: $playerUrl")
                             if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
                                 println("Fushaar Debug: Success via Method 1")
@@ -126,19 +144,21 @@ class FushaarProvider : MainAPI() {
         if (anySuccess) return true
 
         // Method 2: Slug fallback (Improved)
-        try {
-            val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/").trim()
-            println("Fushaar Debug: Extracted slug: $slug")
-            if (slug.isNotBlank()) {
-                val playerUrl = "https://w.aflamy.pro/albaplayer/$slug"
-                println("Fushaar Debug: Targeting playerUrl (Method 2): $playerUrl")
-                if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
-                    println("Fushaar Debug: Success via Method 2")
-                    return true
+        if (data.contains("/video-")) {
+            try {
+                val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/").trim()
+                println("Fushaar Debug: Extracted slug: $slug")
+                if (slug.isNotBlank()) {
+                    val playerUrl = "https://w.aflamy.pro/albaplayer/$slug"
+                    println("Fushaar Debug: Targeting playerUrl (Method 2): $playerUrl")
+                    if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
+                        println("Fushaar Debug: Success via Method 2")
+                        return true
+                    }
                 }
+            } catch (e: Exception) { 
+                println("Fushaar Debug: Method 2 Exception: ${e.message}")
             }
-        } catch (e: Exception) { 
-            println("Fushaar Debug: Method 2 Exception: ${e.message}")
         }
 
         // Method 3: Direct buttons
