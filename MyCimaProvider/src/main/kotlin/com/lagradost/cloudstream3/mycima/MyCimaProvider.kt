@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
+import kotlinx.coroutines.*
 
 class MyCimaProvider : MainAPI() {
 
@@ -29,13 +30,14 @@ class MyCimaProvider : MainAPI() {
         TvType.Anime
     )
 
+    private val baseHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3"
+    )
+
     private val headers: Map<String, String>
-        get() = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-            "Referer" to activeDomain
-        )
+        get() = baseHeaders + mapOf("Referer" to activeDomain)
 
     // ---------- AUTO DOMAIN DETECTOR ----------
     private suspend fun ensureDomain(): Boolean {
@@ -64,6 +66,20 @@ class MyCimaProvider : MainAPI() {
     }
 
     private suspend fun safeGet(url: String): org.jsoup.nodes.Document? {
+        if (!ensureDomain()) return null
+
+        val fullUrl = if (url.startsWith("http")) url else activeDomain + url
+
+        val response = runCatching {
+            app.get(fullUrl, headers = headers)
+        }.getOrNull()
+
+        if (response?.isSuccessful == true) {
+            return response.document
+        }
+
+        // Retry domain rotation once
+        checkedDomain = false
         if (!ensureDomain()) return null
 
         return runCatching {
@@ -111,8 +127,8 @@ class MyCimaProvider : MainAPI() {
 
     private fun detectType(url: String): TvType {
         return when {
-            url.contains("/series/") -> TvType.TvSeries
-            url.contains("/anime") -> TvType.Anime
+            url.contains("/series/") || url.contains("مسلسلات") -> TvType.TvSeries
+            url.contains("/anime") || url.contains("انمي") -> TvType.Anime
             else -> TvType.Movie
         }
     }
@@ -188,7 +204,11 @@ class MyCimaProvider : MainAPI() {
         val document = safeGet(url) ?: return null
         val fixedUrl = fixUrl(url)
 
-        val title = document.selectFirst("h1[itemprop=name], h1, h2, .Title, .title")?.text()?.trim() ?: return null
+        val title = document.selectFirst(
+            "h1[itemprop=name], h1, h2, .Title, .title, meta[property=og:title]"
+        )?.let {
+            if (it.tagName() == "meta") it.attr("content") else it.text()
+        }?.trim() ?: return null
 
         // TIERED POSTER EXTRACTION
         val posterUrl = 
@@ -216,7 +236,7 @@ class MyCimaProvider : MainAPI() {
             fixedUrl.contains("/movies/") -> false
             fixedUrl.contains("/film/") -> false
             fixedUrl.contains("/series/") -> true
-            document.select(".EpisodesList a[href*=/episode/], a:contains(حلقة)").isNotEmpty() -> true
+            document.select(".EpisodesList a[href*=/episode/], a[href*=/episode-], a:contains(حلقة)").isNotEmpty() -> true
             else -> false
         }
 
@@ -228,43 +248,53 @@ class MyCimaProvider : MainAPI() {
             document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode), a.GridItem:has(strong)").forEach { ep ->
                 val epHref = ep.attr("href")
                 val fixedEp = fixUrl(epHref)
-                if (fixedEp.isEmpty() || fixedEp.contains("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
+                if (!fixedEp.startsWith("http") || fixedEp.contains("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
                 
-                val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
                 val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                 
+                val currentSeason = 1
+                val cleanEpisodeNumber = epNum ?: (episodes.count { (it.season ?: 1) == currentSeason } + 1)
+
                 episodes.add(
                     newEpisode(fixedEp) {
-                        this.name = epName
-                        this.episode = epNum
-                        this.posterUrl = extractPosterUrl(ep)
+                        this.name = "Episode $cleanEpisodeNumber".trim()
+                        this.episode = cleanEpisodeNumber
+                        this.season = currentSeason
+                        this.posterUrl = posterUrl
                     }
                 )
             }
             
-            // If no episodes found, try season links
+            // Optimistic Episode Loading: Only try season links if no episodes found
             if (episodes.isEmpty()) {
                 val seasonLinks = document.select("a[href*=/season/], a:contains(الموسم)")
-                seasonLinks.forEach { seasonLink ->
+                for (seasonLink in seasonLinks) {
                     val seasonHref = seasonLink.attr("href")
+                    val seasonNumber = seasonLink.text()
+                        .replace("[^0-9]".toRegex(), "")
+                        .toIntOrNull()
+
                     if(seasonHref.isNotEmpty()) {
                         val seasonDoc = safeGet(seasonHref)
-                        seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")?.forEach { epLabelInner ->
-                            val epHref = epLabelInner.attr("href")
-                            val fixedEp = fixUrl(epHref)
-                            if (fixedEp.isEmpty() || !episodeUrls.add(fixedEp)) return@forEach
-                            
-                            val epName = epLabelInner.selectFirst("strong")?.text() ?: epLabelInner.text().trim()
-                            val epNum = epLabelInner.selectFirst("span.episode")?.text()
-                                ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
-                            
-                            if (epHref.isNotEmpty()) {
+                        val epLabels = seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")
+                        if (epLabels != null) {
+                            for (epLabelInner in epLabels) {
+                                val epHref = epLabelInner.attr("href")
+                                val fixedEp = fixUrl(epHref)
+                                if (!fixedEp.startsWith("http") || !episodeUrls.add(fixedEp)) continue
+                                
+                                val epNum = epLabelInner.selectFirst("span.episode")?.text()
+                                    ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                                
+                                val cleanEpisodeNumber = epNum ?: (episodes.count { it.season == seasonNumber } + 1)
+
                                 episodes.add(
                                     newEpisode(fixedEp) {
-                                        this.name = epName
-                                        this.episode = epNum
-                                        this.posterUrl = extractPosterUrl(epLabelInner)
+                                        this.name = "Episode $cleanEpisodeNumber".trim()
+                                        this.episode = cleanEpisodeNumber
+                                        this.season = seasonNumber ?: 1
+                                        this.posterUrl = posterUrl
                                     }
                                 )
                             }
@@ -273,7 +303,10 @@ class MyCimaProvider : MainAPI() {
                 }
             }
             
-            episodes.sortBy { it.episode ?: Int.MAX_VALUE }
+            episodes.sortWith(
+                compareBy<Episode> { it.season ?: 0 }
+                    .thenBy { it.episode ?: Int.MAX_VALUE }
+            )
 
             return newTvSeriesLoadResponse(title, fixedUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = posterUrl
@@ -315,7 +348,7 @@ class MyCimaProvider : MainAPI() {
         val t = text?.lowercase() ?: return Qualities.Unknown.value
 
         return when {
-            "2160" in t || "4k" in t -> 2160
+            "2160" in t || "4k" in t -> Qualities.P2160.value
             "1080" in t -> Qualities.P1080.value
             "720" in t -> Qualities.P720.value
             "480" in t -> Qualities.P480.value
@@ -351,42 +384,52 @@ class MyCimaProvider : MainAPI() {
                 val id = it.attr("data-id")
                 Triple(name, id, getServerScore(name))
             }
-            .filter { it.second.isNotBlank() }
+            .filter { it.second.isNotBlank() && it.first.isNotBlank() }
             .sortedBy { it.third } // smart priority ranking
 
         val usedLinks = mutableSetOf<String>()
+        val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        var found = false
+        // Method 1: AJAX Player extraction (Parallel)
+        coroutineScope {
+            servers.map { server ->
+                async {
+                    val (_, serverId, _) = server
+                    val response = runCatching {
+                        app.post(
+                            "$activeDomain/wp-admin/admin-ajax.php",
+                            headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                            data = mapOf(
+                                "action" to "get_player",
+                                "server" to serverId
+                            )
+                        ).document
+                    }.getOrNull() ?: return@async
 
-        // Method 1: AJAX Player extraction
-        for ((_, serverId, _) in servers) {
+                    val iframe = response.selectFirst("iframe")?.attr("src")
+                        ?: return@async
 
-            val response = runCatching {
-                app.post(
-                    "$activeDomain/wp-admin/admin-ajax.php",
-                    headers = headers,
-                    data = mapOf(
-                        "action" to "get_player",
-                        "server" to serverId
-                    )
-                ).document
-            }.getOrNull() ?: continue
+                    val finalUrl = fixUrl(decodeProxy(iframe))
 
-            val iframe = response.selectFirst("iframe")?.attr("src")
-                ?: continue
+                    synchronized(usedLinks) {
+                        if (usedLinks.contains(finalUrl)) return@async
+                        usedLinks.add(finalUrl)
+                    }
 
-            val finalUrl = fixUrl(decodeProxy(iframe))
-
-            if (usedLinks.contains(finalUrl)) continue
-            usedLinks.add(finalUrl)
-
-            loadExtractor(
-                finalUrl,
-                subtitleCallback,
-                callback
-            )
-            found = true
+                    var extractorWorked = false
+                    loadExtractor(
+                        finalUrl,
+                        subtitleCallback
+                    ) { link ->
+                        extractorWorked = true
+                        callback(link)
+                    }
+                    if (extractorWorked) foundAtomic.set(true)
+                }
+            }.awaitAll()
         }
+
+        if (foundAtomic.get()) return true
 
         // Method 2: Standard iframe extraction (fallback)
         document.select("iframe[src]").forEach { iframe ->
@@ -395,8 +438,12 @@ class MyCimaProvider : MainAPI() {
                 val finalUrl = fixUrl(decodeProxy(src))
                 if (!usedLinks.contains(finalUrl)) {
                     usedLinks.add(finalUrl)
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
-                    found = true
+                    var extractorWorked = false
+                    loadExtractor(finalUrl, data, subtitleCallback) { extractedLink ->
+                        extractorWorked = true
+                        callback(extractedLink)
+                    }
+                    if (extractorWorked) foundAtomic.set(true)
                 }
             }
         }
@@ -408,12 +455,16 @@ class MyCimaProvider : MainAPI() {
                 val finalUrl = fixUrl(decodeProxy(href))
                 if (!usedLinks.contains(finalUrl)) {
                     usedLinks.add(finalUrl)
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
-                    found = true
+                    var extractorWorked = false
+                    loadExtractor(finalUrl, data, subtitleCallback) { extractedLink ->
+                        extractorWorked = true
+                        callback(extractedLink)
+                    }
+                    if (extractorWorked) foundAtomic.set(true)
                 }
             }
         }
 
-        return found
+        return foundAtomic.get()
     }
 }
