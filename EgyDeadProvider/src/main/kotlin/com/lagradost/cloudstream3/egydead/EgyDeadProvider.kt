@@ -108,7 +108,7 @@ class EgyDeadProvider : MainAPI() {
             } else true
         }.mapNotNull {
             it.toSearchResponse()
-        }
+        }.distinctBy { it.url }
         
         return newHomePageResponse(request.name, home)
     }
@@ -129,7 +129,7 @@ class EgyDeadProvider : MainAPI() {
             } else true
         }.mapNotNull {
             it.toSearchResponse()
-        }
+        }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
