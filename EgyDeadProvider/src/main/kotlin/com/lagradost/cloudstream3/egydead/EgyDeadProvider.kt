@@ -44,9 +44,13 @@ class EgyDeadProvider : MainAPI() {
     }
     
     private fun Element.toSearchResponse(): SearchResponse? {
-        val link = this.selectFirst("a") ?: return null
-        val href = link.attr("href").takeIf { it.isNotEmpty() } ?: return null
-        val title = link.selectFirst("h1, h2, h3")?.text()?.cleanTitle() ?: return null
+        val link = if (this.tagName() == "a") this else this.selectFirst("a")
+        if (link == null) return null
+        
+        val href = link.attr("href").takeIf { it.isNotEmpty() && it.contains("egydead") } ?: return null
+        val title = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).cleanTitle()
+        if (title.isEmpty()) return null
+        
         val posterUrl = link.selectFirst("img")?.attr("src") ?: ""
         
         // Determine type based on URL or category
@@ -94,8 +98,15 @@ class EgyDeadProvider : MainAPI() {
 
         val document = app.get(url, headers = requestHeaders).document
         
-        // Use user's robust selectors merged with verified ones
-        val home = document.select("li.movieItem, div.BlockItem, div > a[href*='egydead']").mapNotNull {
+        // Select all potential containers and direct links for universal support
+        val home = document.select("li.movieItem, div.BlockItem, a[href*='egydead']").toList().filter {
+            val href = it.attr("href")
+            // Filter out common non-content links if it's a direct <a> tag
+            if (it.tagName() == "a") {
+                href.contains("202") || href.contains("/%") || 
+                href.contains("/episode/") || href.contains("/season/") || href.contains("/serie/")
+            } else true
+        }.mapNotNull {
             it.toSearchResponse()
         }
         
@@ -110,7 +121,13 @@ class EgyDeadProvider : MainAPI() {
         Thread.sleep((1000..2000).random().toLong())
         
         val doc = app.get("$mainUrl/?s=$query", headers = requestHeaders).document
-        return doc.select("li.movieItem, div.BlockItem, div > a[href*='egydead']").mapNotNull {
+        return doc.select("li.movieItem, div.BlockItem, a[href*='egydead']").toList().filter {
+            val href = it.attr("href")
+            if (it.tagName() == "a") {
+                href.contains("202") || href.contains("/%") || 
+                href.contains("/episode/") || href.contains("/season/") || href.contains("/serie/")
+            } else true
+        }.mapNotNull {
             it.toSearchResponse()
         }
     }
