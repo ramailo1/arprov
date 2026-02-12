@@ -66,6 +66,7 @@ class ArabSeedProvider : MainAPI() {
         "$mainUrl/category/مسلسلات-مصريه/" to "Egyptian Series",
         "$mainUrl/category/مسلسلات-هندية/" to "Indian Series",
         "$mainUrl/category/cartoon-series/" to "Cartoon",
+        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2026/" to "Ramadan Series 2026",
         "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2025/" to "Ramadan Series 2025",
         "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2024/" to "Ramadan Series 2024",
         "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2023/" to "Ramadan Series 2023",
