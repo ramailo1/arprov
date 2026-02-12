@@ -84,14 +84,14 @@ graph TD
 +
 +
 ### 🚫 Blocked / Not Working
-+These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
-+
-+| Provider | Reason | Status |
-+| :--- | :--- | :--- |
-+| **AnimeBlkom** | Permanent Block | `Disabled` |
-+| **FajerShow** | Domain Issues | `Disabled` |
-+| **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
-+
+These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
+
+| Provider | Reason | Status |
+| :--- | :--- | :--- |
+| **AnimeBlkom** | Permanent Block | `Disabled` |
+| **FajerShow** | Domain Issues | `Disabled` |
+| **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
+
 ---
 
 ## 🔧 Installation & Setup

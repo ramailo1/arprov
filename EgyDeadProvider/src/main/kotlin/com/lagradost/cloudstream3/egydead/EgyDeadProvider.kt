@@ -147,16 +147,20 @@ class EgyDeadProvider : MainAPI() {
             val seriesUrl = doc.selectFirst(".breadcrumbs-single a:last-of-type")?.attr("href")
                 ?: doc.selectFirst("a[href*='/serie/']:not([href$='/serie/']), a[href*='/season/']")?.attr("href")
             
-            if (!seriesUrl.isNullOrEmpty() && seriesUrl != url) {
+            if (!seriesUrl.isNullOrEmpty() && seriesUrl != url && !seriesUrl.endsWith("/episode/") && !seriesUrl.endsWith("/serie/")) {
                 return load(seriesUrl)
             }
         }
 
-        val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
+        val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst(".breadcrumbs-single li:last-child") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
         val isMovie = !url.contains("/serie/|/season/".toRegex()) && !url.contains("/episode/".toRegex())
 
-        val posterUrl = doc.select("div.single-thumbnail > img, div.Poster img").attr("src")
-        val synopsis = doc.select("div.extra-content:contains(القصه) p, div.Story p").text()
+        val posterUrl = doc.selectFirst("div.single-thumbnail img, div.Poster img")?.let { 
+            it.attr("data-src").ifEmpty { it.attr("src") } 
+        } ?: ""
+        
+        val synopsis = doc.select("div.extra-content").find { it.text().contains("القصه") || it.text().contains("القصة") }?.selectFirst("p")?.text() 
+            ?: doc.selectFirst("div.Story p")?.text() ?: ""
         val year = doc.select("ul > li:contains(السنه) > a, li:contains(السنة) a").text().getIntFromText()
         val tags = doc.select("ul > li:contains(النوع) > a, li:contains(النوع) a").map { it.text() }
         val recommendations = doc.select("div.related-posts > ul > li, div.BlockItem").mapNotNull { element ->
