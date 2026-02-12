@@ -144,16 +144,29 @@ class EgyDeadProvider : MainAPI() {
 
         // Redirect individual episode pages to their main series/season page for Netflix layout
         if (url.contains("/episode/")) {
-            val seriesUrl = doc.selectFirst(".breadcrumbs-single a:last-of-type")?.attr("href")
-                ?: doc.selectFirst("a[href*='/serie/']:not([href$='/serie/']), a[href*='/season/']")?.attr("href")
+            println("[EgyDead] Episode page detected: $url")
+            
+            val breadcrumbLink = doc.selectFirst(".breadcrumbs-single a:last-of-type")?.attr("href")
+            println("[EgyDead] Breadcrumb link: $breadcrumbLink")
+            
+            val fallbackLink = doc.selectFirst("a[href*='/serie/']:not([href$='/serie/']), a[href*='/season/']")?.attr("href")
+            println("[EgyDead] Fallback link: $fallbackLink")
+            
+            val seriesUrl = breadcrumbLink ?: fallbackLink
+            println("[EgyDead] Final series URL: $seriesUrl")
             
             if (!seriesUrl.isNullOrEmpty() && seriesUrl != url && !seriesUrl.endsWith("/episode/") && !seriesUrl.endsWith("/serie/")) {
+                println("[EgyDead] Redirecting to: $seriesUrl")
                 return load(seriesUrl)
+            } else {
+                println("[EgyDead] Redirection failed - seriesUrl: $seriesUrl, same as url: ${seriesUrl == url}")
             }
         }
 
         val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst(".breadcrumbs-single li:last-child") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
         val isMovie = !url.contains("/serie/|/season/".toRegex()) && !url.contains("/episode/".toRegex())
+        
+        println("[EgyDead] Title: $title, isMovie: $isMovie, URL: $url")
 
         val posterUrl = doc.selectFirst("div.single-thumbnail img, div.Poster img")?.let { 
             it.attr("data-src").ifEmpty { it.attr("src") } 
@@ -163,6 +176,8 @@ class EgyDeadProvider : MainAPI() {
             ?: doc.selectFirst("div.Story p")?.text() ?: ""
         val year = doc.select("ul > li:contains(السنه) > a, li:contains(السنة) a").text().getIntFromText()
         val tags = doc.select("ul > li:contains(النوع) > a, li:contains(النوع) a").map { it.text() }
+        
+        println("[EgyDead] Poster: ${posterUrl.isNotEmpty()}, Synopsis: ${synopsis.isNotEmpty()}")
         val recommendations = doc.select("div.related-posts > ul > li, div.BlockItem").mapNotNull { element ->
             element.toSearchResponse()
         }
@@ -181,16 +196,24 @@ class EgyDeadProvider : MainAPI() {
                 this.year = year
             }
         } else {
+            println("[EgyDead] Loading as TV Series")
             val seasonLinks = doc.select("div.seasons-list ul > li > a, div.List--Seasons--Episodes a").reversed()
             val episodes = arrayListOf<Episode>()
+            
+            println("[EgyDead] Found ${seasonLinks.size} season links")
 
             if (seasonLinks.isNotEmpty()) {
                 seasonLinks.forEachIndexed { index, season ->
                     val seasonNumber = season.text().getIntFromText() ?: (index + 1)
                     var epIndex = 1
+                    
+                    println("[EgyDead] Loading season $seasonNumber from: ${season.attr("href")}")
 
                     val seasonDoc = app.get(season.attr("href"), headers = requestHeaders).document
-                    seasonDoc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
+                    val seasonEpisodes = seasonDoc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a")
+                    println("[EgyDead] Found ${seasonEpisodes.size} episodes in season $seasonNumber")
+                    
+                    seasonEpisodes.forEach {
                         episodes.add(newEpisode(it.attr("href")) {
                             this.name = it.attr("title")
                             this.season = seasonNumber
@@ -201,7 +224,10 @@ class EgyDeadProvider : MainAPI() {
                 }
             } else {
                 var epIndex = 1
-                doc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
+                val directEpisodes = doc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a")
+                println("[EgyDead] No season links, found ${directEpisodes.size} direct episodes")
+                
+                directEpisodes.forEach {
                     episodes.add(newEpisode(it.attr("href")) {
                         this.name = it.attr("title")
                         this.season = 1
@@ -210,12 +236,16 @@ class EgyDeadProvider : MainAPI() {
                     epIndex++
                 }
             }
+            
+            val distinctEpisodes = episodes.distinct().sortedWith(compareBy({ it.season }, { it.episode }))
+            println("[EgyDead] Total episodes: ${episodes.size}, Distinct: ${distinctEpisodes.size}")
+            println("[EgyDead] First 3 episodes: ${distinctEpisodes.take(3).map { "S${it.season}E${it.episode}" }}")
 
             newTvSeriesLoadResponse(
                 title,
                 url,
                 TvType.TvSeries,
-                episodes.distinct().sortedWith(compareBy({ it.season }, { it.episode }))
+                distinctEpisodes
             ) {
                 this.posterUrl = posterUrl
                 this.tags = tags
