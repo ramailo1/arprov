@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 import kotlinx.coroutines.*
 
 class MyCimaProvider : MainAPI() {
@@ -125,10 +126,21 @@ class MyCimaProvider : MainAPI() {
             .mapNotNull { it.toSearchResult() }
     }
 
-    private fun detectType(url: String): TvType {
+    private fun detectType(url: String, document: Document? = null): TvType {
+        val path = url.lowercase()
+
         return when {
-            url.contains("/series/") || url.contains("مسلسلات") -> TvType.TvSeries
-            url.contains("/anime") || url.contains("انمي") -> TvType.Anime
+            // Priority 1: Explicit path segments
+            "/series/" in path && "/movies/" !in path && "/film/" !in path -> TvType.TvSeries
+            "/anime/" in path || "انمي" in path -> TvType.Anime
+            "/movies/" in path || "/film/" in path -> TvType.Movie
+            
+            // Priority 2: HTML Breadcrumbs / Categories as fallback
+            document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("مسلسلات") == true -> TvType.TvSeries
+            document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("افلام") == true -> TvType.Movie
+            
+            // Priority 3: Greedy match (only if no explicit movies/film found)
+            path.contains("مسلسلات") -> TvType.TvSeries
             else -> TvType.Movie
         }
     }
@@ -142,7 +154,7 @@ class MyCimaProvider : MainAPI() {
             
         val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
         val posterUrl = extractPosterUrl(this)
-        val type = detectType(href)
+        val type = detectType(href, this.ownerDocument())
         
         return when (type) {
             TvType.TvSeries, TvType.Anime -> newTvSeriesSearchResponse(title, href, type) {
@@ -231,14 +243,9 @@ class MyCimaProvider : MainAPI() {
             ?.text()?.replace("[^0-9]".toRegex(), "")
             ?.toIntOrNull()
 
-        // Improved series detection
-        val isSeries = when {
-            fixedUrl.contains("/movies/") -> false
-            fixedUrl.contains("/film/") -> false
-            fixedUrl.contains("/series/") -> true
-            document.select(".EpisodesList a[href*=/episode/], a[href*=/episode-], a:contains(حلقة)").isNotEmpty() -> true
-            else -> false
-        }
+        // Improved series detection using precision logic
+        val type = detectType(fixedUrl, document)
+        val isSeries = type == TvType.TvSeries || (type == TvType.Anime && document.select(".EpisodesList").isNotEmpty())
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
@@ -279,6 +286,7 @@ class MyCimaProvider : MainAPI() {
                         val seasonDoc = safeGet(seasonHref)
                         val epLabels = seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")
                         if (epLabels != null) {
+                            val currentSeason = seasonNumber ?: 1
                             for (epLabelInner in epLabels) {
                                 val epHref = epLabelInner.attr("href")
                                 val fixedEp = fixUrl(epHref)
@@ -287,13 +295,15 @@ class MyCimaProvider : MainAPI() {
                                 val epNum = epLabelInner.selectFirst("span.episode")?.text()
                                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                                 
-                                val cleanEpisodeNumber = epNum ?: (episodes.count { it.season == seasonNumber } + 1)
+                                val cleanEpisodeNumber = epNum ?: (
+                                    episodes.count { (it.season ?: 1) == currentSeason } + 1
+                                )
 
                                 episodes.add(
                                     newEpisode(fixedEp) {
                                         this.name = "Episode $cleanEpisodeNumber".trim()
                                         this.episode = cleanEpisodeNumber
-                                        this.season = seasonNumber ?: 1
+                                        this.season = currentSeason
                                         this.posterUrl = posterUrl
                                     }
                                 )
@@ -419,6 +429,7 @@ class MyCimaProvider : MainAPI() {
                     var extractorWorked = false
                     loadExtractor(
                         finalUrl,
+                        data,
                         subtitleCallback
                     ) { link ->
                         extractorWorked = true
