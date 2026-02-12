@@ -16,6 +16,7 @@ class MyCimaProvider : MainAPI() {
     )
 
     private var activeDomain: String = domainPool.first()
+    private var checkedDomain = false
 
     override var mainUrl = activeDomain
     override var name = "MyCima"
@@ -37,7 +38,9 @@ class MyCimaProvider : MainAPI() {
         )
 
     // ---------- AUTO DOMAIN DETECTOR ----------
-    private suspend fun getWorkingDomain(): String? {
+    private suspend fun ensureDomain(): Boolean {
+        if (checkedDomain) return true
+
         for (domain in domainPool) {
             val working = runCatching {
                 app.get(domain, timeout = 10).isSuccessful
@@ -46,18 +49,19 @@ class MyCimaProvider : MainAPI() {
             if (working) {
                 activeDomain = domain
                 mainUrl = domain
-                return domain
+                checkedDomain = true
+                return true
             }
         }
-        return null
+        return false
     }
 
     private suspend fun safeGet(url: String): org.jsoup.nodes.Document? {
-        val base = getWorkingDomain() ?: return null
+        if (!ensureDomain()) return null
 
         return runCatching {
             app.get(
-                if (url.startsWith("http")) url else base + url,
+                if (url.startsWith("http")) url else activeDomain + url,
                 headers = headers
             ).document
         }.getOrNull()
@@ -97,6 +101,14 @@ class MyCimaProvider : MainAPI() {
             .mapNotNull { it.toSearchResult() }
     }
 
+    private fun detectType(url: String): TvType {
+        return when {
+            url.contains("/series/") -> TvType.TvSeries
+            url.contains("/anime") -> TvType.Anime
+            else -> TvType.Movie
+        }
+    }
+
     private fun Element.toSearchResult(): SearchResponse? {
         val anchor = this.selectFirst("a")
         val title = anchor?.selectFirst("strong")?.text()?.trim() 
@@ -106,8 +118,9 @@ class MyCimaProvider : MainAPI() {
             
         val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
         val posterUrl = extractPosterUrl(this)
+        val type = detectType(href)
         
-        return newMovieSearchResponse(title, href, TvType.Movie) {
+        return newMovieSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -162,7 +175,7 @@ class MyCimaProvider : MainAPI() {
         val document = safeGet(url) ?: return null
         val fixedUrl = fixUrl(url)
 
-        val title = document.selectFirst("h1, h2, .Title, .title")?.text()?.trim() ?: return null
+        val title = document.selectFirst("h1[itemprop=name], h1, h2, .Title, .title")?.text()?.trim() ?: return null
 
         // TIERED POSTER EXTRACTION
         val posterUrl = 
@@ -185,31 +198,36 @@ class MyCimaProvider : MainAPI() {
             ?.text()?.replace("[^0-9]".toRegex(), "")
             ?.toIntOrNull()
 
-        // Improved series detection - check URL first, then verify with elements
-        // Movies should NOT be classified as series even if they have related content sections
-        val isSeriesUrl = fixedUrl.contains("/series/") || fixedUrl.contains("/episode/") || fixedUrl.contains("/%d8%a7%d9%84%dad%d9%84%d9%82%d8%a9")
-        val hasEpisodeElements = document.select(".EpisodesList a, a.GridItem:has(span.episode)").isNotEmpty()
-        val isSeries = isSeriesUrl || hasEpisodeElements
+        // Improved series detection
+        val isSeries = when {
+            fixedUrl.contains("/movies/") -> false
+            fixedUrl.contains("/film/") -> false
+            fixedUrl.contains("/series/") -> true
+            document.select(".EpisodesList a").isNotEmpty() -> true
+            else -> false
+        }
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
+            val episodeUrls = mutableSetOf<String>()
             
             // Get episodes from current page list or seasons
             document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode), a.GridItem:has(strong)").forEach { ep ->
                 val epHref = ep.attr("href")
+                val fixedEp = fixUrl(epHref)
+                if (fixedEp.isEmpty() || fixedEp.contains("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
+                
                 val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
                 val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                 
-                if (epHref.isNotEmpty() && !epHref.contains("/series/") && !epHref.contains("/category/")) {
-                    episodes.add(
-                        newEpisode(fixUrl(epHref)) {
-                            this.name = epName
-                            this.episode = epNum
-                            this.posterUrl = extractPosterUrl(ep)
-                        }
-                    )
-                }
+                episodes.add(
+                    newEpisode(fixedEp) {
+                        this.name = epName
+                        this.episode = epNum
+                        this.posterUrl = extractPosterUrl(ep)
+                    }
+                )
             }
             
             // If no episodes found, try season links
@@ -219,18 +237,21 @@ class MyCimaProvider : MainAPI() {
                     val seasonHref = seasonLink.attr("href")
                     if(seasonHref.isNotEmpty()) {
                         val seasonDoc = safeGet(seasonHref)
-                        seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")?.forEach { ep ->
-                            val epHref = ep.attr("href")
-                            val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
-                            val epNum = ep.selectFirst("span.episode")?.text()
+                        seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")?.forEach { epLabel ->
+                            val epHref = epLabel.attr("href")
+                            val fixedEp = fixUrl(epHref)
+                            if (fixedEp.isEmpty() || !episodeUrls.add(fixedEp)) return@forEach
+                            
+                            val epName = epLabel.selectFirst("strong")?.text() ?: epLabel.text().trim()
+                            val epNum = epLabel.selectFirst("span.episode")?.text()
                                 ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                             
                             if (epHref.isNotEmpty()) {
                                 episodes.add(
-                                    newEpisode(fixUrl(epHref)) {
+                                    newEpisode(fixedEp) {
                                         this.name = epName
                                         this.episode = epNum
-                                        this.posterUrl = extractPosterUrl(ep)
+                                        this.posterUrl = extractPosterUrl(epLabel)
                                     }
                                 )
                             }
@@ -276,10 +297,12 @@ class MyCimaProvider : MainAPI() {
     }
 
     private fun getQuality(text: String?): Int {
+        val t = text?.lowercase() ?: return Qualities.Unknown.value
+
         return when {
-            text?.contains("1080") == true -> Qualities.P1080.value
-            text?.contains("720") == true -> Qualities.P720.value
-            text?.contains("480") == true -> Qualities.P480.value
+            "1080" in t -> Qualities.P1080.value
+            "720" in t -> Qualities.P720.value
+            "480" in t -> Qualities.P480.value
             else -> Qualities.Unknown.value
         }
     }
@@ -294,11 +317,14 @@ class MyCimaProvider : MainAPI() {
 
         // Helper to decode govid.live/play/ proxy URLs
         val decodeProxy: (String) -> String = { url ->
-            if (url.contains("govid.live/play/")) {
-                try {
-                    val b64 = url.substringAfter("/play/").substringBefore("/").replace("_", "/").replace("-", "+")
+            if (url.contains("/play/")) {
+                runCatching {
+                    val b64 = url.substringAfter("/play/")
+                        .substringBefore("/")
+                        .replace("_", "/")
+                        .replace("-", "+")
                     String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
-                } catch (e: Exception) { url }
+                }.getOrElse { url }
             } else url
         }
 
@@ -315,14 +341,20 @@ class MyCimaProvider : MainAPI() {
 
         val usedLinks = mutableSetOf<String>()
 
-        // Method 1: AJAX Player extraction
-        for ((serverName, serverId, _) in servers) {
+        var found = false
 
-            val ajaxUrl =
-                "$activeDomain/wp-admin/admin-ajax.php?action=get_player&server=$serverId"
+        // Method 1: AJAX Player extraction
+        for ((_, serverId, _) in servers) {
 
             val response = runCatching {
-                app.get(ajaxUrl, headers = headers).document
+                app.post(
+                    "$activeDomain/wp-admin/admin-ajax.php",
+                    headers = headers,
+                    data = mapOf(
+                        "action" to "get_player",
+                        "server" to serverId
+                    )
+                ).document
             }.getOrNull() ?: continue
 
             val iframe = response.selectFirst("iframe")?.attr("src")
@@ -333,13 +365,12 @@ class MyCimaProvider : MainAPI() {
             if (usedLinks.contains(finalUrl)) continue
             usedLinks.add(finalUrl)
 
-            val quality = getQuality(serverName)
-
             loadExtractor(
                 finalUrl,
                 subtitleCallback,
                 callback
             )
+            found = true
         }
 
         // Method 2: Standard iframe extraction (fallback)
@@ -366,6 +397,6 @@ class MyCimaProvider : MainAPI() {
             }
         }
 
-        return true
+        return found
     }
 }
