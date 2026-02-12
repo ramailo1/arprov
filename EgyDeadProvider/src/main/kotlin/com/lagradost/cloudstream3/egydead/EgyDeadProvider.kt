@@ -5,7 +5,6 @@ package com.lagradost.cloudstream3.egydead
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
@@ -17,71 +16,49 @@ import okhttp3.Headers
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://egydead.rip"
-    override var name = "EgyDead (In Progress)"
+    override var name = "EgyDead"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
 
-    // Anti-bot configuration
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
     private val headers = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
         "DNT" to "1",
         "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none"
+        "Upgrade-Insecure-Requests" to "1"
     )
-
-    @Suppress("DEPRECATION")
-    fun getMainPage(): Int {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
-
-        val randomUserAgent = userAgents.random()
-        val requestHeaders = headers.toMutableMap()
-        requestHeaders["User-Agent"] = randomUserAgent
-
-        return try {
-            val headersBuilder = Headers.Builder()
-            requestHeaders.forEach { (k, v) -> headersBuilder.add(k, v) }
-            val request = Request.Builder()
-                .url(mainUrl)
-                .headers(headersBuilder.build())
-                .build()
-            
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) 1 else 0
-        } catch (e: Exception) {
-            0
-        }
-    }
 
     private fun String.getIntFromText(): Int? {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
+    
     private fun String.cleanTitle(): String {
-        return this.replace("جميع مواسم مسلسل|مترجم كامل|مشاهدة فيلم|مترجم|انمي|الموسم.*|مترجمة كاملة|مسلسل|كاملة".toRegex(), "")
+        return this.replace("جميع مواسم مسلسل|مترجم كامل|مشاهدة فيلم|مشاهدة عرض|مترجم|انمي|الموسم.*|مترجمة كاملة|مسلسل|كاملة|برنامج".toRegex(), "").trim()
     }
-    private fun Element.toSearchResponse(): SearchResponse {
-        val title = select("h1.BottomTitle").text().cleanTitle()
-        val posterUrl = select("img").attr("src")
-        val tvType = if (select("span.cat_name").text().contains("افلام")) TvType.Movie else TvType.TvSeries
+    
+    private fun Element.toSearchResponse(): SearchResponse? {
+        val link = this.selectFirst("a") ?: return null
+        val href = link.attr("href").takeIf { it.isNotEmpty() } ?: return null
+        val title = link.selectFirst("h1, h2, h3")?.text()?.cleanTitle() ?: return null
+        val posterUrl = link.selectFirst("img")?.attr("src") ?: ""
+        
+        // Determine type based on URL or category
+        val tvType = when {
+            href.contains("/serie/") || href.contains("/season/") -> TvType.TvSeries
+            href.contains("/episode/") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+        
         return newMovieSearchResponse(
             title,
-            select("a").attr("href"),
+            href,
             tvType,
         ) {
             this.posterUrl = posterUrl
@@ -89,7 +66,7 @@ class EgyDeadProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/movies/" to "احدث الافلام",
+        "$mainUrl/page/movies/?page=" to "احدث الافلام",
         "$mainUrl/episode/?page=" to "احدث الحلقات",
         "$mainUrl/season/?page=" to "احدث المواسم",
         "$mainUrl/serie/?page=" to "احدث المسلسلات",
@@ -103,20 +80,25 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
-        Thread.sleep((1000..3000).random().toLong())
+        Thread.sleep((1000..2000).random().toLong())
         
-        val url = if (page == 1) {
-            request.data.removeSuffix("?page=").removeSuffix("/") + "/"
+        val url = if (request.data.contains("/page/movies/")) {
+            if (page == 1) {
+                "$mainUrl/page/movies/"
+            } else {
+                "$mainUrl/page/movies/page/$page/"
+            }
         } else {
-            val base = request.data.removeSuffix("?page=").removeSuffix("/")
-            "$base/page/$page/"
+            request.data + page
         }
 
         val document = app.get(url, headers = requestHeaders).document
-        val home = document.select("li.movieItem").mapNotNull {
+        
+        // Use user's robust selectors merged with verified ones
+        val home = document.select("li.movieItem, div.BlockItem, div > a[href*='egydead']").mapNotNull {
             it.toSearchResponse()
         }
+        
         return newHomePageResponse(request.name, home)
     }
 
@@ -125,11 +107,10 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
-        Thread.sleep((1000..2500).random().toLong())
+        Thread.sleep((1000..2000).random().toLong())
         
         val doc = app.get("$mainUrl/?s=$query", headers = requestHeaders).document
-        return doc.select("li.movieItem").mapNotNull {
+        return doc.select("li.movieItem, div.BlockItem, div > a[href*='egydead']").mapNotNull {
             it.toSearchResponse()
         }
     }
@@ -139,22 +120,19 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
-        Thread.sleep((1500..3500).random().toLong())
+        Thread.sleep((1500..2500).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
         val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
         val isMovie = !url.contains("/serie/|/season/".toRegex()) && !url.contains("/episode/".toRegex())
 
-        val posterUrl = doc.select("div.single-thumbnail > img").attr("src")
-        val rating = doc.select("a.IMDBRating em").text().getIntFromText()
-        val synopsis = doc.select("div.extra-content:contains(القصه) p").text()
-        val year = doc.select("ul > li:contains(السنه) > a").text().getIntFromText()
-        val tags = doc.select("ul > li:contains(النوع) > a").map { it.text() }
-        val recommendations = doc.select("div.related-posts > ul > li").mapNotNull { element ->
+        val posterUrl = doc.select("div.single-thumbnail > img, div.Poster img").attr("src")
+        val synopsis = doc.select("div.extra-content:contains(القصه) p, div.Story p").text()
+        val year = doc.select("ul > li:contains(السنه) > a, li:contains(السنة) a").text().getIntFromText()
+        val tags = doc.select("ul > li:contains(النوع) > a, li:contains(النوع) a").map { it.text() }
+        val recommendations = doc.select("div.related-posts > ul > li, div.BlockItem").mapNotNull { element ->
             element.toSearchResponse()
         }
-        val youtubeTrailer = doc.select("div.popupContent > iframe").attr("src")
 
         if (url.contains("/episode/")) {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -176,18 +154,17 @@ class EgyDeadProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.plot = synopsis
                 this.tags = tags
-                // this.rating = rating
                 this.year = year
-                // addTrailer(youtubeTrailer)
             }
         } else {
-            val seasonList = doc.select("div.seasons-list ul > li > a").reversed()
+            val seasonList = doc.select("div.seasons-list ul > li > a, div.List--Seasons--Episodes a").reversed()
             val episodes = arrayListOf<Episode>()
             if(seasonList.isNotEmpty()) {
                 seasonList.forEachIndexed { index, season ->
                     app.get(
                         season.attr("href"),
-                    ).document.select("div.EpsList > li > a").forEach {
+                        headers = requestHeaders
+                    ).document.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
                         episodes.add(newEpisode(it.attr("href")) {
                             this.name = it.attr("title")
                             this.season = index+1
@@ -196,10 +173,10 @@ class EgyDeadProvider : MainAPI() {
                     }
                 }
             } else {
-                doc.select("div.EpsList > li > a").forEach {
+                doc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
                     episodes.add(newEpisode(it.attr("href")) {
                         this.name = it.attr("title")
-                        this.season = 0
+                        this.season = 1
                         this.episode = it.text().getIntFromText()
                     })
                 }
@@ -209,12 +186,11 @@ class EgyDeadProvider : MainAPI() {
                 this.tags = tags
                 this.plot = synopsis
                 this.recommendations = recommendations
-                // this.rating = rating
                 this.year = year
-                // addTrailer(youtubeTrailer)
             }
         }
     }
+    
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -225,17 +201,18 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        // Add delay to mimic human behavior
-        Thread.sleep((2000..4000).random().toLong())
+        Thread.sleep((1500..2500).random().toLong())
         
         val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
-        doc.select(".donwload-servers-list > li").forEach { element ->
+        doc.select(".donwload-servers-list > li, ul.download a").forEach { element ->
             val url = element.select("a").attr("href")
             loadExtractor(url, data, subtitleCallback, callback)
         }
-        doc.select("ul.serversList > li").forEach { li ->
+        doc.select("ul.serversList > li, div.ServersList li").forEach { li ->
             val iframeUrl = li.attr("data-link")
-            loadExtractor(iframeUrl, data, subtitleCallback, callback)
+            if(iframeUrl.isNotEmpty()) {
+                loadExtractor(iframeUrl, data, subtitleCallback, callback)
+            }
         }
         return true
     }
