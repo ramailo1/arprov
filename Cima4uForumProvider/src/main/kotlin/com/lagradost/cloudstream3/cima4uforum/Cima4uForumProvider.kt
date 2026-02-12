@@ -116,8 +116,6 @@ class Cima4uForumProvider : MainAPI() {
             document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it, document) }
             ?: extractPosterUrl(document.selectFirst(".Poster--Single-begin") ?: document, document)
 
-        println("DEBUG: Poster URL = $posterUrl")
-        
         val year = document.selectFirst("a[href*=release-year]")?.text()?.toIntOrNull()
         val description = document.selectFirst("div.story p, div:contains(قصة العرض) + div, .AsideContext")?.text()?.trim()
         

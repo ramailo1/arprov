@@ -14,7 +14,6 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
-        println("Aflamy Debug: Loading URL: $url with referer: $referer")
         val sources = mutableListOf<ExtractorLink>()
         val mainDoc = app.get(url, referer = referer).document
         
@@ -23,7 +22,6 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
             val href = it.attr("abs:href")
             if (href.isNotBlank()) href else null
         }.toMutableList()
-        println("Aflamy Debug: Found ${serverLinks.size} server links: $serverLinks")
         
         // If no server links, add the current URL as a default server
         if (serverLinks.isEmpty()) serverLinks.add(url)
@@ -39,7 +37,6 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
         )
 
         suspend fun addSource(src: String, pageUrl: String) {
-            println("Aflamy Debug: Attempting to add source: $src")
             if (!src.contains("http") || src.contains(".vtt") || src.contains(".js")) return
             val qualityStr = Regex("""[0-9]{3,}""").find(src)?.value
             val qualityValue = qualities[qualityStr] ?: Qualities.Unknown.value
@@ -50,7 +47,6 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
 
-            println("Aflamy Debug: Adding source at quality: $qualityValue with headers: $headers")
             sources.add(
                 newExtractorLink(
                     name,
@@ -68,7 +64,6 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
         // 2. Process each server page
         serverLinks.distinct().filter { it.startsWith("http") }.forEach { serverUrl ->
             try {
-                println("Aflamy Debug: Processing serverUrl: $serverUrl")
                 val serverResponse = app.get(serverUrl, referer = url).text
                 
                 // Search for direct links in server page first
@@ -80,22 +75,17 @@ class Aflamy(override val mainUrl: String = "https://w.aflamy.pro") : ExtractorA
                     Regex("""<iframe\s+[^>]*src=["']([^"']+)["']""").findAll(html).map { it.groupValues[1] }.toList()
                 }.filter { it.contains(".cyou") || it.contains("embed") || it.contains("player") }
                 
-                println("Aflamy Debug: Found ${iframeSrcs.size} iframes: $iframeSrcs")
-
                 iframeSrcs.forEach { iframeUrl ->
                     val fixedIframeUrl = fixUrl(iframeUrl, serverUrl)
-                    println("Aflamy Debug: Following iframe: $fixedIframeUrl")
                     val iframeResponse = app.get(fixedIframeUrl, referer = serverUrl).text
                     
                     hlsPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
                     srcPattern.findAll(iframeResponse).forEach { addSource(it.groupValues[1], fixedIframeUrl) }
                 }
             } catch (e: Exception) {
-                println("Aflamy Debug: Error processing server $serverUrl: ${e.message}")
             }
         }
         
-        println("Aflamy Debug: Returning ${sources.size} sources")
         return sources.distinctBy { it.url }.sortedByDescending { it.url.contains(".m3u8") }
     }
     private fun fixUrl(url: String, baseUrl: String = mainUrl): String {

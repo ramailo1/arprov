@@ -63,7 +63,7 @@ graph TD
 | **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
 | **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
-| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` | (Blocked by Cloudflare) |
+| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
@@ -72,16 +72,25 @@ graph TD
 | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
 | **Fushaar** | Movies & Series | `com.lagradost.cloudstream3.fushaar` |
 | **EgyBest** | Movies & Series | `com.lagradost.cloudstream3.egybest` |
+| **MyCima** | Movies & Series | `com.lagradost.cloudstream3.mycima` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 ### 🛠️ In Development (Coming Soon)
-- [ ] **MyCima** - `Testing & Refinement`
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
 - [ ] **GateAnime** - `Planned`
-
++
++### 🚫 Blocked / Not Working
++These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
++
++| Provider | Reason | Status |
++| :--- | :--- | :--- |
++| **AnimeBlkom** | Permanent Block | `Disabled` |
++| **FajerShow** | Domain Issues | `Disabled` |
++| **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
++
 ---
 
 ## 🔧 Installation & Setup

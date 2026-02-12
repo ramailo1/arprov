@@ -66,9 +66,10 @@ class MyCimaProvider : MainAPI() {
     // ---------- MAIN PAGE ----------
     override val mainPage = mainPageOf(
         "/" to "الرئيسية",
+        "/episodes/" to "الحلقات",
         "/movies/" to "أفلام",
         "/series/" to "مسلسلات",
-        "/episodes/" to "الحلقات",
+        "/category/مسلسلات-انمي/" to "مسلسلات انمي",
         "/category/عروض-مصارعة/" to "مصارعة حرة",
         "/category/برامج-تلفزيونية/" to "برامج تلفزيونية",
     )
@@ -205,6 +206,7 @@ class MyCimaProvider : MainAPI() {
                         newEpisode(fixUrl(epHref)) {
                             this.name = epName
                             this.episode = epNum
+                            this.posterUrl = extractPosterUrl(ep)
                         }
                     )
                 }
@@ -228,6 +230,7 @@ class MyCimaProvider : MainAPI() {
                                     newEpisode(fixUrl(epHref)) {
                                         this.name = epName
                                         this.episode = epNum
+                                        this.posterUrl = extractPosterUrl(ep)
                                     }
                                 )
                             }

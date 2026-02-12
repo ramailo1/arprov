@@ -102,14 +102,11 @@ class FushaarProvider : MainAPI() {
         // Method 0: Check if 'data' URL itself has a hash (common when load() passes an akoam redirect)
         if (data.contains("hash=")) {
             val hashValue = Regex("""[?&]hash=([^&]+)""").find(data)?.groupValues?.get(1)
-            println("Fushaar Debug: Found hash in data URL: $hashValue")
             hashValue?.split("__")?.forEach { part ->
                 try {
                     val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
-                    println("Fushaar Debug: Decoded part from data URL: $decoded")
                     val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
                     if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro") || playerUrl.contains("dazzwo.pro") || playerUrl.contains("dazwo.pro"))) {
-                        println("Fushaar Debug: Targeting playerUrl (Method 0): $playerUrl")
                         if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
                     }
                 } catch (e: Exception) { }
@@ -122,21 +119,16 @@ class FushaarProvider : MainAPI() {
             .mapNotNull { it.attr("href").takeIf { it.isNotBlank() } }
             .forEach { link ->
                 val hashValue = Regex("""[?&]hash=([^&]+)""").find(link)?.groupValues?.get(1) ?: return@forEach
-                println("Fushaar Debug: Found hash link: $link")
                 hashValue.split("__").forEach { part ->
                     try {
                         val decoded = String(android.util.Base64.decode(part, android.util.Base64.DEFAULT))
-                        println("Fushaar Debug: Decoded part: $decoded")
                         val playerUrl = Regex("""https?://[^\s<>"']+""").find(decoded)?.value
                         if (playerUrl != null && (playerUrl.contains("aflamy.pro") || playerUrl.contains("albaplayer.pro") || playerUrl.contains("shadwo.pro") || playerUrl.contains("dazzwo.pro") || playerUrl.contains("dazwo.pro"))) {
-                            println("Fushaar Debug: Targeting playerUrl: $playerUrl")
                             if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
-                                println("Fushaar Debug: Success via Method 1")
                                 anySuccess = true
                             }
                         }
                     } catch (e: Exception) { 
-                        println("Fushaar Debug: Method 1 Exception: ${e.message}")
                     }
                 }
             }
@@ -147,17 +139,13 @@ class FushaarProvider : MainAPI() {
         if (data.contains("/video-")) {
             try {
                 val slug = data.substringAfterLast("/video-").substringBefore("-ar-online").substringBefore("/").trim()
-                println("Fushaar Debug: Extracted slug: $slug")
                 if (slug.isNotBlank()) {
                     val playerUrl = "https://w.aflamy.pro/albaplayer/$slug"
-                    println("Fushaar Debug: Targeting playerUrl (Method 2): $playerUrl")
                     if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) {
-                        println("Fushaar Debug: Success via Method 2")
                         return true
                     }
                 }
             } catch (e: Exception) { 
-                println("Fushaar Debug: Method 2 Exception: ${e.message}")
             }
         }
 
@@ -165,11 +153,9 @@ class FushaarProvider : MainAPI() {
         doc.select("a.video-play-button, a#play-video, div#FCplayer a")
             .mapNotNull { it.attr("href").takeIf { it.isNotBlank() && it != data } }
             .distinct().forEach { playerUrl ->
-                println("Fushaar Debug: Method 3 check playerUrl: $playerUrl")
                 if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
             }
 
-        println("Fushaar Debug: Final anySuccess: $anySuccess")
         return anySuccess
     }
 

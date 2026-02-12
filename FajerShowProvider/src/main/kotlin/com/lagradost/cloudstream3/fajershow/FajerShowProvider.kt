@@ -149,7 +149,6 @@ class FajerShowProvider : MainAPI() {
                             }
                         )
                     }
-                    println("FajerLive\n$response\n")
                 }
                 else loadExtractor(it, data, subtitleCallback, callback)
             }

@@ -214,7 +214,6 @@ class EgyDeadProvider : MainAPI() {
         val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
         doc.select(".donwload-servers-list > li").forEach { element ->
             val url = element.select("a").attr("href")
-            println(url)
             loadExtractor(url, data, subtitleCallback, callback)
         }
         doc.select("ul.serversList > li").forEach { li ->

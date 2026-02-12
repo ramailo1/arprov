@@ -41,7 +41,6 @@ open class LinkBox : ExtractorApi() {
     }
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
-        println("LinkBox extractor started")
         val sources = mutableListOf<ExtractorLink>()
         val apiUrl = "https://" + URI(url).host + "/api/file/detail?itemId=" + url.substringAfter("/file/")
         val json = app.get(apiUrl).parsed<LinkBox>()
@@ -55,7 +54,6 @@ open class LinkBox : ExtractorApi() {
                 ))
             }
         }
-        println(sources)
         return sources
     }
 }

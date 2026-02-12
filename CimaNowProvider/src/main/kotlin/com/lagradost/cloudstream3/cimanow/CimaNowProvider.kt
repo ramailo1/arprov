@@ -144,7 +144,6 @@ class CimaNowProvider : MainAPI() {
             links.forEach { callback(it) }
 
         } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -328,7 +327,6 @@ class CimaNowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            println("DEBUG loadLinks: Loading URL: $data")
 
             val seenUrls = java.util.Collections.synchronizedSet(HashSet<String>())
             val validLinksCount = java.util.concurrent.atomic.AtomicInteger(0)
@@ -343,7 +341,6 @@ class CimaNowProvider : MainAPI() {
 
             // Clean URL safely
             val mainPageUrl = data.removeSuffix("/watching/")
-            println("DEBUG loadLinks: Main page URL: $mainPageUrl")
 
             val headers = mapOf("Referer" to mainUrl)
             val mainDoc = decodeHtml(app.get(mainPageUrl, headers = headers).document)
@@ -363,12 +360,9 @@ class CimaNowProvider : MainAPI() {
                 if (!postId.isNullOrBlank()) break
             }
 
-            println("DEBUG loadLinks: Post ID: $postId")
-
             // Detect theme path
             val themePath = Regex("""wp-content/themes/([^/]+)/""").find(watchingDoc.html())?.groupValues?.get(1)
                 ?: "Cima%20Now%20New"
-            println("DEBUG loadLinks: Theme Path: $themePath")
 
             // Helper suspend function to safely try extractor and wait
             suspend fun safeTryExtractor(url: String) {
@@ -495,12 +489,9 @@ class CimaNowProvider : MainAPI() {
                 tasks.awaitAll()
             }
 
-            println("DEBUG loadLinks: Total valid links: ${validLinksCount.get()}")
             return validLinksCount.get() > 0
 
         } catch (e: Exception) {
-            println("DEBUG loadLinks: Exception: ${e.message}")
-            e.printStackTrace()
             return false
         }
     }

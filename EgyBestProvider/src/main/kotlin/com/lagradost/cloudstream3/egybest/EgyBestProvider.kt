@@ -13,7 +13,7 @@ import org.jsoup.select.Elements
 class EgyBestProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://egibest.net"
-    override var name = "EgyBest (In Progress)"
+    override var name = "EgyBest"
 
     override val usesWebView = false
     override val hasMainPage = true

@@ -122,7 +122,6 @@ class GateAnimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("URL: $data")
         val doc = app.get(data).document
         doc.select(
             "li:contains(Fembed), li:contains(خيارات 1), li:contains(Uptostream), li:contains(Dood), li:contains(Uqload), li:contains(Drive)"
