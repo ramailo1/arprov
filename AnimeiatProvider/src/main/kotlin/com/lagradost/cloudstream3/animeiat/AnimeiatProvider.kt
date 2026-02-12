@@ -120,7 +120,8 @@ class AnimeiatProvider : MainAPI() {
     // LOAD ANIME & EPISODES
     // ------------------------------
     override suspend fun load(url: String): LoadResponse {
-        var slug = url.replace("$pageUrl/anime/", "")
+        var slug = url.substringAfter("/anime/").substringAfter("/watch/")
+        // Remove episode part from slug to get the anime slug
         "(.*)-episode-\\d+$".toRegex().find(slug)?.groupValues?.get(1)?.let { slug = it }
 
         val json = parseJson<Load>(fetchText("$mainUrl/anime/$slug") ?: "")
@@ -162,18 +163,23 @@ class AnimeiatProvider : MainAPI() {
             val rawJson = parseJson<List<Any>>(jsonString)
 
             // Find the episode object with a video field
-            val episodeObj = rawJson.mapNotNull { resolveMap(it, rawJson) }
-                .firstOrNull { it["video_id"] != null }
-            val videoMap = resolveMap(episodeObj?.get("video"), rawJson)
+            // Nuxt payloads can have nested structures. We flatten and find the video object.
+            val videoMap = rawJson.mapNotNull { resolveMap(it, rawJson) }
+                .firstOrNull { it["video_id"] != null || it["streamable_path"] != null }
+                ?.let { it["video"] ?: it } // Some payloads have it nested under "video", others have it at root
+                ?.let { resolveMap(it, rawJson) }
 
             val urls = arrayListOf<String>()
             resolveString(videoMap?.get("url"), rawJson)?.let { urls.add(it) }
             resolveString(videoMap?.get("streamable_path"), rawJson)?.let { urls.add(it) }
 
             // Pick best URL: mp4 > m3u8 > first
-            val selectedUrl = urls.firstOrNull { it.endsWith(".mp4") }
-                ?: urls.firstOrNull { it.endsWith(".m3u8") }
-                ?: urls.firstOrNull()
+            val selectedUrl = urls.mapNotNull { decodeBase64Url(it) ?: it } // Check for base64
+                .firstOrNull { it.contains(".mp4") }
+                ?: urls.mapNotNull { decodeBase64Url(it) ?: it }
+                .firstOrNull { it.contains(".m3u8") }
+                ?: urls.mapNotNull { decodeBase64Url(it) ?: it }
+                .firstOrNull { it.startsWith("http") }
 
             if (!selectedUrl.isNullOrEmpty()) {
                 callback(newExtractorLink(this.name, this.name, selectedUrl) {
@@ -183,8 +189,9 @@ class AnimeiatProvider : MainAPI() {
                 return true
             }
 
-            // Fallback to UUID/player
+            // Fallback to UUID/player if still no URL
             val uuid = resolveString(videoMap?.get("slug"), rawJson)
+                ?: resolveString(videoMap?.get("video_id"), rawJson)
             if (!uuid.isNullOrEmpty()) {
                 val playerPayloadUrl = "$pageUrl/player/$uuid/_payload.json"
                 val playerJsonString = fetchText(playerPayloadUrl) ?: return false
