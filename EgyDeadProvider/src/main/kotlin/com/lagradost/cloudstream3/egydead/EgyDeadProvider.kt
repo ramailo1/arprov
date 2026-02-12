@@ -91,7 +91,11 @@ class EgyDeadProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/category/افلام-اجنبي/?page=" to "English Movies",
         "$mainUrl/category/افلام-اسيوية/?page=" to "Asian Movies",
-        "$mainUrl/season/?page=" to "Series",
+        "$mainUrl/category/افلام-تركية/?page=" to "Turkish Movies",
+        "$mainUrl/category/افلام-عربية/?page=" to "Arabic Movies",
+        "$mainUrl/category/افلام-كرتون/?page=" to "Animated Movies",
+        "$mainUrl/season/?page=" to "Seasons",
+        "$mainUrl/episode/?page=" to "Episodes",
     )
 
     override suspend fun getMainPage(
@@ -106,7 +110,7 @@ class EgyDeadProvider : MainAPI() {
         Thread.sleep((1000..3000).random().toLong())
         
         val document = app.get(request.data + page, headers = requestHeaders).document
-        val home = document.select("li.movieItem").mapNotNull {
+        val home = document.select("li.movieItem, div.item").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, home)
@@ -121,8 +125,7 @@ class EgyDeadProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/?s=$query", headers = requestHeaders).document
-        return doc.select("li.movieItem").mapNotNull {
-            if(it.select("a").attr("href").contains("/episode/")) return@mapNotNull null
+        return doc.select("li.movieItem, div.item").mapNotNull {
             it.toSearchResponse()
         }
     }
@@ -136,8 +139,8 @@ class EgyDeadProvider : MainAPI() {
         Thread.sleep((1500..3500).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
-        val title = doc.select("div.singleTitle em").text().cleanTitle()
-        val isMovie = !url.contains("/serie/|/season/".toRegex())
+        val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
+        val isMovie = !url.contains("/serie/|/season/".toRegex()) && !url.contains("/episode/".toRegex())
 
         val posterUrl = doc.select("div.single-thumbnail > img").attr("src")
         val rating = doc.select("a.IMDBRating em").text().getIntFromText()
@@ -148,6 +151,16 @@ class EgyDeadProvider : MainAPI() {
             element.toSearchResponse()
         }
         val youtubeTrailer = doc.select("div.popupContent > iframe").attr("src")
+
+        if (url.contains("/episode/")) {
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = posterUrl
+                this.plot = synopsis
+                this.tags = tags
+                this.year = year
+            }
+        }
+
         return if (isMovie) {
             newMovieLoadResponse(
                 title,
