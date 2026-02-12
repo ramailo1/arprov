@@ -68,7 +68,9 @@ class MyCimaProvider : MainAPI() {
         "/" to "الرئيسية",
         "/movies/" to "أفلام",
         "/series/" to "مسلسلات",
-        "/episodes/" to "الحلقات"
+        "/episodes/" to "الحلقات",
+        "/category/عروض-مصارعة/" to "مصارعة حرة",
+        "/category/برامج-تلفزيونية/" to "برامج تلفزيونية",
     )
 
     override suspend fun getMainPage(
@@ -159,7 +161,7 @@ class MyCimaProvider : MainAPI() {
         val document = safeGet(url) ?: return null
         val fixedUrl = fixUrl(url)
 
-        val title = document.selectFirst("h1")?.text()?.trim() ?: return null
+        val title = document.selectFirst("h1, h2, .Title, .title")?.text()?.trim() ?: return null
 
         // TIERED POSTER EXTRACTION
         val posterUrl = 
@@ -184,21 +186,21 @@ class MyCimaProvider : MainAPI() {
 
         // Improved series detection - check URL first, then verify with elements
         // Movies should NOT be classified as series even if they have related content sections
-        val isSeriesUrl = fixedUrl.contains("/series/") || fixedUrl.contains("/episode/")
-        val hasEpisodeElements = document.select(".EpisodesList a[href*=/episode/], a[href*=/episode/]").isNotEmpty()
-        val isSeries = isSeriesUrl && hasEpisodeElements
+        val isSeriesUrl = fixedUrl.contains("/series/") || fixedUrl.contains("/episode/") || fixedUrl.contains("/%d8%a7%d9%84%dad%d9%84%d9%82%d8%a9")
+        val hasEpisodeElements = document.select(".EpisodesList a, a.GridItem:has(span.episode)").isNotEmpty()
+        val isSeries = isSeriesUrl || hasEpisodeElements
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
             
             // Get episodes from current page list or seasons
-            document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode)").forEach { ep ->
+            document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode), a.GridItem:has(strong)").forEach { ep ->
                 val epHref = ep.attr("href")
                 val epName = ep.selectFirst("strong")?.text() ?: ep.text().trim()
                 val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                 
-                if (epHref.isNotEmpty()) {
+                if (epHref.isNotEmpty() && !epHref.contains("/series/") && !epHref.contains("/category/")) {
                     episodes.add(
                         newEpisode(fixUrl(epHref)) {
                             this.name = epName
