@@ -12,6 +12,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import okhttp3.Headers
+import kotlinx.coroutines.delay
 
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
@@ -84,7 +85,7 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        Thread.sleep((1000..2000).random().toLong())
+        delay((1000..2000).random().toLong())
         
         val url = if (request.data.contains("/page/movies/")) {
             if (page == 1) {
@@ -118,7 +119,7 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        Thread.sleep((1000..2000).random().toLong())
+        delay((1000..2000).random().toLong())
         
         val doc = app.get("$mainUrl/?s=$query", headers = requestHeaders).document
         return doc.select("li.movieItem, div.BlockItem, a[href*='egydead']").toList().filter {
@@ -137,9 +138,20 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        Thread.sleep((1500..2500).random().toLong())
+        delay((1500..2500).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
+
+        // Redirect individual episode pages to their main series/season page for Netflix layout
+        if (url.contains("/episode/")) {
+            val seriesUrl = doc.selectFirst(".breadcrumbs-single a:last-of-type")?.attr("href")
+                ?: doc.selectFirst("a[href*='/serie/']:not([href$='/serie/']), a[href*='/season/']")?.attr("href")
+            
+            if (!seriesUrl.isNullOrEmpty() && seriesUrl != url) {
+                return load(seriesUrl)
+            }
+        }
+
         val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
         val isMovie = !url.contains("/serie/|/season/".toRegex()) && !url.contains("/episode/".toRegex())
 
@@ -149,15 +161,6 @@ class EgyDeadProvider : MainAPI() {
         val tags = doc.select("ul > li:contains(النوع) > a, li:contains(النوع) a").map { it.text() }
         val recommendations = doc.select("div.related-posts > ul > li, div.BlockItem").mapNotNull { element ->
             element.toSearchResponse()
-        }
-
-        if (url.contains("/episode/")) {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = posterUrl
-                this.plot = synopsis
-                this.tags = tags
-                this.year = year
-            }
         }
 
         return if (isMovie) {
@@ -174,31 +177,42 @@ class EgyDeadProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val seasonList = doc.select("div.seasons-list ul > li > a, div.List--Seasons--Episodes a").reversed()
+            val seasonLinks = doc.select("div.seasons-list ul > li > a, div.List--Seasons--Episodes a").reversed()
             val episodes = arrayListOf<Episode>()
-            if(seasonList.isNotEmpty()) {
-                seasonList.forEachIndexed { index, season ->
-                    app.get(
-                        season.attr("href"),
-                        headers = requestHeaders
-                    ).document.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
+
+            if (seasonLinks.isNotEmpty()) {
+                seasonLinks.forEachIndexed { index, season ->
+                    val seasonNumber = season.text().getIntFromText() ?: (index + 1)
+                    var epIndex = 1
+
+                    val seasonDoc = app.get(season.attr("href"), headers = requestHeaders).document
+                    seasonDoc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
                         episodes.add(newEpisode(it.attr("href")) {
                             this.name = it.attr("title")
-                            this.season = index+1
-                            this.episode = it.text().getIntFromText()
+                            this.season = seasonNumber
+                            this.episode = it.text().getIntFromText() ?: epIndex
                         })
+                        epIndex++
                     }
                 }
             } else {
+                var epIndex = 1
                 doc.select("div.EpsList > li > a, div.Episodes--Seasons--Episodes a").forEach {
                     episodes.add(newEpisode(it.attr("href")) {
                         this.name = it.attr("title")
                         this.season = 1
-                        this.episode = it.text().getIntFromText()
+                        this.episode = it.text().getIntFromText() ?: epIndex
                     })
+                    epIndex++
                 }
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
+
+            newTvSeriesLoadResponse(
+                title,
+                url,
+                TvType.TvSeries,
+                episodes.distinct().sortedWith(compareBy({ it.season }, { it.episode }))
+            ) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis
@@ -218,7 +232,7 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        Thread.sleep((1500..2500).random().toLong())
+        delay((1500..2500).random().toLong())
         
         val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
         doc.select(".donwload-servers-list > li, ul.download a").forEach { element ->
