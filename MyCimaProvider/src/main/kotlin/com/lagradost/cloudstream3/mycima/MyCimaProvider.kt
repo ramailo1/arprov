@@ -127,7 +127,7 @@ class MyCimaProvider : MainAPI() {
     }
 
     private fun detectType(url: String, document: Document? = null): TvType {
-        val path = url.lowercase()
+        val path = try { java.net.URLDecoder.decode(url, "UTF-8").lowercase() } catch (_: Exception) { url.lowercase() }
 
         return when {
             // Priority 1: Explicit path segments
@@ -137,12 +137,12 @@ class MyCimaProvider : MainAPI() {
             
             // Priority 2: HTML Breadcrumbs / Categories as fallback
             document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.let { 
-                "مسلسلات" in it || "مسلسل" in it || "حلقات" in it
-            } == true -> TvType.TvSeries
+                "مسلسلات" in it || "مسلسل" in it || "حلقات" in it || "انمي" in it
+            } == true -> if (document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("انمي") == true) TvType.Anime else TvType.TvSeries
             document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("افلام") == true -> TvType.Movie
             
-            // Priority 3: Keywords in slug (Prevent greedy match if movies/film found)
-            "مسلسل" in path || "حلقة" in path || "الحلقة" in path -> TvType.TvSeries
+            // Priority 3: Keywords in slug (Decoded path)
+            "مسلسل" in path || "حلقة" in path || "الحلقة" in path || "وي-سيما" in path || "وي_سيما" in path -> TvType.TvSeries
             path.contains("مسلسلات") -> TvType.TvSeries
             else -> TvType.Movie
         }
@@ -246,9 +246,12 @@ class MyCimaProvider : MainAPI() {
             ?.text()?.replace("[^0-9]".toRegex(), "")
             ?.toIntOrNull()
 
-        // Improved series detection using precision logic
+        // Improved series detection using precision logic + DOM override
         val type = detectType(fixedUrl, document)
-        val isSeries = type == TvType.TvSeries || (type == TvType.Anime && document.select(".EpisodesList").isNotEmpty())
+        val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes").isNotEmpty() 
+            || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة)").size > 1
+            
+        val isSeries = type == TvType.TvSeries || (type == TvType.Anime && hasEpisodeList) || hasEpisodeList
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
