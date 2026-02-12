@@ -39,7 +39,14 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- AUTO DOMAIN DETECTOR ----------
     private suspend fun ensureDomain(): Boolean {
-        if (checkedDomain) return true
+        if (checkedDomain) {
+            val stillWorks = runCatching {
+                app.get(activeDomain, timeout = 5).isSuccessful
+            }.getOrDefault(false)
+
+            if (stillWorks) return true
+            checkedDomain = false
+        }
 
         for (domain in domainPool) {
             val working = runCatching {
@@ -95,7 +102,8 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- SEARCH ----------
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = safeGet("/?s=$query") ?: return emptyList()
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val document = safeGet("/?s=$encoded") ?: return emptyList()
 
         return document.select("div#MainFiltar > .GridItem, .GridItem")
             .mapNotNull { it.toSearchResult() }
@@ -120,8 +128,13 @@ class MyCimaProvider : MainAPI() {
         val posterUrl = extractPosterUrl(this)
         val type = detectType(href)
         
-        return newMovieSearchResponse(title, href, type) {
-            this.posterUrl = posterUrl
+        return when (type) {
+            TvType.TvSeries, TvType.Anime -> newTvSeriesSearchResponse(title, href, type) {
+                this.posterUrl = posterUrl
+            }
+            else -> newMovieSearchResponse(title, href, type) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 
@@ -203,7 +216,7 @@ class MyCimaProvider : MainAPI() {
             fixedUrl.contains("/movies/") -> false
             fixedUrl.contains("/film/") -> false
             fixedUrl.contains("/series/") -> true
-            document.select(".EpisodesList a").isNotEmpty() -> true
+            document.select(".EpisodesList a[href*=/episode/], a:contains(حلقة)").isNotEmpty() -> true
             else -> false
         }
 
@@ -237,13 +250,13 @@ class MyCimaProvider : MainAPI() {
                     val seasonHref = seasonLink.attr("href")
                     if(seasonHref.isNotEmpty()) {
                         val seasonDoc = safeGet(seasonHref)
-                        seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")?.forEach { epLabel ->
-                            val epHref = epLabel.attr("href")
+                        seasonDoc?.select(".EpisodesList a, a.GridItem, a:has(span.episode)")?.forEach { epLabelInner ->
+                            val epHref = epLabelInner.attr("href")
                             val fixedEp = fixUrl(epHref)
                             if (fixedEp.isEmpty() || !episodeUrls.add(fixedEp)) return@forEach
                             
-                            val epName = epLabel.selectFirst("strong")?.text() ?: epLabel.text().trim()
-                            val epNum = epLabel.selectFirst("span.episode")?.text()
+                            val epName = epLabelInner.selectFirst("strong")?.text() ?: epLabelInner.text().trim()
+                            val epNum = epLabelInner.selectFirst("span.episode")?.text()
                                 ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
                             
                             if (epHref.isNotEmpty()) {
@@ -251,7 +264,7 @@ class MyCimaProvider : MainAPI() {
                                     newEpisode(fixedEp) {
                                         this.name = epName
                                         this.episode = epNum
-                                        this.posterUrl = extractPosterUrl(epLabel)
+                                        this.posterUrl = extractPosterUrl(epLabelInner)
                                     }
                                 )
                             }
@@ -260,6 +273,8 @@ class MyCimaProvider : MainAPI() {
                 }
             }
             
+            episodes.sortBy { it.episode ?: Int.MAX_VALUE }
+
             return newTvSeriesLoadResponse(title, fixedUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = posterUrl
                 this.year = year
@@ -300,11 +315,24 @@ class MyCimaProvider : MainAPI() {
         val t = text?.lowercase() ?: return Qualities.Unknown.value
 
         return when {
+            "2160" in t || "4k" in t -> 2160
             "1080" in t -> Qualities.P1080.value
             "720" in t -> Qualities.P720.value
             "480" in t -> Qualities.P480.value
             else -> Qualities.Unknown.value
         }
+    }
+
+    private fun decodeProxy(url: String): String {
+        return if (url.contains("/play/")) {
+            runCatching {
+                val b64 = url.substringAfter("/play/")
+                    .substringBefore("/")
+                    .replace("_", "/")
+                    .replace("-", "+")
+                String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+            }.getOrElse { url }
+        } else url
     }
 
     // ---------- LOAD LINKS ----------
@@ -314,19 +342,6 @@ class MyCimaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
-        // Helper to decode govid.live/play/ proxy URLs
-        val decodeProxy: (String) -> String = { url ->
-            if (url.contains("/play/")) {
-                runCatching {
-                    val b64 = url.substringAfter("/play/")
-                        .substringBefore("/")
-                        .replace("_", "/")
-                        .replace("-", "+")
-                    String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
-                }.getOrElse { url }
-            } else url
-        }
 
         val document = safeGet(data) ?: return false
 
@@ -381,6 +396,7 @@ class MyCimaProvider : MainAPI() {
                 if (!usedLinks.contains(finalUrl)) {
                     usedLinks.add(finalUrl)
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
+                    found = true
                 }
             }
         }
@@ -393,6 +409,7 @@ class MyCimaProvider : MainAPI() {
                 if (!usedLinks.contains(finalUrl)) {
                     usedLinks.add(finalUrl)
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
+                    found = true
                 }
             }
         }
