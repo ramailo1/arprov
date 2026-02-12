@@ -92,6 +92,7 @@ class EgyDeadProvider : MainAPI() {
         "$mainUrl/page/movies/" to "احدث الافلام",
         "$mainUrl/episode/?page=" to "احدث الحلقات",
         "$mainUrl/season/?page=" to "احدث المواسم",
+        "$mainUrl/serie/?page=" to "احدث المسلسلات",
     )
 
     override suspend fun getMainPage(
