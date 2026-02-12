@@ -105,8 +105,15 @@ class EgyDeadProvider : MainAPI() {
         // Add delay to mimic human behavior
         Thread.sleep((1000..3000).random().toLong())
         
-        val document = app.get(request.data + page, headers = requestHeaders).document
-        val home = document.select("li.movieItem, div.item").mapNotNull {
+        val url = if (page == 1) {
+            request.data.removeSuffix("?page=").removeSuffix("/") + "/"
+        } else {
+            val base = request.data.removeSuffix("?page=").removeSuffix("/")
+            "$base/page/$page/"
+        }
+
+        val document = app.get(url, headers = requestHeaders).document
+        val home = document.select("li.movieItem").mapNotNull {
             it.toSearchResponse()
         }
         return newHomePageResponse(request.name, home)
@@ -121,7 +128,7 @@ class EgyDeadProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/?s=$query", headers = requestHeaders).document
-        return doc.select("li.movieItem, div.item").mapNotNull {
+        return doc.select("li.movieItem").mapNotNull {
             it.toSearchResponse()
         }
     }

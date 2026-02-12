@@ -82,7 +82,8 @@ graph TD
 - [ ] **RistoAnime** - `Development`
 - [ ] **GateAnime** - `Planned`
 +
-+### 🚫 Blocked / Not Working
++
+### 🚫 Blocked / Not Working
 +These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
 +
 +| Provider | Reason | Status |
