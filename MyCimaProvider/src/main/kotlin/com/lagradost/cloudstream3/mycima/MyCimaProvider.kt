@@ -249,7 +249,7 @@ class MyCimaProvider : MainAPI() {
         // Improved series detection using precision logic + DOM override
         val type = detectType(fixedUrl, document)
         val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes").isNotEmpty() 
-            || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة)").size > 1
+            || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة), a:contains(الحلقة)").size > 1
             
         val isSeries = type == TvType.TvSeries || (type == TvType.Anime && hasEpisodeList) || hasEpisodeList
 
@@ -258,9 +258,10 @@ class MyCimaProvider : MainAPI() {
             val episodeUrls = mutableSetOf<String>()
 
             // 1. Always include current URL if it looks like an episode
-            if (fixedUrl.contains("حلقة") || fixedUrl.contains("/episode/")) {
-                val epNum = fixedUrl.substringAfterLast("حلقة-").substringBefore("-").replace("[^0-9]".toRegex(), "").toIntOrNull()
-                    ?: fixedUrl.replace("[^0-9]".toRegex(), "").toIntOrNull()
+            val currentUrlDecoded = try { java.net.URLDecoder.decode(fixedUrl, "UTF-8") } catch(_: Exception) { fixedUrl }
+            if (currentUrlDecoded.contains("حلقة") || currentUrlDecoded.contains("/episode/")) {
+                val epNum = currentUrlDecoded.substringAfterLast("حلقة-").substringBefore("-").replace("[^0-9]".toRegex(), "").toIntOrNull()
+                    ?: currentUrlDecoded.replace("[^0-9]".toRegex(), "").toIntOrNull()
                 
                 if (epNum != null && episodeUrls.add(fixedUrl)) {
                     episodes.add(
@@ -281,8 +282,10 @@ class MyCimaProvider : MainAPI() {
                 // softened filter: only skip if it's the exact series root or category
                 if (!fixedEp.startsWith("http") || fixedEp.endsWith("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
                 
-                val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
+                val epText = ep.text().trim()
+                val epNum = ep.selectFirst("span.episode, span:contains(حلقة), span:contains(الحلقة)")?.text()
                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                    ?: epText.replace("[^0-9]".toRegex(), "").toIntOrNull()
                 
                 val currentSeason = 1
                 val cleanEpisodeNumber = epNum ?: (episodes.count { (it.season ?: 1) == currentSeason } + 1)
@@ -316,8 +319,10 @@ class MyCimaProvider : MainAPI() {
                                 val fixedEp = fixUrl(epHref)
                                 if (!fixedEp.startsWith("http") || !episodeUrls.add(fixedEp)) continue
                                 
-                                val epNum = epLabelInner.selectFirst("span.episode")?.text()
+                                val epText = epLabelInner.text().trim()
+                                val epNum = epLabelInner.selectFirst("span.episode, span:contains(حلقة), span:contains(الحلقة)")?.text()
                                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
+                                    ?: epText.replace("[^0-9]".toRegex(), "").toIntOrNull()
                                 
                                 val cleanEpisodeNumber = epNum ?: (
                                     episodes.count { (it.season ?: 1) == currentSeason } + 1
