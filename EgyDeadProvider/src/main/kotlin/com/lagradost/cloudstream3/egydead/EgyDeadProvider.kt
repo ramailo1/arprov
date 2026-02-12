@@ -89,13 +89,9 @@ class EgyDeadProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/category/افلام-اجنبي/?page=" to "English Movies",
-        "$mainUrl/category/افلام-اسيوية/?page=" to "Asian Movies",
-        "$mainUrl/category/افلام-تركية/?page=" to "Turkish Movies",
-        "$mainUrl/category/افلام-عربية/?page=" to "Arabic Movies",
-        "$mainUrl/category/افلام-كرتون/?page=" to "Animated Movies",
-        "$mainUrl/season/?page=" to "Seasons",
-        "$mainUrl/episode/?page=" to "Episodes",
+        "$mainUrl/page/movies/" to "احدث الافلام",
+        "$mainUrl/episode/?page=" to "احدث الحلقات",
+        "$mainUrl/season/?page=" to "احدث المواسم",
     )
 
     override suspend fun getMainPage(
