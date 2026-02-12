@@ -136,10 +136,13 @@ class MyCimaProvider : MainAPI() {
             "/movies/" in path || "/film/" in path -> TvType.Movie
             
             // Priority 2: HTML Breadcrumbs / Categories as fallback
-            document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("مسلسلات") == true -> TvType.TvSeries
+            document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.let { 
+                "مسلسلات" in it || "مسلسل" in it || "حلقات" in it
+            } == true -> TvType.TvSeries
             document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("افلام") == true -> TvType.Movie
             
-            // Priority 3: Greedy match (only if no explicit movies/film found)
+            // Priority 3: Keywords in slug (Prevent greedy match if movies/film found)
+            "مسلسل" in path || "حلقة" in path || "الحلقة" in path -> TvType.TvSeries
             path.contains("مسلسلات") -> TvType.TvSeries
             else -> TvType.Movie
         }
@@ -250,12 +253,30 @@ class MyCimaProvider : MainAPI() {
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
             val episodeUrls = mutableSetOf<String>()
-            
-            // Get episodes from current page list or seasons
+
+            // 1. Always include current URL if it looks like an episode
+            if (fixedUrl.contains("حلقة") || fixedUrl.contains("/episode/")) {
+                val epNum = fixedUrl.substringAfterLast("حلقة-").substringBefore("-").replace("[^0-9]".toRegex(), "").toIntOrNull()
+                    ?: fixedUrl.replace("[^0-9]".toRegex(), "").toIntOrNull()
+                
+                if (epNum != null && episodeUrls.add(fixedUrl)) {
+                    episodes.add(
+                        newEpisode(fixedUrl) {
+                            this.name = "Episode $epNum"
+                            this.episode = epNum
+                            this.season = 1
+                            this.posterUrl = posterUrl
+                        }
+                    )
+                }
+            }
+
+            // 2. Get episodes from current page list or seasons
             document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode), a.GridItem:has(strong)").forEach { ep ->
                 val epHref = ep.attr("href")
                 val fixedEp = fixUrl(epHref)
-                if (!fixedEp.startsWith("http") || fixedEp.contains("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
+                // softened filter: only skip if it's the exact series root or category
+                if (!fixedEp.startsWith("http") || fixedEp.endsWith("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
                 
                 val epNum = ep.selectFirst("span.episode, span:contains(حلقة)")?.text()
                     ?.replace("[^0-9]".toRegex(), "")?.toIntOrNull()
