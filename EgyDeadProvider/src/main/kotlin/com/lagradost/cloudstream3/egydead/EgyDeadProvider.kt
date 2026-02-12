@@ -16,7 +16,7 @@ import okhttp3.Headers
 
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://egydead.rip/"
+    override var mainUrl = "https://egydead.rip"
     override var name = "EgyDead (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
