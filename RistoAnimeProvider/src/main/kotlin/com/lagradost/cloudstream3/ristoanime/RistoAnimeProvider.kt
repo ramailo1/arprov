@@ -48,11 +48,22 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(url, headers = headers()).document
         politeDelay()
 
-        val items = doc.select("article, .anime-item, .video-item, .film-item, .item, a:has(h4), a:has(h3)")
+        val items = doc.select(".MovieItem, article")
             .mapNotNull { it.toSearchResponse() }
             .distinctBy { it.url }
 
         return newHomePageResponse(request.name, items)
+    }
+
+    private fun Element.extractPoster(): String? {
+        val posterElement = this.selectFirst(".poster")
+        return posterElement?.attr("style")?.let { style ->
+            Regex("""url\((['"]?)(.*?)\1\)""").find(style)?.groupValues?.get(2)
+        } ?: posterElement?.attr("data-style")?.let { style ->
+            Regex("""url\((['"]?)(.*?)\1\)""").find(style)?.groupValues?.get(2)
+        } ?: this.selectFirst("img")?.let {
+            it.attr("data-src").ifBlank { it.attr("src") }
+        }
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
@@ -64,12 +75,10 @@ class RistoAnimeProvider : MainAPI() {
             "/series", "/watch", "/download")
         if (ignorePaths.any { href.contains(it, ignoreCase = true) }) return null
 
-        val title = link.selectFirst("h1,h2,h3,h4,.title")?.text()?.trim() ?: link.ownText().trim()
+        val title = link.selectFirst("h4")?.text()?.trim() ?: link.ownText().trim()
         if (title.length < 3) return null
 
-        val poster = fixUrlNull(
-            this.selectFirst("img[src]")?.attr("src") ?: this.selectFirst("img[data-src]")?.attr("data-src")
-        )
+        val poster = fixUrlNull(this.extractPoster())
 
         val isMovie = href.contains("فيلم", ignoreCase = true) || href.contains("%d9%81%d9%8a%d9%84%d9%85", ignoreCase = true)
         val type = if (isMovie) TvType.AnimeMovie else TvType.Anime
@@ -84,9 +93,7 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(url, headers = headers()).document
         politeDelay()
 
-        return doc.select("article, .anime-item, .video-item, .film-item, a:has(h4), a:has(h3)")
-            .mapNotNull { it.toSearchResponse() }
-            .distinctBy { it.url }
+        return doc.select(".MovieItem, article").mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -95,7 +102,7 @@ class RistoAnimeProvider : MainAPI() {
         politeDelay()
 
         val title = doc.selectFirst("h1,.entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(doc.selectFirst("img[src]")?.attr("src"))
+        val poster = fixUrlNull(doc.extractPoster())
         val description = doc.selectFirst(".description,.plot,.summary,.content")?.text()?.trim()
         val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
 
@@ -150,13 +157,18 @@ class RistoAnimeProvider : MainAPI() {
                 val actionDoc = app.get(actionUrl, headers = headers(), referer = postUrl).document
                 politeDelay(250)
 
-                // Extract iframes
+                // Extract iframes and direct links from data attributes
+                actionDoc.select("li[data-watch], button[data-watch], a[data-watch], li[data-link], [data-src]").forEach { el ->
+                    val url = fixUrlNull(el.attr("data-watch").ifBlank { el.attr("data-link") }.ifBlank { el.attr("data-src") })
+                    if (!url.isNullOrBlank()) loadExtractor(url, actionUrl, subtitleCallback, callback)
+                }
+
                 actionDoc.select("iframe[src]").forEach { iframe ->
                     val src = iframe.attr("src")
                     if (src.isNotBlank()) loadExtractor(src, actionUrl, subtitleCallback, callback)
                 }
 
-                // Extract direct video links
+                // Extract direct video links from tags
                 actionDoc.select("a[href], source[src], video source").forEach { el ->
                     val link = fixUrlNull(el.attr("href").ifBlank { el.attr("src") }) ?: return@forEach
                     val isM3u8 = link.contains(".m3u8", ignoreCase = true)
