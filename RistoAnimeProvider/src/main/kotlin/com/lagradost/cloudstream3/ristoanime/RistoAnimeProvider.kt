@@ -1,186 +1,197 @@
 package com.lagradost.cloudstream3.ristoanime
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
+
 class RistoAnimeProvider : MainAPI() {
     override var mainUrl = "https://ristoanime.org"
-    override var name = "RistoAnime (In Progress)"
+    override var name = "RistoAnime"
     override val hasMainPage = true
     override var lang = "ar"
-    override val usesWebView = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    // Anti-bot configuration
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
     )
 
-    private val headers = mapOf(
+    private val baseHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
         "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
         "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1"
+        "Upgrade-Insecure-Requests" to "1",
     )
 
-    private fun getRandomUserAgent(): String = userAgents.random()
-    private fun getRandomDelay(): Long = (1500..3500).random().toLong()
+    private fun headers() = baseHeaders + mapOf("User-Agent" to userAgents.random())
+    private suspend fun politeDelay(extraMs: Long = 0) = delay((1200L..2600L).random() + extraMs)
 
     override val mainPage = mainPageOf(
-        "$mainUrl/anime" to "أحدث الانمي",
-        "$mainUrl/anime?type=tv" to "مسلسلات انمي",
-        "$mainUrl/anime?type=movie" to "أفلام انمي",
-        "$mainUrl/anime?type=ova" to "OVA",
-        "$mainUrl/anime?status=ongoing" to "الانمي المستمر",
-        "$mainUrl/anime?status=completed" to "الانمي المكتمل"
+        "$mainUrl/" to "المضاف حديثاََ",
+        "$mainUrl/movies/" to "افلام انمي",
+        "$mainUrl/time/" to "مواعيد الحلقات"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(request.data + if (request.data.contains("?")) "&page=$page" else "?page=$page", 
-            headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        Thread.sleep(getRandomDelay())
-        
-        val home = doc.select(".anime-item, .video-item, .film-item, .item, article").mapNotNull { element ->
-            element.toSearchResponse()
+    private fun buildPagedUrl(base: String, page: Int): String {
+        if (page <= 1) return base
+        return when {
+            base == "$mainUrl/" -> "$mainUrl/?page=$page/"
+            base.contains("/movies/") -> "${base}page/$page/"
+            else -> "$base?page=$page"
         }
+    }
 
-        return newHomePageResponse(request.name, home)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = buildPagedUrl(request.data, page)
+        val doc = app.get(url, headers = headers()).document
+        politeDelay()
+
+        val items = doc.select("article, .anime-item, .video-item, .film-item, .item, a:has(h4), a:has(h3)")
+            .mapNotNull { it.toSearchResponse() }
+            .distinctBy { it.url }
+
+        return newHomePageResponse(request.name, items)
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = this.selectFirst(".title, .name, h2, h3, .anime-title, .entry-title")?.text()?.trim() ?: return null
-        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: "")
-        val posterUrl = fixUrl(this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-src") ?: "")
-        val year = this.selectFirst(".year, .date")?.text()?.trim()?.toIntOrNull()
-        val episodes = this.selectFirst(".episodes, .episode-count")?.text()?.replace("\\D".toRegex(), "")?.toIntOrNull()
-        
-        // Determine type from URL or content
-        val type = when {
-            href.contains("/movie/") || this.text().contains("فيلم") -> TvType.AnimeMovie
-            href.contains("/ova/") || this.text().contains("OVA") -> TvType.OVA
-            else -> TvType.Anime
-        }
-        
+        val link = if (this.tagName() == "a") this else this.selectFirst("a[href]") ?: return null
+        val href = fixUrlNull(link.attr("href")) ?: return null
+
+        val ignorePaths = listOf("/privacy", "/dmca", "/contactus", "/genre/", "/category/",
+            "/quality/", "/release-year/", "/country/", "/language/", "/time", "/movies", 
+            "/series", "/watch", "/download")
+        if (ignorePaths.any { href.contains(it, ignoreCase = true) }) return null
+
+        val title = link.selectFirst("h1,h2,h3,h4,.title")?.text()?.trim() ?: link.ownText().trim()
+        if (title.length < 3) return null
+
+        val poster = fixUrlNull(
+            this.selectFirst("img[src]")?.attr("src") ?: this.selectFirst("img[data-src]")?.attr("data-src")
+        )
+
+        val isMovie = href.contains("فيلم", ignoreCase = true) || href.contains("%d9%81%d9%8a%d9%84%d9%85", ignoreCase = true)
+        val type = if (isMovie) TvType.AnimeMovie else TvType.Anime
+
         return newAnimeSearchResponse(title, href, type) {
-            this.posterUrl = posterUrl
-            this.year = year
-            addDubStatus(dubExist = false, subExist = true, subEpisodes = episodes)
+            this.posterUrl = poster
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search?q=${query.replace(" ", "+")}"
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        
-        return doc.select(".search-results .anime-item, .results .video-item, .search-item, article").mapNotNull { element ->
-            element.toSearchResponse()
-        }
+        val url = "$mainUrl/search?q=${query.trim().replace(" ", "+")}"
+        val doc = app.get(url, headers = headers()).document
+        politeDelay()
+
+        return doc.select("article, .anime-item, .video-item, .film-item, a:has(h4), a:has(h3)")
+            .mapNotNull { it.toSearchResponse() }
+            .distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        Thread.sleep(getRandomDelay())
-        val doc = app.get(url, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        
-        val title = doc.selectFirst(".anime-title, .video-title, h1, .entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrl(doc.selectFirst(".poster img, .anime-poster img, .thumbnail img")?.attr("src") ?: "")
-        val year = doc.selectFirst(".year, .date, .release-date")?.text()?.trim()?.toIntOrNull()
-        val description = doc.selectFirst(".description, .plot, .summary, .story, .content")?.text()?.trim()
-        val tags = doc.select(".genres a, .categories a, .tags a, .genre-tags a").map { it.text().trim() }
-        
-        // Determine if it's a series or movie
-        val isSeries = doc.select(".episodes, .episode-list, .eps-list").isNotEmpty() || 
-                      !url.contains("/movie/")
-        
-        val type = when {
-            url.contains("/movie/") || doc.text().contains("فيلم") -> TvType.AnimeMovie
-            url.contains("/ova/") || doc.text().contains("OVA") -> TvType.OVA
-            else -> TvType.Anime
-        }
-        
-        return if (isSeries && type == TvType.Anime) {
-            val episodes = mutableListOf<Episode>()
-            for (episodeElement in doc.select(".episode-item, .episodes li, .eps-item, article.episode")) {
-                val episodeName = episodeElement.selectFirst(".episode-title, .episode-name, .title")?.text()?.trim()
-                val episodeUrl = fixUrl(episodeElement.selectFirst("a")?.attr("href") ?: "")
-                val episodeNumber = episodeElement.selectFirst(".episode-number, .ep-num")?.text()?.replace("\\D".toRegex(), "")?.toIntOrNull()
-                    ?: episodeName?.replace("\\D".toRegex(), "")?.toIntOrNull()
-                
-                if (episodeName != null && episodeUrl != null) {
-                    episodes.add(newEpisode(episodeUrl) {
-                        this.name = episodeName
-                        this.episode = episodeNumber
-                    })
+        val cleanUrl = url.removeSuffix("/watch").removeSuffix("/download")
+        val doc = app.get(cleanUrl, headers = headers()).document
+        politeDelay()
+
+        val title = doc.selectFirst("h1,.entry-title")?.text()?.trim() ?: return null
+        val poster = fixUrlNull(doc.selectFirst("img[src]")?.attr("src"))
+        val description = doc.selectFirst(".description,.plot,.summary,.content")?.text()?.trim()
+        val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
+
+        val isMovie = cleanUrl.contains("فيلم") || cleanUrl.contains("%d9%81%d9%8a%d9%84%d9%85") ||
+                doc.text().contains("افلام انمي")
+        val type = if (isMovie) TvType.AnimeMovie else TvType.Anime
+
+        return if (!isMovie) {
+            val episodes = doc.select("a[href]:matches(الحلقة\\s*\\d+)")
+                .mapNotNull { a ->
+                    val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+                    val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
+                    newEpisode(epUrl) {
+                        this.name = if (epNum != null) "الحلقة $epNum" else a.text()
+                        this.episode = epNum
+                    }
                 }
-            }
-            
-            newAnimeLoadResponse(title, url, type) {
+                .distinctBy { it.data }
+
+            newAnimeLoadResponse(title, cleanUrl, type) {
                 this.posterUrl = poster
-                this.year = year
                 this.plot = description
-                // this.score = rating
                 this.tags = tags
-                addEpisodes(DubStatus.Subbed, episodes)
+                addEpisodes(DubStatus.Subbed, episodes.ifEmpty { 
+                    listOf(newEpisode(cleanUrl) { this.name = title; this.episode = 1 }) 
+                })
             }
         } else {
-            newAnimeLoadResponse(title, url, type) {
+            newMovieLoadResponse(title, cleanUrl, type) {
                 this.posterUrl = poster
-                this.year = year
                 this.plot = description
-                // this.score = rating
                 this.tags = tags
             }
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        Thread.sleep(getRandomDelay() + 1000)
-        val doc = app.get(data, headers = headers + mapOf("User-Agent" to getRandomUserAgent())).document
-        
-        // Try multiple selectors for video links
-        for (linkElement in doc.select(".video-links a, .download-links a, .watch-links a, .server-list a, .quality-list a")) {
-            val linkUrl = fixUrl(linkElement.attr("href") ?: "") ?: continue
-            val quality = linkElement.select(".quality, .resolution, .res").text().trim()
-            val serverName = linkElement.select(".server-name, .host, .server").text().trim()
-            
-            callback.invoke(
-                newExtractorLink(
-                    serverName.ifEmpty { "RistoAnime" },
-                    serverName.ifEmpty { "RistoAnime" } + if (quality.isNotEmpty()) " - $quality" else "",
-                    linkUrl,
-                    if (linkUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = getQualityFromString(quality)
-                    this.referer = mainUrl
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val postUrl = data.removeSuffix("/watch").removeSuffix("/download")
+        val postDoc = app.get(postUrl, headers = headers()).document
+        politeDelay(400)
+
+        val watchUrl = fixUrlNull(postDoc.selectFirst("a:contains(المشاهدة الان)")?.attr("href"))
+        val downloadUrl = fixUrlNull(postDoc.selectFirst("a:contains(التحميل الان)")?.attr("href"))
+
+        listOfNotNull(watchUrl, downloadUrl).distinct().forEach { actionUrl ->
+            try {
+                val actionDoc = app.get(actionUrl, headers = headers(), referer = postUrl).document
+                politeDelay(250)
+
+                // Extract iframes
+                actionDoc.select("iframe[src]").forEach { iframe ->
+                    val src = iframe.attr("src")
+                    if (src.isNotBlank()) loadExtractor(src, actionUrl, subtitleCallback, callback)
                 }
-            )
-        }
-        
-        // Also try to load external extractors
-        for (iframe in doc.select("iframe[src]")) {
-            val iframeSrc = iframe.attr("src")
-            if (iframeSrc.isNotEmpty()) {
-                loadExtractor(iframeSrc, data, subtitleCallback, callback)
+
+                // Extract direct video links
+                actionDoc.select("a[href], source[src], video source").forEach { el ->
+                    val link = fixUrlNull(el.attr("href").ifBlank { el.attr("src") }) ?: return@forEach
+                    val isM3u8 = link.contains(".m3u8", ignoreCase = true)
+                    if (isM3u8 || link.contains(".mp4", ignoreCase = true) || link.contains(".mkv", ignoreCase = true)) {
+                        callback(
+                            ExtractorLink(
+                                source = "RistoAnime",
+                                name = "RistoAnime - ${if (isM3u8) "HLS" else "Direct"}",
+                                url = link,
+                                referer = actionUrl,
+                                quality = Qualities.Unknown.value,
+                                isM3u8 = isM3u8
+                            )
+                        )
+                    }
+                }
+
+                // Extract download service buttons (ODOJO, CUTVID, etc.)
+                if (actionUrl == downloadUrl) {
+                    actionDoc.select("a[href]:not([href*='$mainUrl'])").forEach { a ->
+                        val link = fixUrlNull(a.attr("href")) ?: return@forEach
+                        if (link.startsWith("http") && a.text().trim().isNotEmpty()) {
+                            try {
+                                loadExtractor(link, actionUrl, subtitleCallback, callback)
+                            } catch (e: Exception) {
+                                // Ignore extractor errors
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Continue with next link
             }
         }
-        
-        return true
-    }
 
-    private fun getQualityFromString(quality: String): Int {
-        return when {
-            quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
-            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
-            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
-            else -> Qualities.Unknown.value
-        }
+        return true
     }
 }
