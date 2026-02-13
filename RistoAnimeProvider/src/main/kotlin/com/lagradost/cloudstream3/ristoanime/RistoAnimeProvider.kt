@@ -124,7 +124,7 @@ class RistoAnimeProvider : MainAPI() {
                 })
             }
         } else {
-            newMovieLoadResponse(title, cleanUrl, type) {
+            newMovieLoadResponse(title, cleanUrl, type, cleanUrl) {
                 this.posterUrl = poster
                 this.plot = description
                 this.tags = tags
@@ -162,14 +162,15 @@ class RistoAnimeProvider : MainAPI() {
                     val isM3u8 = link.contains(".m3u8", ignoreCase = true)
                     if (isM3u8 || link.contains(".mp4", ignoreCase = true) || link.contains(".mkv", ignoreCase = true)) {
                         callback(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = "RistoAnime",
                                 name = "RistoAnime - ${if (isM3u8) "HLS" else "Direct"}",
                                 url = link,
-                                referer = actionUrl,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = isM3u8
-                            )
+                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = actionUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 }
