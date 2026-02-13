@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 
 class GateAnimeProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://b.gateanime.cam"
+    override var mainUrl = "https://f.gateanime.com"
     override var name = "GateAnime (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
@@ -46,9 +46,10 @@ class GateAnimeProvider : MainAPI() {
         }
     }
     override val mainPage = mainPageOf(
-            "$mainUrl/movies/page/" to "Anime Movies",
-            "$mainUrl/series/page/" to "Anime",
-            "$mainUrl/category/مدبلج/page/" to "Dubbed"
+            "$mainUrl/episode/page/" to "أحدث الحلقات",
+            "$mainUrl/movies/page/" to "أحدث الأفلام",
+            "$mainUrl/series/page/" to "أحدث المسلسلات",
+            "$mainUrl/category/مدبلج/page/" to "مدبلج"
         )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

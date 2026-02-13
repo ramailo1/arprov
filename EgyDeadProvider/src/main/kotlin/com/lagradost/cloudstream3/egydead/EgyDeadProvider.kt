@@ -201,7 +201,6 @@ class EgyDeadProvider : MainAPI() {
                             this.season = sNum
                             this.episode = epNum
                             this.posterUrl = posterUrl
-                            this.description = synopsis
                         }
                     }
                 }.flatten()
@@ -216,7 +215,6 @@ class EgyDeadProvider : MainAPI() {
                         this.season = seasonNum
                         this.episode = epNum
                         this.posterUrl = posterUrl
-                        this.description = synopsis
                     }
                 }
             }

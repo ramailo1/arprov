@@ -72,6 +72,7 @@ graph TD
 | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
 | **Fushaar** | Movies & Series | `com.lagradost.cloudstream3.fushaar` |
 | **EgyBest** | Movies & Series | `com.lagradost.cloudstream3.egybest` |
+| **EgyDead** | Movies & Series | `com.lagradost.cloudstream3.egydead` |
 | **MyCima** | Movies & Series | `com.lagradost.cloudstream3.mycima` |
 
 > [!NOTE]
@@ -80,7 +81,7 @@ graph TD
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
-- [ ] **GateAnime** - `Planned`
+- [ ] **GateAnime** - `In Progress`
 +
 +
 ### 🚫 Blocked / Not Working

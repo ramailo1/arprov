@@ -1,8 +1,8 @@
-version = 10
+version = 11
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "EgyDead Provider - (In Progress)"
+    description = "EgyDead Provider - Optimized"
 
     language = "ar"
 	
