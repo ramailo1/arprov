@@ -93,31 +93,28 @@ class Shahid4uProvider : MainAPI() {
         if(doc.select("title").text() == "Just a moment...") {
             doc = app.get(url, interceptor = cfKiller, timeout = 120).document
         }
-        val isMovie =
-            doc.select("ul.half-tags:contains(القسم) li:nth-child(2)").text().contains("افلام")
-        val posterUrl =
-            doc.select("a.poster-image").attr("style").replace(".*url\\(|\\);".toRegex(), "")
+        val isMovie = doc.selectFirst("ul.breadcrumbNav")?.text()?.contains("افلام") == true
+            || doc.select("dl.dl-horizontal dd a").any { it.text().contains("افلام") }
 
-        val year = doc.select("ul.half-tags:contains(السنة) li:nth-child(2)").text().toIntOrNull()
+        val posterUrl = doc.selectFirst(".video-bibplayer-poster")?.attr("style")?.getImageURL()
+            ?: doc.selectFirst(".poster-image")?.attr("style")?.getImageURL()
+            ?: doc.selectFirst(".poster img")?.attr("src")
 
-        val title =
-            doc.select("div.breadcrumb a:nth-child(3)").text()
-                .replace(
-                    "الموسم الأول|برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي|$year".toRegex(),
-                    ""
-                )
+        val title = doc.select("h1.post-title, h1").text().trim()
+        
+        val year = Regex("(\\d{4})").find(title)?.value?.toIntOrNull()
+            ?: doc.select("ul.half-tags:contains(السنة) li:nth-child(2)").text().toIntOrNull()
 
-        val tags = doc.select("ul.half-tags:contains(النوع) li").not(":nth-child(1)").map {
-            it.text()
-        }
-        val recommendations =
-            doc.select("div.MediaGrid").first()?.select("div.content-box")?.mapNotNull {
-                it.toSearchResponse()
-            }
-        val synopsis = doc.select("div.post-story:contains(قصة) p").text()
+        val cleanTitle = title.replace("الموسم الأول|برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي|$year".toRegex(), "").trim()
+
+        val tags = doc.select("dl.dl-horizontal dd a").map { it.text() }
+        
+        val recommendations = doc.select("div.MediaGrid").first()?.select("div.content-box")?.mapNotNull { it.toSearchResponse() }
+        
+        val synopsis = doc.select("div.description p, div[itemprop='description'], div.post-story p").text().trim()
 
         return if (isMovie) {
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
+            newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.plot = synopsis
@@ -162,7 +159,7 @@ class Shahid4uProvider : MainAPI() {
                      }
                  }
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
+            newTvSeriesLoadResponse(cleanTitle, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.plot = synopsis

@@ -105,6 +105,8 @@ class RistoAnimeProvider : MainAPI() {
                 doc.select("a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
                 ?: doc.select(".PostTitle a[href*='/series/']").attr("href")
                 ?: doc.select(".EasyScrap-breadcrumbs a[href*='/series/']").lastOrNull()?.attr("href")
+                ?: doc.select(".SingleContent a[href*='/series/']").firstOrNull()?.attr("href")
+                ?: doc.select("a[href*='/series/']").find { it.text().contains("انمي") || it.text().contains("مسلسل") }?.attr("href")
             )
             if (seriesUrl != null && seriesUrl != cleanUrl && seriesUrl.contains("/series/")) {
                 return load(seriesUrl)
