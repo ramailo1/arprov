@@ -99,9 +99,20 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(cleanUrl, headers = headers()).document
         politeDelay()
 
-        val title = doc.selectFirst("h1,.entry-title")?.text()?.trim() ?: return null
+        // Handle Redirection for episodes to series (Netflix UI)
+        if (!cleanUrl.contains("/series/")) {
+            val seriesUrl = fixUrlNull(
+                doc.select(".SingleContent a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
+                ?: doc.select("a[href*='/series/']").firstOrNull()?.attr("href")
+            )
+            if (seriesUrl != null && seriesUrl != cleanUrl) {
+                return load(seriesUrl)
+            }
+        }
+
+        val title = doc.selectFirst("h1.PostTitle, h1")?.text()?.trim() ?: return null
         val poster = fixUrlNull(doc.extractPoster())
-        val description = doc.selectFirst(".description,.plot,.summary,.content")?.text()?.trim()
+        val description = doc.selectFirst(".StoryArea p, .description, .plot, .summary")?.text()?.trim()
         val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
 
         val isSeries = cleanUrl.contains("/series/") || doc.select(".EpisodesList").isNotEmpty()

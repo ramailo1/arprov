@@ -13,7 +13,7 @@ import org.jsoup.nodes.Element
 
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://shahid4.you"
+    override var mainUrl = "https://shahhid4u.boats"
     override var name = "Shahid4u (In Progress)"
     override val usesWebView = false
     override val hasMainPage = true
@@ -50,8 +50,9 @@ class Shahid4uProvider : MainAPI() {
         }
     }
     override val mainPage = mainPageOf(
-            "$mainUrl/movies-3/page/" to "Movies",
-            "$mainUrl/netflix/page/" to "Series & Anime",
+            "$mainUrl/home1" to "جديد الموقع",
+            "$mainUrl/movies.php?&page=" to " أحدث الأفلام",
+            "$mainUrl/all-series.php?&page=" to " أحدث المسلسلات",
         )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
