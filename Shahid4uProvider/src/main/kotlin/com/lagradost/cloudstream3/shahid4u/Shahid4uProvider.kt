@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://shahhid4u.boats"
-    override var name = "Shahid4u (In Progress)"
+    override var name = "Shahid4u"
     override val usesWebView = false
     override val hasMainPage = true
 	private  val cfKiller = CloudflareKiller()
@@ -26,19 +26,22 @@ class Shahid4uProvider : MainAPI() {
     }
     
     private fun String.getImageURL(): String? {
-        return this.replace(".*url\\(|\\);".toRegex(), "")
+        return this.replace(".*url\\s*\\([\"']?|[\"']?\\);?".toRegex(), "")
+    }
+
+    private fun Element.extractPoster(): String? {
+        return this.selectFirst(".postImgBg")?.attr("style")?.getImageURL()
+            ?: this.selectFirst("img")?.let { img ->
+                img.attr("data-src").ifEmpty { img.attr("data-image") }.ifEmpty { img.attr("src") }
+            }
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val urlElement = select("a.fullClick, a.ellipsis, .caption h3 a").first() ?: return null
-        val posterUrl = select("a.image img, img.lazy_load, img.img-responsive").let { 
-            it.attr("data-echo").ifEmpty { it.attr("data-src") }.ifEmpty { it.attr("data-image") } 
-        }.ifEmpty { 
-            select("a.image, .postImgBg").attr("style").getImageURL() 
-        }
+        val urlElement = selectFirst("a.fullClick, a.ellipsis, .caption h3 a") ?: return null
+        val posterUrl = extractPoster()
         val quality = select("span.quality").text().replace("1080p |-".toRegex(), "")
-        val type =
-            if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries
+        val type = if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries
+        
         return newMovieSearchResponse(
             urlElement.attr("title").ifEmpty { urlElement.text() }
                 .replace("برنامج|فيلم|مترجم|اون لاين|مسلسل|مشاهدة|انمي|أنمي".toRegex(), ""),
@@ -49,6 +52,7 @@ class Shahid4uProvider : MainAPI() {
             this.quality = getQualityFromString(quality)
         }
     }
+
     override val mainPage = mainPageOf(
             "$mainUrl/home1" to "جديد الموقع",
             "$mainUrl/movies.php?&page=" to " أحدث الأفلام",
@@ -86,9 +90,9 @@ class Shahid4uProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         var doc = app.get(url).document
-		if(doc.select("title").text() == "Just a moment...") {
-			doc = app.get(url, interceptor = cfKiller, timeout = 120).document
-		}
+        if(doc.select("title").text() == "Just a moment...") {
+            doc = app.get(url, interceptor = cfKiller, timeout = 120).document
+        }
         val isMovie =
             doc.select("ul.half-tags:contains(القسم) li:nth-child(2)").text().contains("افلام")
         val posterUrl =
@@ -113,62 +117,57 @@ class Shahid4uProvider : MainAPI() {
         val synopsis = doc.select("div.post-story:contains(قصة) p").text()
 
         return if (isMovie) {
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                url
-            ) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.plot = synopsis
                 this.tags = tags
                 this.recommendations = recommendations
-                // this.rating = rating
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElement = doc.select("div.MediaGrid")
-            val allEpisodesUrl = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
-            if(allEpisodesUrl.isNotEmpty()) {
-                app.get(allEpisodesUrl).document.select("div.row > div").let {
-                    it.forEachIndexed { index, element ->
-                        episodes.add(
-                            newEpisode(element.select("a.fullClick").attr("href")) {
-                                this.name = element.select("a.fullClick").attr("title")
-                                this.season = 1
-                                this.episode = it.size - index
-                            }
-                        )
-                    }
+            val allEpisodesLink = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
+            if (allEpisodesLink.isNotEmpty()) {
+                val episodesDoc = app.get(allEpisodesLink).document
+                episodesDoc.select("div.row > div, .content-box").forEachIndexed { index, element ->
+                   val epUrl = element.select("a.fullClick").attr("href")
+                   if(epUrl.isNotBlank()) {
+                       episodes.add(newEpisode(epUrl) {
+                           this.name = element.select("a.fullClick").attr("title")
+                           this.episode = index + 1
+                       })
+                   }
                 }
             } else {
-                for (it in episodeElement[1].select("div.content-box")) {
-                    val seasonNumber = it.select("div.number em").text().toIntOrNull()
-                    val seasonUrl = it.select("a.fullClick").attr("href")
-                    for (episode in app.get(seasonUrl).document.select(".episode-block")) {
-                        episodes.add(
-                            newEpisode(episode.select("a").attr("href")) {
-                                this.name = episode.select("div.title").text()
-                                this.season = seasonNumber
-                                this.episode = episode.select("div.number em").text().toIntOrNull()
-                                this.posterUrl = episode.select("div.poster img").attr("data-image")
-                            }
-                        )
-                    }
-                }
+                val seasonElements = doc.select("div.MediaGrid")
+                 val seasonGrid = if (seasonElements.size > 1) seasonElements[1] else seasonElements.firstOrNull()
+                 
+                 seasonGrid?.select("div.content-box")?.forEach { seasonBox ->
+                     val seasonNum = seasonBox.select("div.number em").text().toIntOrNull() ?: 1
+                     val seasonUrl = seasonBox.select("a.fullClick").attr("href")
+                     
+                     if (seasonUrl.isNotBlank()) {
+                        val seasonDoc = app.get(seasonUrl).document
+                        seasonDoc.select(".episode-block, .content-box").forEach { ep ->
+                            val epLink = ep.select("a").attr("href")
+                             if(epLink.isNotBlank()) {
+                                 episodes.add(newEpisode(epLink) {
+                                     this.name = ep.select("div.title").text()
+                                     this.season = seasonNum
+                                     this.episode = ep.select("div.number em").text().toIntOrNull()
+                                     this.posterUrl = ep.select("div.poster img").attr("data-image")
+                                 })
+                             }
+                        }
+                     }
+                 }
             }
-            newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                episodes.distinct().sortedBy { it.episode }) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.plot = synopsis
                 this.tags = tags
                 this.recommendations = recommendations
-                // this.rating = rating
             }
         }
     }
@@ -179,22 +178,23 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val watchUrl = "$data/watch"
-		var doc = app.get(watchUrl).document
-		if(doc.select("title").text() == "Just a moment...") {
-			doc = app.get(watchUrl, interceptor = cfKiller, timeout = 120).document
-		}
-		for (it in doc.select(
-            ".servers-list li:contains(ok), li:contains(Streamtape), li:contains(DoodStream), li:contains(Uqload), li:contains(Voe), li:contains(VIDBOM), li:contains(Upstream), li:contains(السيرفر الخاص), li:contains( GoStream), li:contains(الخاص 1080p), li:contains(vidbom), li:contains(Vidbom)"
-        )) {
-            val id = it.attr("data-id")
-            val i = it.attr("data-i")
-            val sourceUrl = app.post(
-                "${data.getDomainFromUrl()}/wp-content/themes/Shahid4u-WP_HOME/Ajaxat/Single/Server.php",
-                headers = mapOf("referer" to watchUrl, "x-requested-with" to "XMLHttpRequest"),
-                data = mapOf("id" to id, "i" to i)
-            ).document.select("iframe").attr("src").replace(" ", "")
-            loadExtractor(sourceUrl, watchUrl, subtitleCallback, callback)
+        // 1. Go to watch.php (the link from load)
+        // 2. Find link to play.php (Video player button)
+        val watchDoc = app.get(data).document
+        val playUrl = watchDoc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
+        
+        if (playUrl.isNotBlank()) {
+            val playDoc = app.get(playUrl, referer = data).document
+            // 3. Extract servers from play.php
+            playDoc.select("ul.list_servers li, ul.list_embedded li").forEach { li ->
+                 val embedData = li.attr("data-embed") // Contains iframe HTML
+                 if (embedData.isNotBlank()) {
+                     val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
+                     if (!iframeSrc.isNullOrBlank()) {
+                         loadExtractor(iframeSrc, playUrl, subtitleCallback, callback)
+                     }
+                 }
+            }
         }
         return true
     }

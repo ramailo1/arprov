@@ -102,7 +102,7 @@ class RistoAnimeProvider : MainAPI() {
         // Handle Redirection for episodes to series (Netflix UI)
         if (!cleanUrl.contains("/series/")) {
             val seriesUrl = fixUrlNull(
-                doc.select(".SingleContent a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
+                doc.select("a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
                 ?: doc.select(".PostTitle a[href*='/series/']").attr("href")
                 ?: doc.select(".EasyScrap-breadcrumbs a[href*='/series/']").lastOrNull()?.attr("href")
             )
