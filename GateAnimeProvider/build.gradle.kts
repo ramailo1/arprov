@@ -10,7 +10,7 @@ cloudstream {
 
     tvTypes = listOf( "Anime", "AnimeMovie", "Cartoon" )
 
-    iconUrl = "https://b.gateanime.cam/wp-content/uploads/2020/12/cropped-Favicon-192x192.png"
+    iconUrl = "https://f.gateanime.com/wp-content/uploads/2020/12/cropped-Favicon-192x192.png"
 }
 android {
     namespace = "com.lagradost.cloudstream3.gateanime"

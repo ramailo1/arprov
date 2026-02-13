@@ -20,7 +20,6 @@ class RistoAnimeProvider : MainAPI() {
     private val baseHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
         "Connection" to "keep-alive",
         "Upgrade-Insecure-Requests" to "1",
     )
@@ -48,7 +47,7 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(url, headers = headers()).document
         politeDelay()
 
-        val items = doc.select(".MovieItem, article")
+        val items = doc.select(".MovieItem, article, div.item, .video-item, .film-item")
             .mapNotNull { it.toSearchResponse() }
             .distinctBy { it.url }
 
@@ -57,9 +56,9 @@ class RistoAnimeProvider : MainAPI() {
 
     private fun Element.extractPoster(): String? {
         val posterElement = this.selectFirst(".poster")
-        return posterElement?.attr("style")?.let { style ->
+        return posterElement?.attr("data-style")?.let { style ->
             Regex("""url\((['"]?)(.*?)\1\)""").find(style)?.groupValues?.get(2)
-        } ?: posterElement?.attr("data-style")?.let { style ->
+        } ?: posterElement?.attr("style")?.let { style ->
             Regex("""url\((['"]?)(.*?)\1\)""").find(style)?.groupValues?.get(2)
         } ?: this.selectFirst("img")?.let {
             it.attr("data-src").ifBlank { it.attr("src") }
@@ -71,11 +70,10 @@ class RistoAnimeProvider : MainAPI() {
         val href = fixUrlNull(link.attr("href")) ?: return null
 
         val ignorePaths = listOf("/privacy", "/dmca", "/contactus", "/genre/", "/category/",
-            "/quality/", "/release-year/", "/country/", "/language/", "/time", "/movies", 
-            "/series", "/watch", "/download")
+            "/quality/", "/release-year/", "/country/", "/language/", "/time", "/search")
         if (ignorePaths.any { href.contains(it, ignoreCase = true) }) return null
 
-        val title = link.selectFirst("h4")?.text()?.trim() ?: link.ownText().trim()
+        val title = link.selectFirst("h4, .title p")?.text()?.trim() ?: link.ownText().trim()
         if (title.length < 3) return null
 
         val poster = fixUrlNull(this.extractPoster())
