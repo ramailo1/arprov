@@ -103,16 +103,24 @@ class RistoAnimeProvider : MainAPI() {
         if (!cleanUrl.contains("/series/")) {
             val seriesUrl = fixUrlNull(
                 doc.select(".SingleContent a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
-                ?: doc.select("a[href*='/series/']").firstOrNull()?.attr("href")
+                ?: doc.select(".PostTitle a[href*='/series/']").attr("href")
+                ?: doc.select(".EasyScrap-breadcrumbs a[href*='/series/']").lastOrNull()?.attr("href")
             )
-            if (seriesUrl != null && seriesUrl != cleanUrl) {
+            if (seriesUrl != null && seriesUrl != cleanUrl && seriesUrl.contains("/series/")) {
                 return load(seriesUrl)
             }
         }
 
-        val title = doc.selectFirst("h1.PostTitle, h1")?.text()?.trim() ?: return null
+        val title = doc.selectFirst("h1.PostTitle")?.text()?.trim()
+            ?: doc.selectFirst(".PostTitle")?.text()?.trim()
+            ?: doc.select("h1").lastOrNull()?.text()?.trim()
+            ?: return null
+
         val poster = fixUrlNull(doc.extractPoster())
-        val description = doc.selectFirst(".StoryArea p, .description, .plot, .summary")?.text()?.trim()
+        val description = doc.selectFirst(".StoryArea p")?.text()?.trim()
+            ?: doc.selectFirst(".StoryArea")?.text()?.trim()
+            ?: doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
+        
         val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
 
         val isSeries = cleanUrl.contains("/series/") || doc.select(".EpisodesList").isNotEmpty()
