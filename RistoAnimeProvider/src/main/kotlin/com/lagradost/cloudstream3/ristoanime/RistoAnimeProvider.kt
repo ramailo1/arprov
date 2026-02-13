@@ -108,7 +108,7 @@ class RistoAnimeProvider : MainAPI() {
         val type = if (isSeries) TvType.Anime else TvType.AnimeMovie
 
         return if (isSeries) {
-            val episodes = doc.select(".EpisodesList a, a[href]:matches(الحلقة\\s*\\d+)")
+            val episodes = doc.select(".EpisodesList a")
                 .mapNotNull { a ->
                     val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
                     val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
