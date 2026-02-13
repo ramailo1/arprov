@@ -47,7 +47,7 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(url, headers = headers()).document
         politeDelay()
 
-        val items = doc.select(".MovieItem, article, div.item, .video-item, .film-item")
+        val items = doc.select(".MovieItem, article, .item, .video-item, .film-item")
             .mapNotNull { it.toSearchResponse() }
             .distinctBy { it.url }
 
@@ -104,12 +104,11 @@ class RistoAnimeProvider : MainAPI() {
         val description = doc.selectFirst(".description,.plot,.summary,.content")?.text()?.trim()
         val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
 
-        val isMovie = cleanUrl.contains("فيلم") || cleanUrl.contains("%d9%81%d9%8a%d9%84%d9%85") ||
-                doc.text().contains("افلام انمي")
-        val type = if (isMovie) TvType.AnimeMovie else TvType.Anime
+        val isSeries = cleanUrl.contains("/series/") || doc.select(".EpisodesList").isNotEmpty()
+        val type = if (isSeries) TvType.Anime else TvType.AnimeMovie
 
-        return if (!isMovie) {
-            val episodes = doc.select("a[href]:matches(الحلقة\\s*\\d+)")
+        return if (isSeries) {
+            val episodes = doc.select(".EpisodesList a, a[href]:matches(الحلقة\\s*\\d+)")
                 .mapNotNull { a ->
                     val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
                     val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
