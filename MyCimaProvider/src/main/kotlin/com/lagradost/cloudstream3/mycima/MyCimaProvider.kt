@@ -536,14 +536,29 @@ class MyCimaProvider : MainAPI() {
                     }
                 },
 
-                // Method 3: Static HTML Extraction
+                // Method 3: Broad Static HTML Extraction (User's Hybrid Approach)
                 async {
-                    println("DEBUG_MYCIMA: Starting Method 3 (Static HTML)")
-                    // a) Static Download Links
-                    val staticLinks = document.select("a[href*=hglink], a[href*=vinovo], a[href*=mxdrop], a[href*=dsvplay], a[href*=filemoon]")
-                    println("DEBUG_MYCIMA: Found ${staticLinks.size} static download links")
-                    staticLinks.forEach { link ->
-                        processUrl(link.attr("href"))
+                    println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
+                    
+                    // a) Broad Download & Embed Link Search
+                    val allLinks = document.select("a[href]")
+                    println("DEBUG_MYCIMA: Scanning ${allLinks.size} total links")
+                    
+                    allLinks.forEach { link ->
+                        val href = link.attr("href")
+                        val lowerHref = href.lowercase()
+                        
+                        // Check for known download servers OR embed paths
+                        if (lowerHref.contains("hglink") || lowerHref.contains("vinovo") || 
+                            lowerHref.contains("mxdrop") || lowerHref.contains("dsvplay") ||
+                            lowerHref.contains("filemoon") || lowerHref.contains("govid") ||
+                            lowerHref.contains("streamhg") || lowerHref.contains("dood") ||
+                            lowerHref.contains("uqload") || lowerHref.contains("voe") ||
+                            // Embed checks
+                            href.contains("/e/") || href.contains("/play/")) {
+                            
+                            processUrl(href)
+                        }
                     }
 
                     // b) Standard Iframes
@@ -551,7 +566,7 @@ class MyCimaProvider : MainAPI() {
                         processUrl(iframe.attr("src"))
                     }
 
-                    // c) Server List DOM (if attributes exist)
+                    // c) Server List DOM (Fallback if they ARE present)
                     document.select(".WatchServersList li").forEach { li ->
                         val id = li.attr("data-id")
                         val watchUrl = li.attr("data-watch")
