@@ -261,7 +261,7 @@ class MyCimaProvider : MainAPI() {
 
         // Improved series detection using precision logic + DOM override
         val type = detectType(fixedUrl, document)
-        val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes, .WatchServersList li[data-id]").isNotEmpty() 
+        val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes").isNotEmpty() 
             || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة), a:contains(الحلقة)").size > 1
             
         val isSeries = type == TvType.TvSeries || type == TvType.Anime || hasEpisodeList || fixedUrl.contains("episode") || fixedUrl.contains("series")
@@ -383,6 +383,7 @@ class MyCimaProvider : MainAPI() {
     // ---------- SMART SERVER RANKING ----------
     private val serverPriority = listOf(
         "vidsharing",
+        "fsdcmo",
         "govid",
         "voe",
         "filemoon",
@@ -477,7 +478,7 @@ class MyCimaProvider : MainAPI() {
             val finalUrl = fixUrl(decodeProxy(rawUrl))
             if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
                 println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
-                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing")) {
+                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo")) {
                     if (getMohixLink(finalUrl, data, callback)) {
                         foundAtomic.set(true)
                     }
