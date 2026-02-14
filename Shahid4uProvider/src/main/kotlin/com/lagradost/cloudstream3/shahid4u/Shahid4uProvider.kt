@@ -195,78 +195,72 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val allUrls = mutableSetOf<String>()
+        val allEmbeds = mutableSetOf<String>()
+
         var doc = app.get(data).document
-        if(doc.select("title").text() == "Just a moment...") {
+        if (doc.select("title").text() == "Just a moment...") {
             doc = app.get(data, interceptor = cfKiller, timeout = 60).document
         }
 
-        // 1. Prioritize a direct "Watch" or "Server List" button on the page
-        // The btnDowns usually leads to the actual server list on downloads.php
-        val serverListUrl = doc.select("a.btnDowns[href*='downloads.php']").attr("href")
-        
-        if (serverListUrl.isNotBlank()) {
-             val serverDoc = app.get(serverListUrl, referer = data).document
-             extractServers(serverDoc, serverListUrl, subtitleCallback, callback)
+        // 1. Collect from current page
+        collectLinks(doc, allUrls, allEmbeds)
+
+        // 2. Discover sub-pages
+        val subPages = mutableListOf<String>()
+        doc.select("a.btnDowns[href*='downloads.php']").attr("href").takeIf { it.isNotBlank() }?.let { subPages.add(fixUrl(it)) }
+        doc.select("a.xtgo, a:contains(سيرفرات المشاهدة)").attr("href").takeIf { it.isNotBlank() && !it.contains("topvideos.php") }?.let { 
+            val fUrl = fixUrl(it)
+            if (!subPages.contains(fUrl)) subPages.add(fUrl) 
         }
 
-        // 2. Fallback: Try other "Watch Now" buttons only if they point to different pages
-        val genericWatchUrl = doc.select("a.xtgo, a:contains(سيرفرات المشاهدة)").attr("href")
-        
-        if (genericWatchUrl.isNotBlank() && 
-            !genericWatchUrl.contains("topvideos.php") && 
-            genericWatchUrl != serverListUrl) {
-             val watchDoc = app.get(genericWatchUrl, referer = data).document
-             extractServers(watchDoc, genericWatchUrl, subtitleCallback, callback)
+        // 3. Fetch sub-pages in parallel
+        subPages.amap { url ->
+            val subDoc = app.get(url, referer = data).document
+            collectLinks(subDoc, allUrls, allEmbeds)
         }
 
-        // 3. Always check the initial page itself
-        extractServers(doc, data, subtitleCallback, callback)
+        // 4. Resolve embeds
+        allEmbeds.forEach { embed ->
+            Regex("src=['\"](.*?)['\"]").find(embed)?.groupValues?.get(1)?.let { allUrls.add(it) }
+        }
+
+        // 5. Filter and load extractors in parallel
+        val blockedDomains = listOf(
+            "google.com", "mediafire.com", "mega.nz", "uptobox.com", "4shared.com", 
+            "facebook.com", "ads", "userscloud.com", "nitroflare.com", "rapidgator.net", 
+            "uploaded.net", "turbobit.net", "uploadgi.com"
+        )
+        
+        allUrls.filter { url ->
+            url.startsWith("http") && !url.contains("javascript") && blockedDomains.none { url.contains(it) }
+        }.distinct().amap { url ->
+            loadExtractor(url, data, subtitleCallback, callback)
+        }
 
         return true
     }
 
-    private suspend fun extractServers(
-        doc: Element,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    private fun collectLinks(doc: Element, urls: MutableSet<String>, embeds: MutableSet<String>) {
         // Broad selector to catch various server list formats
-        // .btnDowns in this context usually means download mirros which we want to be CAREFUL with
-        // ul.downloadlist is common on the downloads.php page
-        val elements = doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a")
-        
-        // Use parallel mapping for speed
-        elements.map { el ->
-             val a = if (el.tagName() == "a") el else el.selectFirst("a")
-             val embedData = el.attr("data-embed").ifBlank { a?.attr("data-embed") ?: "" }
-             var href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
-             
-             // Normalize relative URLs
-             if (href.startsWith("//")) href = "https:$href"
-             if (href.startsWith("/")) href = mainUrl + href
+        doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a, .btnDowns").forEach { el ->
+            val a = if (el.tagName() == "a") el else el.selectFirst("a")
+            val embedData = el.attr("data-embed").ifBlank { a?.attr("data-embed") ?: "" }
+            var href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
+            
+            if (href.startsWith("//")) href = "https:$href"
+            if (href.startsWith("/") && href.length > 1) href = mainUrl + href
 
-             if (embedData.isNotBlank()) {
-                 val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
-                 if (!iframeSrc.isNullOrBlank()) {
-                     loadExtractor(iframeSrc, referer, subtitleCallback, callback)
-                 }
-             } else if (href.isNotBlank() && !href.contains("javascript") && href.startsWith("http")) {
-                 // Filter: Only load if it looks like a streaming host or if it's explicitly a mirror
-                 // Avoid raw download sites that don't support streaming well in Cloudstream extractors
-                 val blockedDomains = listOf("google.com", "mediafire.com", "mega.nz", "uptobox.com", "4shared.com")
-                 if (blockedDomains.none { href.contains(it) }) {
-                     loadExtractor(href, referer, subtitleCallback, callback)
-                 }
-             }
+            if (embedData.isNotBlank()) embeds.add(embedData)
+            if (href.isNotBlank() && href.startsWith("http")) urls.add(href)
         }
         
         // Also check iframes directly on page
         doc.select("iframe").forEach { iframe ->
-             val src = iframe.attr("src")
-             if (src.isNotBlank() && !src.contains("ads") && !src.contains("facebook")) {
-                 loadExtractor(src, referer, subtitleCallback, callback)
-             }
+            val src = iframe.attr("src")
+            if (src.isNotBlank() && !src.contains("ads") && !src.contains("facebook")) {
+                urls.add(fixUrl(src))
+            }
         }
     }
 }
