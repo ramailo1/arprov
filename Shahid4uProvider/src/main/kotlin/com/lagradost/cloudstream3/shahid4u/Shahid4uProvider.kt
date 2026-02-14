@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.amap
 import org.jsoup.nodes.Element
 
 class Shahid4uProvider : MainAPI() {
@@ -18,6 +19,12 @@ class Shahid4uProvider : MainAPI() {
     override val usesWebView = false
     override val hasMainPage = true
 	private  val cfKiller = CloudflareKiller()
+    private fun updateMainUrl(url: String) {
+        val domain = Regex("""^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n\?\=]+)""").find(url)?.groupValues?.get(1)
+        if (domain != null && !mainUrl.contains(domain)) {
+            mainUrl = if (url.startsWith("https")) "https://$domain" else "http://$domain"
+        }
+    }
     override val supportedTypes =
         setOf(TvType.TvSeries, TvType.Movie, TvType.Anime, TvType.AsianDrama)
 	
@@ -60,7 +67,9 @@ class Shahid4uProvider : MainAPI() {
         )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        var doc = app.get(request.data + page).document
+        val response = app.get(request.data + page)
+        updateMainUrl(response.url)
+        var doc = response.document
 		if(doc.select("title").text() == "Just a moment...") {
             doc = app.get(request.data + page, interceptor = cfKiller, timeout = 120).document
         }
@@ -89,7 +98,9 @@ class Shahid4uProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        var doc = app.get(url).document
+        val response = app.get(url)
+        updateMainUrl(response.url)
+        var doc = response.document
         if(doc.select("title").text() == "Just a moment...") {
             doc = app.get(url, interceptor = cfKiller, timeout = 120).document
         }
@@ -125,22 +136,22 @@ class Shahid4uProvider : MainAPI() {
             val episodes = ArrayList<Episode>()
             val seasonTabs = doc.select(".Tab .tablinks")
             if (seasonTabs.isNotEmpty()) {
-                 seasonTabs.forEach { tab ->
-                     val seasonName = tab.text()
-                     val seasonNum = seasonName.filter { it.isDigit() }.toIntOrNull() ?: 1
-                     val tabId = tab.attr("onclick").substringAfter("'").substringBefore("'")
-                     
-                     doc.select("#$tabId a").forEach { epLink ->
-                         val href = epLink.attr("href")
-                         if (href.isNotBlank()) {
-                             episodes.add(newEpisode(href) {
-                                 this.name = epLink.attr("title").ifEmpty { epLink.text() }
-                                 this.season = seasonNum
-                                 this.episode = this.name?.filter { it.isDigit() }?.toIntOrNull()
-                             })
-                         }
-                     }
-                 }
+                  seasonTabs.amap { tab ->
+                      val seasonName = tab.text()
+                      val seasonNum = seasonName.filter { it.isDigit() }.toIntOrNull() ?: 1
+                      val tabId = tab.attr("onclick").substringAfter("'").substringBefore("'")
+                      
+                      doc.select("#$tabId a").forEach { epLink ->
+                          val href = epLink.attr("href")
+                          if (href.isNotBlank()) {
+                              episodes.add(newEpisode(href) {
+                                  this.name = epLink.attr("title").ifEmpty { epLink.text() }
+                                  this.season = seasonNum
+                                  this.episode = this.name?.filter { it.isDigit() }?.toIntOrNull()
+                              })
+                          }
+                      }
+                  }
             } else {
                 val allEpisodesLink = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
                 if (allEpisodesLink.isNotEmpty()) {
@@ -208,8 +219,9 @@ class Shahid4uProvider : MainAPI() {
 
         // 2. Discover sub-pages
         val subPages = mutableListOf<String>()
+        doc.select("a[href*='play.php']").attr("href").takeIf { it.isNotBlank() }?.let { subPages.add(fixUrl(it)) }
         doc.select("a.btnDowns[href*='downloads.php']").attr("href").takeIf { it.isNotBlank() }?.let { subPages.add(fixUrl(it)) }
-        doc.select("a.xtgo, a:contains(سيرفرات المشاهدة)").attr("href").takeIf { it.isNotBlank() && !it.contains("topvideos.php") }?.let { 
+        doc.select("a.xtgo, a:contains(سيرفرات المشاهدة), a:contains(مشاهدة)").attr("href").takeIf { it.isNotBlank() && !it.contains("topvideos.php") }?.let { 
             val fUrl = fixUrl(it)
             if (!subPages.contains(fUrl)) subPages.add(fUrl) 
         }
@@ -243,15 +255,19 @@ class Shahid4uProvider : MainAPI() {
 
     private fun collectLinks(doc: Element, urls: MutableSet<String>, embeds: MutableSet<String>) {
         // Broad selector to catch various server list formats
-        doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a, .btnDowns").forEach { el ->
+        doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a, .btnDowns, li[id^='server_'], a[data-embed], a[data-url], a[data-link]").forEach { el ->
             val a = if (el.tagName() == "a") el else el.selectFirst("a")
             val embedData = el.attr("data-embed").ifBlank { a?.attr("data-embed") ?: "" }
+            val dataUrl = el.attr("data-url").ifBlank { a?.attr("data-url") ?: "" }
+            val dataLink = el.attr("data-link").ifBlank { a?.attr("data-link") ?: "" }
             var href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
             
             if (href.startsWith("//")) href = "https:$href"
             if (href.startsWith("/") && href.length > 1) href = mainUrl + href
 
             if (embedData.isNotBlank()) embeds.add(embedData)
+            if (dataUrl.isNotBlank()) urls.add(fixUrl(dataUrl))
+            if (dataLink.isNotBlank()) urls.add(fixUrl(dataLink))
             if (href.isNotBlank() && href.startsWith("http")) urls.add(href)
         }
         
