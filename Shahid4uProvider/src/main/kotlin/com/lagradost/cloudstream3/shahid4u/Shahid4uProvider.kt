@@ -195,32 +195,31 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("Shahid4u - loadLinks data: $data")
         var doc = app.get(data).document
         if(doc.select("title").text() == "Just a moment...") {
-            doc = app.get(data, interceptor = cfKiller, timeout = 120).document
+            doc = app.get(data, interceptor = cfKiller, timeout = 60).document
         }
 
         // 1. Prioritize a direct "Watch" or "Server List" button on the page
         // The btnDowns usually leads to the actual server list on downloads.php
         val serverListUrl = doc.select("a.btnDowns[href*='downloads.php']").attr("href")
-        println("Shahid4u - serverListUrl (btnDowns): $serverListUrl")
         
         if (serverListUrl.isNotBlank()) {
              val serverDoc = app.get(serverListUrl, referer = data).document
              extractServers(serverDoc, serverListUrl, subtitleCallback, callback)
         }
 
-        // 2. Fallback: Try other "Watch Now" buttons but be careful of generic ones
+        // 2. Fallback: Try other "Watch Now" buttons only if they point to different pages
         val genericWatchUrl = doc.select("a.xtgo, a:contains(سيرفرات المشاهدة)").attr("href")
-        println("Shahid4u - genericWatchUrl: $genericWatchUrl")
         
-        if (genericWatchUrl.isNotBlank() && !genericWatchUrl.contains("topvideos.php")) {
+        if (genericWatchUrl.isNotBlank() && 
+            !genericWatchUrl.contains("topvideos.php") && 
+            genericWatchUrl != serverListUrl) {
              val watchDoc = app.get(genericWatchUrl, referer = data).document
              extractServers(watchDoc, genericWatchUrl, subtitleCallback, callback)
         }
 
-        // 3. Fallback: Extract from the initial page itself (might be an iframe already there)
+        // 3. Always check the initial page itself
         extractServers(doc, data, subtitleCallback, callback)
 
         return true
@@ -233,31 +232,39 @@ class Shahid4uProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         // Broad selector to catch various server list formats
-        val elements = doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a, .btnDowns")
-        println("Shahid4u - Found ${elements.size} server elements in $referer")
+        // .btnDowns in this context usually means download mirros which we want to be CAREFUL with
+        // ul.downloadlist is common on the downloads.php page
+        val elements = doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a")
         
-        elements.forEach { el ->
+        // Use parallel mapping for speed
+        elements.map { el ->
              val a = if (el.tagName() == "a") el else el.selectFirst("a")
              val embedData = el.attr("data-embed").ifBlank { a?.attr("data-embed") ?: "" }
-             val href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
+             var href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
              
+             // Normalize relative URLs
+             if (href.startsWith("//")) href = "https:$href"
+             if (href.startsWith("/")) href = mainUrl + href
+
              if (embedData.isNotBlank()) {
                  val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
-                 println("Shahid4u - found embed iframeSrc: $iframeSrc")
                  if (!iframeSrc.isNullOrBlank()) {
                      loadExtractor(iframeSrc, referer, subtitleCallback, callback)
                  }
              } else if (href.isNotBlank() && !href.contains("javascript") && href.startsWith("http")) {
-                 println("Shahid4u - found direct href: $href")
-                 loadExtractor(href, referer, subtitleCallback, callback)
+                 // Filter: Only load if it looks like a streaming host or if it's explicitly a mirror
+                 // Avoid raw download sites that don't support streaming well in Cloudstream extractors
+                 val blockedDomains = listOf("google.com", "mediafire.com", "mega.nz", "uptobox.com", "4shared.com")
+                 if (blockedDomains.none { href.contains(it) }) {
+                     loadExtractor(href, referer, subtitleCallback, callback)
+                 }
              }
         }
         
         // Also check iframes directly on page
         doc.select("iframe").forEach { iframe ->
              val src = iframe.attr("src")
-             if (src.isNotBlank() && !src.contains("ads")) {
-                 println("Shahid4u - found direct iframe src: $src")
+             if (src.isNotBlank() && !src.contains("ads") && !src.contains("facebook")) {
                  loadExtractor(src, referer, subtitleCallback, callback)
              }
         }
