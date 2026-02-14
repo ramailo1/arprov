@@ -494,7 +494,7 @@ class MyCimaProvider : MainAPI() {
 
             if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
                 println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
-                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo")) {
+                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo") || finalUrl.contains("fdewsdc")) {
                     if (getMohixLink(finalUrl, data, callback)) {
                         foundAtomic.set(true)
                     }
@@ -573,7 +573,7 @@ class MyCimaProvider : MainAPI() {
                         val lowerHref = absoluteHref.lowercase()
                         val shouldProcess = listOf(
                             "hglink", "vinovo", "mxdrop", "dsvplay", "filemoon", 
-                            "govid", "vidsharing", "streamhg", "dood", "uqload", "voe", "fsdcmo",
+                            "govid", "vidsharing", "streamhg", "dood", "uqload", "voe", "fsdcmo", "fdewsdc",
                             "/e/", "/play/"
                         ).any { lowerHref.contains(it) }
                         
