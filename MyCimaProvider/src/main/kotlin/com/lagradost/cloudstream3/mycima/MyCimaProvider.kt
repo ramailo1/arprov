@@ -5,18 +5,21 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import kotlinx.coroutines.*
 
 class MyCimaProvider : MainAPI() {
 
     // ---------- AUTO DOMAIN POOL ----------
     private val domainPool = listOf(
+        "https://mycima.fan",
+        "https://mycima.gold",
         "https://mycima.rip",
         "https://mycima.bond",
-        "https://mycima.sbs",
         "https://mycima.live"
     )
 
+    private val cfKiller = CloudflareKiller()
     private var activeDomain: String = domainPool.first()
     private var checkedDomain = false
 
@@ -53,7 +56,8 @@ class MyCimaProvider : MainAPI() {
 
         for (domain in domainPool) {
             val working = runCatching {
-                app.get(domain, timeout = 10).isSuccessful
+                val res = app.get(domain, timeout = 10, interceptor = cfKiller)
+                res.isSuccessful && !res.document.select("title").text().contains("Just a moment")
             }.getOrDefault(false)
 
             if (working) {
@@ -72,11 +76,20 @@ class MyCimaProvider : MainAPI() {
         val fullUrl = if (url.startsWith("http")) url else activeDomain + url
 
         val response = runCatching {
-            app.get(fullUrl, headers = headers)
+            // First try without interceptor to be fast
+            val res = app.get(fullUrl, headers = headers)
+            if (res.isSuccessful && !res.document.select("title").text().contains("Just a moment")) {
+                res
+            } else {
+                // Fallback to cfKiller
+                app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
+            }
         }.getOrNull()
 
         if (response?.isSuccessful == true) {
-            return response.document
+            val doc = response.document
+            if (doc.select("title").text().contains("Just a moment")) return null
+            return doc
         }
 
         // Retry domain rotation once
@@ -248,10 +261,10 @@ class MyCimaProvider : MainAPI() {
 
         // Improved series detection using precision logic + DOM override
         val type = detectType(fixedUrl, document)
-        val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes").isNotEmpty() 
+        val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes, .WatchServersList li[data-id]").isNotEmpty() 
             || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة), a:contains(الحلقة)").size > 1
             
-        val isSeries = type == TvType.TvSeries || (type == TvType.Anime && hasEpisodeList) || hasEpisodeList
+        val isSeries = type == TvType.TvSeries || type == TvType.Anime || hasEpisodeList || fixedUrl.contains("episode") || fixedUrl.contains("series")
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
