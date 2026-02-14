@@ -195,6 +195,7 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        println("Shahid4u - loadLinks data: $data")
         var doc = app.get(data).document
         if(doc.select("title").text() == "Just a moment...") {
             doc = app.get(data, interceptor = cfKiller, timeout = 120).document
@@ -202,6 +203,7 @@ class Shahid4uProvider : MainAPI() {
 
         // 1. Try "Watch Now" button which might lead to watch.php or similar
         val playUrl = doc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
+        println("Shahid4u - playUrl: $playUrl")
         
         // 2. Fallback: Check if we are already on a watch page or similar
         var watchDoc = if (playUrl.isNotBlank()) {
@@ -213,6 +215,7 @@ class Shahid4uProvider : MainAPI() {
         // 3. New flow: Check for "Download Servers" link (common on .lol domain)
         // This leads to downloads.php which contains the server list
         val downloadServersLink = watchDoc.select("a[href*='downloads.php'], a:contains(سيرفرات التحميل)").attr("href")
+        println("Shahid4u - downloadServersLink: $downloadServersLink")
         if (downloadServersLink.isNotBlank()) {
             val downloadDoc = app.get(downloadServersLink, referer = watchDoc.baseUri()).document
             extractServers(downloadDoc, downloadServersLink, subtitleCallback, callback)
@@ -230,18 +233,22 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        doc.select("ul.list_servers li, ul.list_embedded li, .download-sec a, .btnDowns").forEach { el ->
+        val elements = doc.select("ul.list_servers li, ul.list_embedded li, .download-sec a, .btnDowns")
+        println("Shahid4u - Found ${elements.size} server elements in $referer")
+        elements.forEach { el ->
              val embedData = el.attr("data-embed") 
              val href = el.attr("href")
              
              if (embedData.isNotBlank()) {
                  val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
+                 println("Shahid4u - embed iframeSrc: $iframeSrc")
                  if (!iframeSrc.isNullOrBlank()) {
                      loadExtractor(iframeSrc, referer, subtitleCallback, callback)
                  }
              } else if (href.isNotBlank() && !href.contains("javascript")) {
                  // Check if it's a direct server link or download link
                  if (href.startsWith("http")) {
+                     println("Shahid4u - direct href: $href")
                      loadExtractor(href, referer, subtitleCallback, callback)
                  }
              }
@@ -250,6 +257,7 @@ class Shahid4uProvider : MainAPI() {
         // Also check iframes directly on page
         doc.select("iframe").forEach { iframe ->
              val src = iframe.attr("src")
+             println("Shahid4u - found iframe src: $src")
              if (src.isNotBlank()) {
                  loadExtractor(src, referer, subtitleCallback, callback)
              }
