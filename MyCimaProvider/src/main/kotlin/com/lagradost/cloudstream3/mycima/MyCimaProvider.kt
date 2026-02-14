@@ -81,6 +81,7 @@ class MyCimaProvider : MainAPI() {
             if (res.isSuccessful && !res.document.select("title").text().contains("Just a moment")) {
                 res
             } else {
+                println("DEBUG_MYCIMA: First attempt failed or blocked, trying CloudflareKiller...")
                 // Fallback to cfKiller
                 app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
             }
@@ -88,8 +89,13 @@ class MyCimaProvider : MainAPI() {
 
         if (response?.isSuccessful == true) {
             val doc = response.document
-            if (doc.select("title").text().contains("Just a moment")) return null
+            if (doc.select("title").text().contains("Just a moment")) {
+                println("DEBUG_MYCIMA: BLOCKED BY CLOUDFLARE (Title Check) - $fullUrl")
+                return null
+            }
             return doc
+        } else {
+            println("DEBUG_MYCIMA: Request Failed - $fullUrl (Code: ${response?.code})")
         }
 
         // Retry domain rotation once
@@ -117,20 +123,49 @@ class MyCimaProvider : MainAPI() {
      )
 
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-
-        val url = request.data + if (page > 1) "page/$page/" else ""
-        val document = safeGet(url)
-            ?: return newHomePageResponse(request.name, emptyList())
-
-        val items = document.select("div#MainFiltar > a.GridItem, .GridItem")
-            .mapNotNull { it.toSearchResult() }
-
-        return newHomePageResponse(request.name, items)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
+    val url = if (page > 1) {
+        if (baseUrl.endsWith("/")) "${baseUrl}$page/" else "$baseUrl/$page/"
+    } else {
+        baseUrl
     }
+    
+    val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
+    
+    val articles = doc.select("div#MainFiltar > a")
+
+    val searchResults = articles.mapNotNull { article ->
+        val title = article.selectFirst("span:first-of-type")?.text()?.trim() ?: return@mapNotNull null
+        val href = article.attr("href")
+        
+        // ROBUST POSTER EXTRACTION: Handle url(), url('...'), url("...")
+        val posterUrl = article.attr("style")
+            ?.substringAfter("background-image:", "")
+            ?.substringAfter("url(", "")
+            ?.substringBefore(")", "")
+            ?.trim()
+            ?.removeSurrounding("'")
+            ?.removeSurrounding("\"")
+            ?.takeIf { it.isNotBlank() && it.startsWith("http") }
+            ?: ""
+        
+        val isMovie = !href.contains("/series/") && !href.contains("/episode/")
+        
+        if (isMovie) {
+            newMovieSearchResponse(title, url = fixUrl(href), type = TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newTvSeriesSearchResponse(title, url = fixUrl(href), type = TvType.TvSeries) {
+                this.posterUrl = posterUrl
+            }
+        }
+    }
+    
+    return newHomePageResponse(request.name, searchResults, hasNext = true)
+}
+
 
     // ---------- SEARCH ----------
     override suspend fun search(query: String): List<SearchResponse> {
@@ -247,8 +282,7 @@ class MyCimaProvider : MainAPI() {
         }?.trim() ?: return null
 
         // TIERED POSTER EXTRACTION
-        val posterUrl = 
-            document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it, document) }
+        val posterUrl = document.selectFirst(".Img--Poster--Single-begin")?.let { extractPosterUrl(it, document) }
             ?: extractPosterUrl(document.selectFirst(".Poster--Single-begin") ?: document, document)
 
         val year = document.selectFirst("a[href*=release-year]")
