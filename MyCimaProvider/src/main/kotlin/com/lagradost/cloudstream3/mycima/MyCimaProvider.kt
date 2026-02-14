@@ -106,14 +106,16 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- MAIN PAGE ----------
     override val mainPage = mainPageOf(
-        "/" to "الرئيسية",
-        "/episodes/" to "الحلقات",
-        "/movies/" to "أفلام",
-        "/series/" to "مسلسلات",
-        "/category/مسلسلات-انمي/" to "مسلسلات انمي",
-        "/category/عروض-مصارعة/" to "مصارعة حرة",
-        "/category/برامج-تلفزيونية/" to "برامج تلفزيونية",
-    )
+       "$mainUrl/page/" to "الرئيسية",
+       "$mainUrl/movies/page/" to "أفلام",
+       "$mainUrl/episodes/page/" to "أحدث الحلقات",
+       "$mainUrl/series/page/" to "مسلسلات",
+       "$mainUrl/category/مسلسلات-اجنبي/page/" to "مسلسلات أجنبية",
+       "$mainUrl/category/مسلسلات-عربي/page/" to "مسلسلات عربية",
+       "$mainUrl/category/مسلسلات-تركي/page/" to "مسلسلات تركية",
+       "$mainUrl/category/مسلسلات-اسيوي/page/" to "مسلسلات آسيوية"
+     )
+
 
     override suspend fun getMainPage(
         page: Int,
@@ -589,6 +591,14 @@ class MyCimaProvider : MainAPI() {
                 // Method 3: Static HTML Extraction (Enhanced)
                 async {
                     println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
+
+                    // User Request: Target specific download section
+                    val downloadItems = document.select("div.DownloadsList a[href]")
+                    println("DEBUG_MYCIMA: Found ${downloadItems.size} download list items")
+                    downloadItems.forEach { link ->
+                        val href = link.attr("href")
+                        if (href.isNotBlank()) processUrl(href)
+                    }
                     
                     // a) Broad Download & Embed Link Search
                     val allLinks = document.select("a[href]")
