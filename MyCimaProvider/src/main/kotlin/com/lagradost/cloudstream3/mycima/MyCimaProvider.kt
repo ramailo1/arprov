@@ -465,24 +465,30 @@ class MyCimaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = safeGet(data) ?: return false
+        val document = safeGet(data) ?: return false.also { println("DEBUG_MYCIMA: Failed to get document for $data") }
+        println("DEBUG_MYCIMA: loadLinks started for $data")
         val pageHtml = document.html()
         val usedLinks = mutableSetOf<String>()
         val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
 
         // Helper to process and use a URL
         val processUrl: suspend (String) -> Unit = { rawUrl ->
+            println("DEBUG_MYCIMA: Processing URL: $rawUrl")
             val finalUrl = fixUrl(decodeProxy(rawUrl))
             if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
+                println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
                 if (finalUrl.contains("govid") || finalUrl.contains("vidsharing")) {
                     if (getMohixLink(finalUrl, data, callback)) {
                         foundAtomic.set(true)
                     }
                 }
                 loadExtractor(finalUrl, data, subtitleCallback) { link ->
+                    println("DEBUG_MYCIMA: Extractor found link: ${link.url}")
                     foundAtomic.set(true)
                     callback(link)
                 }
+            } else {
+                println("DEBUG_MYCIMA: URL ignored (blank or duplicate): $finalUrl")
             }
         }
 
@@ -490,23 +496,28 @@ class MyCimaProvider : MainAPI() {
             listOf(
                 // Method 1: Robust Regex Extraction from Page Source
                 async {
+                    println("DEBUG_MYCIMA: Starting Method 1 (Regex)")
                     // a) Embed IDs: /e/NUMBER
                     Regex("""/e/(\d+)/?[?]""").findAll(pageHtml).forEach { match ->
                         val embedId = match.groupValues[1]
+                        println("DEBUG_MYCIMA: Found Embed ID: $embedId")
                         processUrl("$activeDomain/e/$embedId/")
                     }
                     // b) Base64 Play Links: /play/BASE64
                     Regex("""/play/([A-Za-z0-9+/=_-]+)""").findAll(pageHtml).forEach { match ->
                         val base64 = match.groupValues[1]
+                        println("DEBUG_MYCIMA: Found Play Link (Base64)")
                         processUrl("$activeDomain/play/$base64/")
                     }
                 },
 
                 // Method 2: Script Tag Parsing
                 async {
+                    println("DEBUG_MYCIMA: Starting Method 2 (Script Parsing)")
                     document.select("script").forEach { script ->
                         val scriptText = script.html()
                         Regex("""data-watch\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
+                            println("DEBUG_MYCIMA: Found data-watch in script")
                             processUrl(match.groupValues[1])
                         }
                         Regex("""data-id\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
@@ -527,11 +538,13 @@ class MyCimaProvider : MainAPI() {
 
                 // Method 3: Static HTML Extraction
                 async {
+                    println("DEBUG_MYCIMA: Starting Method 3 (Static HTML)")
                     // a) Static Download Links
-                    document.select("a[href*=hglink], a[href*=vinovo], a[href*=mxdrop], a[href*=dsvplay], a[href*=filemoon]")
-                        .forEach { link ->
-                            processUrl(link.attr("href"))
-                        }
+                    val staticLinks = document.select("a[href*=hglink], a[href*=vinovo], a[href*=mxdrop], a[href*=dsvplay], a[href*=filemoon]")
+                    println("DEBUG_MYCIMA: Found ${staticLinks.size} static download links")
+                    staticLinks.forEach { link ->
+                        processUrl(link.attr("href"))
+                    }
 
                     // b) Standard Iframes
                     document.select("iframe[src]").forEach { iframe ->
@@ -560,6 +573,8 @@ class MyCimaProvider : MainAPI() {
             ).awaitAll()
         }
 
-        return foundAtomic.get()
+        val result = foundAtomic.get()
+        println("DEBUG_MYCIMA: loadLinks finished. Result: $result")
+        return result
     }
 }
