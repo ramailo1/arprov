@@ -75,14 +75,14 @@ graph TD
 | **EgyDead** | Movies & Series | `com.lagradost.cloudstream3.egydead` |
 | **MyCima** | Movies & Series | `com.lagradost.cloudstream3.mycima` |
 | **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
+| **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Shahid4u** - `Maintenance`
-- [ ] **RistoAnime** - `Development`
-- [ ] **Shed4u** - `Development`
+- [ ] **TukTukCinema** - `Development`
 - [ ] **Topcinema** - `Development`
 +
 +

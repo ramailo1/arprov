@@ -458,7 +458,6 @@ class MyCimaProvider : MainAPI() {
     }
 
     // ---------- LOAD LINKS ----------
-    // ---------- LOAD LINKS ----------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -467,110 +466,98 @@ class MyCimaProvider : MainAPI() {
     ): Boolean {
 
         val document = safeGet(data) ?: return false
-
-        // Data class to unify server info
-        data class ServerInfo(val name: String, val idOrUrl: String, val isAjax: Boolean, val score: Int)
-
-        val servers = document.select(".WatchServersList li")
-            .mapNotNull {
-                val name = it.text().trim()
-                val id = it.attr("data-id")
-                val watchUrl = it.attr("data-watch")
-
-                when {
-                    id.isNotBlank() -> ServerInfo(name, id, true, getServerScore(name))
-                    watchUrl.isNotBlank() -> ServerInfo(name, watchUrl, false, getServerScore(name))
-                    else -> null
-                }
-            }
-            .distinctBy { it.idOrUrl }
-            .sortedBy { it.score }
-
-        // Also check for direct links in Method 3 style fallback, merging them in if not present
-        val extraLinks = document.select("a[href*=filemoon], a[href*=streamhg], a[href*=earnvids]")
-            .mapNotNull {
-                val href = it.attr("href")
-                if (href.isNotBlank()) ServerInfo(it.text(), href, false, getServerScore(it.text())) else null
-            }
-        
-        val allServers = (servers + extraLinks).distinctBy { it.idOrUrl }.sortedBy { it.score }
-
+        val pageHtml = document.html()
         val usedLinks = mutableSetOf<String>()
         val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        coroutineScope {
-            allServers.map { server ->
-                async {
-                    if (foundAtomic.get() && server.score > 10) return@async // Optimization: skip low prio if we have links
-
-                    val finalUrl = if (server.isAjax) {
-                        val response = runCatching {
-                            app.post(
-                                "$activeDomain/wp-admin/admin-ajax.php",
-                                headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                data = mapOf(
-                                    "action" to "get_player",
-                                    "server" to server.idOrUrl
-                                )
-                            ).document
-                        }.getOrNull()
-
-                        val iframe = response?.selectFirst("iframe")?.attr("src")
-                        if (iframe.isNullOrBlank()) return@async
-                        fixUrl(decodeProxy(iframe))
-                    } else {
-                        fixUrl(decodeProxy(server.idOrUrl))
+        // Helper to process and use a URL
+        val processUrl: suspend (String) -> Unit = { rawUrl ->
+            val finalUrl = fixUrl(decodeProxy(rawUrl))
+            if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
+                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing")) {
+                    if (getMohixLink(finalUrl, data, callback)) {
+                        foundAtomic.set(true)
                     }
-
-                    synchronized(usedLinks) {
-                        if (usedLinks.contains(finalUrl)) return@async
-                        usedLinks.add(finalUrl)
-                    }
-
-                    if (finalUrl.contains("govid") || finalUrl.contains("vidsharing")) {
-                        if (getMohixLink(finalUrl, data, callback)) {
-                            foundAtomic.set(true)
-                            return@async
-                        }
-                    }
-
-                    var extractorWorked = false
-                    loadExtractor(
-                        finalUrl,
-                        data,
-                        subtitleCallback
-                    ) { link ->
-                        extractorWorked = true
-                        callback(link)
-                    }
-                    if (extractorWorked) foundAtomic.set(true)
                 }
-            }.awaitAll()
+                loadExtractor(finalUrl, data, subtitleCallback) { link ->
+                    foundAtomic.set(true)
+                    callback(link)
+                }
+            }
         }
 
-        // Method 2: Standard iframe extraction (Fallback for embedded players not in list)
-        if (!foundAtomic.get()) {
-             document.select("iframe[src]").forEach { iframe ->
-                val src = iframe.attr("src")
-                if (src.isNotEmpty() && (src.startsWith("http") || src.startsWith("//"))) {
-                    val finalUrl = fixUrl(decodeProxy(src))
-                    if (!usedLinks.contains(finalUrl)) {
-                        usedLinks.add(finalUrl)
-                        if (finalUrl.contains("govid")) {
-                            runBlocking {
-                                if (getMohixLink(finalUrl, data, callback)) {
-                                    foundAtomic.set(true)
+        coroutineScope {
+            listOf(
+                // Method 1: Robust Regex Extraction from Page Source
+                async {
+                    // a) Embed IDs: /e/NUMBER
+                    Regex("""/e/(\d+)/?[?]""").findAll(pageHtml).forEach { match ->
+                        val embedId = match.groupValues[1]
+                        processUrl("$activeDomain/e/$embedId/")
+                    }
+                    // b) Base64 Play Links: /play/BASE64
+                    Regex("""/play/([A-Za-z0-9+/=_-]+)""").findAll(pageHtml).forEach { match ->
+                        val base64 = match.groupValues[1]
+                        processUrl("$activeDomain/play/$base64/")
+                    }
+                },
+
+                // Method 2: Script Tag Parsing
+                async {
+                    document.select("script").forEach { script ->
+                        val scriptText = script.html()
+                        Regex("""data-watch\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
+                            processUrl(match.groupValues[1])
+                        }
+                        Regex("""data-id\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
+                            val serverId = match.groupValues[1]
+                            if (serverId.isNotBlank()) {
+                                runCatching {
+                                    val response = app.post(
+                                        "$activeDomain/wp-admin/admin-ajax.php",
+                                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                                        data = mapOf("action" to "get_player", "server" to serverId)
+                                    ).document
+                                    response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
                                 }
                             }
                         }
-                        
-                        loadExtractor(finalUrl, data, subtitleCallback) { extractedLink ->
-                            foundAtomic.set(true)
-                            callback(extractedLink)
+                    }
+                },
+
+                // Method 3: Static HTML Extraction
+                async {
+                    // a) Static Download Links
+                    document.select("a[href*=hglink], a[href*=vinovo], a[href*=mxdrop], a[href*=dsvplay], a[href*=filemoon]")
+                        .forEach { link ->
+                            processUrl(link.attr("href"))
+                        }
+
+                    // b) Standard Iframes
+                    document.select("iframe[src]").forEach { iframe ->
+                        processUrl(iframe.attr("src"))
+                    }
+
+                    // c) Server List DOM (if attributes exist)
+                    document.select(".WatchServersList li").forEach { li ->
+                        val id = li.attr("data-id")
+                        val watchUrl = li.attr("data-watch")
+                        when {
+                            id.isNotBlank() -> {
+                                runCatching {
+                                    val response = app.post(
+                                        "$activeDomain/wp-admin/admin-ajax.php",
+                                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                                        data = mapOf("action" to "get_player", "server" to id)
+                                    ).document
+                                    response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
+                                }
+                            }
+                            watchUrl.isNotBlank() -> processUrl(watchUrl)
                         }
                     }
                 }
-            }
+            ).awaitAll()
         }
 
         return foundAtomic.get()
