@@ -123,41 +123,61 @@ class Shahid4uProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val allEpisodesLink = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
-            if (allEpisodesLink.isNotEmpty()) {
-                val episodesDoc = app.get(allEpisodesLink).document
-                episodesDoc.select("div.row > div, .content-box").forEachIndexed { index, element ->
-                   val epUrl = element.select("a.fullClick").attr("href")
-                   if(epUrl.isNotBlank()) {
-                       episodes.add(newEpisode(epUrl) {
-                           this.name = element.select("a.fullClick").attr("title")
-                           this.episode = index + 1
-                       })
-                   }
-                }
-            } else {
-                val seasonElements = doc.select("div.MediaGrid")
-                 val seasonGrid = if (seasonElements.size > 1) seasonElements[1] else seasonElements.firstOrNull()
-                 
-                 seasonGrid?.select("div.content-box")?.forEach { seasonBox ->
-                     val seasonNum = seasonBox.select("div.number em").text().toIntOrNull() ?: 1
-                     val seasonUrl = seasonBox.select("a.fullClick").attr("href")
+            val seasonTabs = doc.select(".Tab .tablinks")
+            if (seasonTabs.isNotEmpty()) {
+                 seasonTabs.forEach { tab ->
+                     val seasonName = tab.text()
+                     val seasonNum = seasonName.filter { it.isDigit() }.toIntOrNull() ?: 1
+                     val tabId = tab.attr("onclick").substringAfter("'").substringBefore("'")
                      
-                     if (seasonUrl.isNotBlank()) {
-                        val seasonDoc = app.get(seasonUrl).document
-                        seasonDoc.select(".episode-block, .content-box").forEach { ep ->
-                            val epLink = ep.select("a").attr("href")
-                             if(epLink.isNotBlank()) {
-                                 episodes.add(newEpisode(epLink) {
-                                     this.name = ep.select("div.title").text()
-                                     this.season = seasonNum
-                                     this.episode = ep.select("div.number em").text().toIntOrNull()
-                                     this.posterUrl = ep.select("div.poster img").attr("data-image")
-                                 })
-                             }
-                        }
+                     doc.select("#$tabId a").forEach { epLink ->
+                         val href = epLink.attr("href")
+                         if (href.isNotBlank()) {
+                             episodes.add(newEpisode(href) {
+                                 this.name = epLink.attr("title").ifEmpty { epLink.text() }
+                                 this.season = seasonNum
+                                 this.episode = this.name?.filter { it.isDigit() }?.toIntOrNull()
+                             })
+                         }
                      }
                  }
+            } else {
+                val allEpisodesLink = doc.select("div.btns:contains(جميع الحلقات) a").attr("href")
+                if (allEpisodesLink.isNotEmpty()) {
+                    val episodesDoc = app.get(allEpisodesLink).document
+                    episodesDoc.select("div.row > div, .content-box").forEachIndexed { index, element ->
+                       val epUrl = element.select("a.fullClick").attr("href")
+                       if(epUrl.isNotBlank()) {
+                           episodes.add(newEpisode(epUrl) {
+                               this.name = element.select("a.fullClick").attr("title")
+                               this.episode = index + 1
+                           })
+                       }
+                    }
+                } else {
+                    val seasonElements = doc.select("div.MediaGrid")
+                     val seasonGrid = if (seasonElements.size > 1) seasonElements[1] else seasonElements.firstOrNull()
+                     
+                     seasonGrid?.select("div.content-box")?.forEach { seasonBox ->
+                         val seasonNum = seasonBox.select("div.number em").text().toIntOrNull() ?: 1
+                         val seasonUrl = seasonBox.select("a.fullClick").attr("href")
+                         
+                         if (seasonUrl.isNotBlank()) {
+                            val seasonDoc = app.get(seasonUrl).document
+                            seasonDoc.select(".episode-block, .content-box").forEach { ep ->
+                                val epLink = ep.select("a").attr("href")
+                                 if(epLink.isNotBlank()) {
+                                     episodes.add(newEpisode(epLink) {
+                                         this.name = ep.select("div.title").text()
+                                         this.season = seasonNum
+                                         this.episode = ep.select("div.number em").text().toIntOrNull()
+                                         this.posterUrl = ep.select("div.poster img").attr("data-image")
+                                     })
+                                 }
+                            }
+                         }
+                     }
+                }
             }
             newTvSeriesLoadResponse(cleanTitle, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
@@ -175,20 +195,32 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 1. Go to watch.php (the link from load)
-        // 2. Find link to play.php (Video player button)
-        val watchDoc = app.get(data).document
-        val playUrl = watchDoc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
+        var doc = app.get(data).document
+        if(doc.select("title").text() == "Just a moment...") {
+            doc = app.get(data, interceptor = cfKiller, timeout = 120).document
+        }
+
+        val playUrl = doc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
         
         if (playUrl.isNotBlank()) {
             val playDoc = app.get(playUrl, referer = data).document
-            // 3. Extract servers from play.php
             playDoc.select("ul.list_servers li, ul.list_embedded li").forEach { li ->
-                 val embedData = li.attr("data-embed") // Contains iframe HTML
+                 val embedData = li.attr("data-embed") 
                  if (embedData.isNotBlank()) {
                      val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
                      if (!iframeSrc.isNullOrBlank()) {
                          loadExtractor(iframeSrc, playUrl, subtitleCallback, callback)
+                     }
+                 }
+            }
+        } else {
+             // Fallback: Check if the current page has servers (sometimes happens with series episodes or different layouts)
+             doc.select("ul.list_servers li, ul.list_embedded li").forEach { li ->
+                 val embedData = li.attr("data-embed") 
+                 if (embedData.isNotBlank()) {
+                     val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
+                     if (!iframeSrc.isNullOrBlank()) {
+                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                      }
                  }
             }

@@ -2,7 +2,7 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "GateAnime Provider - (In Progress)"
+    description = "GateAnime Provider"
 
 	language = "ar"
 	
