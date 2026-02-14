@@ -475,7 +475,15 @@ class MyCimaProvider : MainAPI() {
         // Helper to process and use a URL
         val processUrl: suspend (String) -> Unit = { rawUrl ->
             println("DEBUG_MYCIMA: Processing URL: $rawUrl")
-            val finalUrl = fixUrl(decodeProxy(rawUrl))
+            var finalUrl = fixUrl(decodeProxy(rawUrl))
+
+            // Fix malformed URLs (e.g. https://mxdrop.to/e/IDhttps://mxdrop.to)
+            val duplicationMatch = Regex("""(https?://.*?)(?<![?=&])(https?://.*)""").find(finalUrl)
+            if (duplicationMatch != null) {
+                println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
+                finalUrl = duplicationMatch.groupValues[1]
+            }
+
             if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
                 println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
                 if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo")) {
