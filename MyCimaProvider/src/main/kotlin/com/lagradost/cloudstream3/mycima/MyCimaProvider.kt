@@ -481,7 +481,7 @@ class MyCimaProvider : MainAPI() {
         val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
 
         // Helper to process and use a URL
-        val processUrl: suspend (String) -> Unit = { rawUrl ->
+        suspend fun processUrl(rawUrl: String) {
             println("DEBUG_MYCIMA: Processing URL: $rawUrl")
             var finalUrl = fixUrl(decodeProxy(rawUrl))
 
@@ -490,6 +490,39 @@ class MyCimaProvider : MainAPI() {
             if (duplicationMatch != null) {
                 println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
                 finalUrl = duplicationMatch.groupValues[1]
+            }
+
+            // Handle slp_watch (Base64 encoded redirect)
+            if (finalUrl.contains("slp_watch=")) {
+                val slpMatch = Regex("""slp_watch=([a-zA-Z0-9+/=]+)""").find(finalUrl)
+                if (slpMatch != null) {
+                    val base64Url = slpMatch.groupValues[1]
+                    try {
+                        val decodedUrl = String(android.util.Base64.decode(base64Url, android.util.Base64.DEFAULT))
+                        println("DEBUG_MYCIMA: Decoded slp_watch URL: $decodedUrl")
+                        processUrl(decodedUrl)
+                        return
+                    } catch (e: Exception) {
+                        println("DEBUG_MYCIMA: Failed to decode slp_watch: ${e.message}")
+                    }
+                }
+            }
+            
+            // Handle direct links (e.g. linkfas2)
+            if (finalUrl.contains("linkfas2.ecotabia.online")) {
+                 println("DEBUG_MYCIMA: Found direct linkfas2 link: $finalUrl")
+                 callback(
+                    newExtractorLink(
+                        this.name,
+                        "MyCima Server",
+                        finalUrl,
+                        if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = getQuality(finalUrl)
+                    }
+                )
+                foundAtomic.set(true)
+                return
             }
 
             if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
