@@ -201,28 +201,27 @@ class Shahid4uProvider : MainAPI() {
             doc = app.get(data, interceptor = cfKiller, timeout = 120).document
         }
 
-        // 1. Try "Watch Now" button which might lead to watch.php or similar
-        val playUrl = doc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
-        println("Shahid4u - playUrl: $playUrl")
+        // 1. Prioritize a direct "Watch" or "Server List" button on the page
+        // The btnDowns usually leads to the actual server list on downloads.php
+        val serverListUrl = doc.select("a.btnDowns[href*='downloads.php']").attr("href")
+        println("Shahid4u - serverListUrl (btnDowns): $serverListUrl")
         
-        // 2. Fallback: Check if we are already on a watch page or similar
-        var watchDoc = if (playUrl.isNotBlank()) {
-             app.get(playUrl, referer = data).document
-        } else {
-             doc
+        if (serverListUrl.isNotBlank()) {
+             val serverDoc = app.get(serverListUrl, referer = data).document
+             extractServers(serverDoc, serverListUrl, subtitleCallback, callback)
         }
 
-        // 3. New flow: Check for "Download Servers" link (common on .lol domain)
-        // This leads to downloads.php which contains the server list
-        val downloadServersLink = watchDoc.select("a[href*='downloads.php'], a:contains(سيرفرات التحميل)").attr("href")
-        println("Shahid4u - downloadServersLink: $downloadServersLink")
-        if (downloadServersLink.isNotBlank()) {
-            val downloadDoc = app.get(downloadServersLink, referer = watchDoc.baseUri()).document
-            extractServers(downloadDoc, downloadServersLink, subtitleCallback, callback)
+        // 2. Fallback: Try other "Watch Now" buttons but be careful of generic ones
+        val genericWatchUrl = doc.select("a.xtgo, a:contains(سيرفرات المشاهدة)").attr("href")
+        println("Shahid4u - genericWatchUrl: $genericWatchUrl")
+        
+        if (genericWatchUrl.isNotBlank() && !genericWatchUrl.contains("topvideos.php")) {
+             val watchDoc = app.get(genericWatchUrl, referer = data).document
+             extractServers(watchDoc, genericWatchUrl, subtitleCallback, callback)
         }
 
-        // 4. Standard flow: Check current doc for servers (old or alternative domains)
-        extractServers(watchDoc, watchDoc.baseUri(), subtitleCallback, callback)
+        // 3. Fallback: Extract from the initial page itself (might be an iframe already there)
+        extractServers(doc, data, subtitleCallback, callback)
 
         return true
     }
@@ -233,32 +232,32 @@ class Shahid4uProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val elements = doc.select("ul.list_servers li, ul.list_embedded li, .download-sec a, .btnDowns")
+        // Broad selector to catch various server list formats
+        val elements = doc.select("ul.list_servers li, ul.list_embedded li, ul.downloadlist li, .download-sec a, .btnDowns")
         println("Shahid4u - Found ${elements.size} server elements in $referer")
+        
         elements.forEach { el ->
-             val embedData = el.attr("data-embed") 
-             val href = el.attr("href")
+             val a = if (el.tagName() == "a") el else el.selectFirst("a")
+             val embedData = el.attr("data-embed").ifBlank { a?.attr("data-embed") ?: "" }
+             val href = el.attr("href").ifBlank { a?.attr("href") ?: "" }
              
              if (embedData.isNotBlank()) {
                  val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
-                 println("Shahid4u - embed iframeSrc: $iframeSrc")
+                 println("Shahid4u - found embed iframeSrc: $iframeSrc")
                  if (!iframeSrc.isNullOrBlank()) {
                      loadExtractor(iframeSrc, referer, subtitleCallback, callback)
                  }
-             } else if (href.isNotBlank() && !href.contains("javascript")) {
-                 // Check if it's a direct server link or download link
-                 if (href.startsWith("http")) {
-                     println("Shahid4u - direct href: $href")
-                     loadExtractor(href, referer, subtitleCallback, callback)
-                 }
+             } else if (href.isNotBlank() && !href.contains("javascript") && href.startsWith("http")) {
+                 println("Shahid4u - found direct href: $href")
+                 loadExtractor(href, referer, subtitleCallback, callback)
              }
         }
         
         // Also check iframes directly on page
         doc.select("iframe").forEach { iframe ->
              val src = iframe.attr("src")
-             println("Shahid4u - found iframe src: $src")
-             if (src.isNotBlank()) {
+             if (src.isNotBlank() && !src.contains("ads")) {
+                 println("Shahid4u - found direct iframe src: $src")
                  loadExtractor(src, referer, subtitleCallback, callback)
              }
         }
