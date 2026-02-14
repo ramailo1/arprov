@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
+import org.jsoup.Jsoup
 
 class RistoAnimeProvider : MainAPI() {
     override var mainUrl = "https://ristoanime.org"
@@ -129,22 +130,59 @@ class RistoAnimeProvider : MainAPI() {
         val type = if (isSeries) TvType.Anime else TvType.AnimeMovie
 
         return if (isSeries) {
-            val episodes = doc.select(".EpisodesList a")
-                .mapNotNull { a ->
-                    val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
-                    val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
-                    newEpisode(epUrl) {
-                        this.name = if (epNum != null) "الحلقة $epNum" else a.text()
-                        this.episode = epNum
+            val dbEpisodes = mutableListOf<Episode>()
+            val seasons = doc.select(".SeasonsList .SeasonsSelect li")
+            
+            if (seasons.isNotEmpty()) {
+                val script = doc.select("script").html()
+                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(script)?.groupValues?.get(1) 
+                    ?: "https://ristoanime.org/wp-content/themes/TopAnime/Ajax/"
+                val postId = Regex("post_id: '(\\d+)'").find(doc.html())?.groupValues?.get(1) 
+                    ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
+
+                if (postId != null) {
+                    seasons.forEach { season ->
+                        val seasonNum = season.attr("data-season").toIntOrNull() ?: 1
+                        try {
+                            val response = app.post(
+                                "${ajaxUrl}Single/Episodes.php",
+                                data = mapOf("season" to "$seasonNum", "post_id" to postId),
+                                headers = headers() + mapOf("X-Requested-With" to "XMLHttpRequest")
+                            ).text
+                            
+                            val seasonDoc = Jsoup.parse(response)
+                            seasonDoc.select("a").forEach { a ->
+                                val epUrl = fixUrlNull(a.attr("href")) ?: return@forEach
+                                val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
+                                dbEpisodes.add(newEpisode(epUrl) {
+                                    this.name = if (epNum != null) "الحلقة $epNum" else a.text()
+                                    this.episode = epNum
+                                    this.season = seasonNum
+                                })
+                            }
+                        } catch (e: Exception) {
+                            // Only logging errors if strictly necessary, otherwise ignore
+                        }
                     }
                 }
-                .distinctBy { it.data }
+            } else {
+                 val episodes = doc.select(".EpisodesList a")
+                    .mapNotNull { a ->
+                        val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+                        val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
+                        newEpisode(epUrl) {
+                            this.name = if (epNum != null) "الحلقة $epNum" else a.text()
+                            this.episode = epNum
+                        }
+                    }
+                dbEpisodes.addAll(episodes)
+            }
 
             newAnimeLoadResponse(title, cleanUrl, type) {
                 this.posterUrl = poster
                 this.plot = description
                 this.tags = tags
-                addEpisodes(DubStatus.Subbed, episodes.ifEmpty { 
+                addEpisodes(DubStatus.Subbed, dbEpisodes.ifEmpty { 
                     listOf(newEpisode(cleanUrl) { this.name = title; this.episode = 1 }) 
                 })
             }

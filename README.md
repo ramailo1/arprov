@@ -82,7 +82,8 @@ graph TD
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Shahid4u** - `Maintenance`
 - [ ] **RistoAnime** - `Development`
-
+- [ ] **Shed4u** - `Development`
+- [ ] **Topcinema** - `Development`
 +
 +
 ### 🚫 Blocked / Not Working
@@ -90,8 +91,8 @@ These providers are currently blocked by their respective websites (e.g., Cloudf
 
 | Provider | Reason | Status |
 | :--- | :--- | :--- |
-| **AnimeBlkom** | Permanent Block | `Disabled` |
-| **FajerShow** | Domain Issues | `Disabled` |
+| **AnimeBlkom** | Cloudflare Block | `Disabled` |
+| **FajerShow** | Cloudflare Block | `Disabled` |
 | **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
 
 ---
