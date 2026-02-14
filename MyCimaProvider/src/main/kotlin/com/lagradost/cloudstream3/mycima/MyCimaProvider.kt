@@ -194,10 +194,13 @@ class MyCimaProvider : MainAPI() {
             for (attr in attrs) {
                 el.attr(attr).takeIf { it.isNotBlank() }?.let { value ->
                     // CSS url(...)
-                    cssUrlRegex.find(value)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return fixUrl(it) }
+                    cssUrlRegex.find(value)?.groupValues?.getOrNull(1)?.takeIf { 
+                        it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder") 
+                    }?.let { return fixUrl(it) }
+                    
                     // Direct HTTP/HTTPS or protocol-relative
-                    if (value.startsWith("http")) return fixUrl(value)
-                    if (value.startsWith("//")) return fixUrl("https:$value")
+                    if (value.startsWith("http") && !value.contains("logo") && !value.contains("placeholder")) return fixUrl(value)
+                    if (value.startsWith("//") && !value.contains("logo") && !value.contains("placeholder")) return fixUrl("https:$value")
                 }
             }
 
@@ -206,21 +209,24 @@ class MyCimaProvider : MainAPI() {
                 val url = img.attr("data-src").ifBlank {
                     img.attr("data-lazy-src").ifBlank { img.attr("src").ifBlank { img.attr("data-srcset") } }
                 }
-                if (url.isNotBlank()) return fixUrl(url)
+                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) return fixUrl(url)
             }
 
             // c) Check <picture> sources
             el.select("picture source[data-srcset], picture img[data-src]").forEach { pic ->
                 val url = pic.attr("data-srcset").ifBlank { pic.attr("data-src") }
-                if (url.isNotBlank()) return fixUrl(url)
+                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) return fixUrl(url)
             }
         }
 
         // 2. Check meta tags in the document (if provided)
         document?.let { doc ->
             listOf("meta[property=og:image]", "meta[name=twitter:image]", "link[rel=image_src]").forEach { selector ->
-                doc.selectFirst(selector)?.attr("content")?.takeIf { it.isNotBlank() && !it.contains("logo") && !it.contains("default") }?.let { return fixUrl(it) }
+                doc.selectFirst(selector)?.attr("content")?.takeIf { 
+                    it.isNotBlank() && !it.contains("logo") && !it.contains("default") && !it.contains("placeholder")
+                }?.let { return fixUrl(it) }
             }
+
         }
 
         return null // fallback if nothing found
@@ -262,9 +268,11 @@ class MyCimaProvider : MainAPI() {
         // Improved series detection using precision logic + DOM override
         val type = detectType(fixedUrl, document)
         val hasEpisodeList = document.select(".EpisodesList, .episodes-list, .season-episodes").isNotEmpty() 
-            || document.select("a[href*=/episode/], a[href*=/episode-], a:contains(حلقة), a:contains(الحلقة)").size > 1
-            
-        val isSeries = type == TvType.TvSeries || type == TvType.Anime || hasEpisodeList || fixedUrl.contains("episode") || fixedUrl.contains("series")
+        
+        // Only consider it a series if:
+        // 1. Explicitly detected as Series/Anime by URL/Breadcrumbs
+        // 2. has an explicit Episode List container (ignoring sidebars)
+        val isSeries = type == TvType.TvSeries || type == TvType.Anime || hasEpisodeList
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
@@ -545,7 +553,7 @@ class MyCimaProvider : MainAPI() {
                     }
                 },
 
-                // Method 3: Broad Static HTML Extraction (User's Hybrid Approach)
+                // Method 3: Static HTML Extraction (Enhanced)
                 async {
                     println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
                     
@@ -555,42 +563,58 @@ class MyCimaProvider : MainAPI() {
                     
                     allLinks.forEach { link ->
                         val href = link.attr("href")
-                        val lowerHref = href.lowercase()
+                        if (href.isBlank()) return@forEach
                         
-                        // Check for known download servers OR embed paths
-                        if (lowerHref.contains("hglink") || lowerHref.contains("vinovo") || 
-                            lowerHref.contains("mxdrop") || lowerHref.contains("dsvplay") ||
-                            lowerHref.contains("filemoon") || lowerHref.contains("govid") ||
-                            lowerHref.contains("streamhg") || lowerHref.contains("dood") ||
-                            lowerHref.contains("uqload") || lowerHref.contains("voe") ||
-                            // Embed checks
-                            href.contains("/e/") || href.contains("/play/")) {
-                            
-                            processUrl(href)
+                        val absoluteHref = if (href.startsWith("http")) href else {
+                            if (href.startsWith("/")) "$activeDomain$href" else "$activeDomain/$href"
+                        }
+                        
+                        // Check for known servers (case-insensitive)
+                        val lowerHref = absoluteHref.lowercase()
+                        val shouldProcess = listOf(
+                            "hglink", "vinovo", "mxdrop", "dsvplay", "filemoon", 
+                            "govid", "vidsharing", "streamhg", "dood", "uqload", "voe", "fsdcmo",
+                            "/e/", "/play/"
+                        ).any { lowerHref.contains(it) }
+                        
+                        if (shouldProcess) {
+                            println("DEBUG_MYCIMA: Found matching link: $absoluteHref")
+                            processUrl(absoluteHref)
                         }
                     }
 
                     // b) Standard Iframes
                     document.select("iframe[src]").forEach { iframe ->
-                        processUrl(iframe.attr("src"))
+                        val src = iframe.attr("src")
+                        if (src.isNotBlank()) {
+                            println("DEBUG_MYCIMA: Found iframe: $src")
+                            processUrl(src)
+                        }
                     }
 
                     // c) Server List DOM (Fallback if they ARE present)
-                    document.select(".WatchServersList li").forEach { li ->
+                    val serverItems = document.select(".WatchServersList li, #watch li")
+                    println("DEBUG_MYCIMA: Found ${serverItems.size} server list items")
+                    
+                    serverItems.forEach { li ->
                         val id = li.attr("data-id")
                         val watchUrl = li.attr("data-watch")
-                        when {
-                            id.isNotBlank() -> {
-                                runCatching {
-                                    val response = app.post(
-                                        "$activeDomain/wp-admin/admin-ajax.php",
-                                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                        data = mapOf("action" to "get_player", "server" to id)
-                                    ).document
-                                    response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
-                                }
+                        
+                        if (id.isNotBlank()) {
+                            println("DEBUG_MYCIMA: Found server with data-id: $id")
+                            runCatching {
+                                val response = app.post(
+                                    "$activeDomain/wp-admin/admin-ajax.php",
+                                    headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                                    data = mapOf("action" to "get_player", "server" to id)
+                                ).document
+                                response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
                             }
-                            watchUrl.isNotBlank() -> processUrl(watchUrl)
+                        }
+                        
+                        if (watchUrl.isNotBlank()) {
+                            println("DEBUG_MYCIMA: Found server with data-watch: $watchUrl")
+                            processUrl(watchUrl)
                         }
                     }
                 }
