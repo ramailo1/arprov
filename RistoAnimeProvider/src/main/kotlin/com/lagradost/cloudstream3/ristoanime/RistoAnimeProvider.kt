@@ -131,11 +131,11 @@ class RistoAnimeProvider : MainAPI() {
 
         return if (isSeries) {
             val dbEpisodes = mutableListOf<Episode>()
-            val seasons = doc.select(".SeasonsList .SeasonsSelect li")
+            val seasons = doc.select("[data-season]") // Robust selector
             
             if (seasons.isNotEmpty()) {
-                val script = doc.select("script").html()
-                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(script)?.groupValues?.get(1) 
+                val scripts = doc.select("script").joinToString("\n") { it.html() } // Scan all scripts
+                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1) 
                     ?: "https://ristoanime.org/wp-content/themes/TopAnime/Ajax/"
                 val postId = Regex("post_id: '(\\d+)'").find(doc.html())?.groupValues?.get(1) 
                     ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
@@ -151,39 +151,84 @@ class RistoAnimeProvider : MainAPI() {
                             ).text
                             
                             val seasonDoc = Jsoup.parse(response)
-                            seasonDoc.select("a").forEach { a ->
+                            // Primary selector: article, Fallback: a
+                            val episodeElements = seasonDoc.select(".EpisodesList article").ifEmpty { seasonDoc.select(".EpisodesList a") }
+
+                            episodeElements.forEach { element ->
+                                val a = (if (element.tagName() == "a") element else element.selectFirst("a")) ?: return@forEach
                                 val epUrl = fixUrlNull(a.attr("href")) ?: return@forEach
-                                val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
+                                
+                                val rawText = (element.selectFirst("h3, h4, .title")?.text() ?: element.text()).trim()
+                                if (rawText.contains("المشاهدة الان") || rawText.contains("التحميل الان")) return@forEach
+
+                                val epNum = Regex("""\d+""").find(rawText)?.value?.toIntOrNull()
+                                val cleanTitle = if (epNum != null) "الحلقة $epNum" else rawText
+
+                                val thumbnail = fixUrlNull(
+                                    element.selectFirst("img")?.attr("data-src")
+                                        ?.ifBlank { element.selectFirst("img")?.attr("src") }
+                                        ?: element.selectFirst("[style*='background-image']")?.attr("style")?.let { style ->
+                                            Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
+                                        }
+                                )
+
                                 dbEpisodes.add(newEpisode(epUrl) {
-                                    this.name = if (epNum != null) "الحلقة $epNum" else a.text()
+                                    this.name = cleanTitle
                                     this.episode = epNum
                                     this.season = seasonNum
+                                    this.posterUrl = thumbnail
                                 })
                             }
                         } catch (e: Exception) {
-                            // Only logging errors if strictly necessary, otherwise ignore
+                            // Ignore error
                         }
                     }
                 }
             } else {
-                 val episodes = doc.select(".EpisodesList a")
-                    .mapNotNull { a ->
+                // Primary selector: article, Fallback: a
+                val episodeElements = doc.select(".EpisodesList article").ifEmpty { doc.select(".EpisodesList a") }
+                val episodes = episodeElements.mapNotNull { element ->
+                        val a = (if (element.tagName() == "a") element else element.selectFirst("a")) ?: return@mapNotNull null
                         val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
-                        val epNum = a.text().replace(Regex("[^0-9]"), "").toIntOrNull()
+                        
+                        val rawText = (element.selectFirst("h3, h4, .title")?.text() ?: element.text()).trim()
+                        if (rawText.contains("المشاهدة الان") || rawText.contains("التحميل الان")) return@mapNotNull null
+
+                        val epNum = Regex("""\d+""").find(rawText)?.value?.toIntOrNull()
+                        val cleanTitle = if (epNum != null) "الحلقة $epNum" else rawText
+
+                        val thumbnail = fixUrlNull(
+                            element.selectFirst("img")?.attr("data-src")
+                                ?.ifBlank { element.selectFirst("img")?.attr("src") }
+                                ?: element.selectFirst("[style*='background-image']")?.attr("style")?.let { style ->
+                                    Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
+                                }
+                        )
+
                         newEpisode(epUrl) {
-                            this.name = if (epNum != null) "الحلقة $epNum" else a.text()
+                            this.name = cleanTitle
                             this.episode = epNum
+                            this.season = 1 // Force season 1 for flat lists to trigger UI
+                            this.posterUrl = thumbnail
                         }
                     }
                 dbEpisodes.addAll(episodes)
             }
+
+            // Ensure all episodes have a season to trigger Netflix UI
+            dbEpisodes.forEach { if (it.season == null) it.season = 1 }
 
             newAnimeLoadResponse(title, cleanUrl, type) {
                 this.posterUrl = poster
                 this.plot = description
                 this.tags = tags
                 addEpisodes(DubStatus.Subbed, dbEpisodes.ifEmpty { 
-                    listOf(newEpisode(cleanUrl) { this.name = title; this.episode = 1 }) 
+                     // Fallback episode with season 1
+                    listOf(newEpisode(cleanUrl) { 
+                        this.name = title
+                        this.episode = 1
+                        this.season = 1 
+                    }) 
                 })
             }
         } else {

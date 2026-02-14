@@ -12,7 +12,7 @@ import org.jsoup.nodes.Element
 class GateAnimeProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://f.gateanime.com"
-    override var name = "GateAnime (In Progress)"
+    override var name = "GateAnime"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes =

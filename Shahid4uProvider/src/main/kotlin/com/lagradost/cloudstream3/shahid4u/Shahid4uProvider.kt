@@ -200,31 +200,59 @@ class Shahid4uProvider : MainAPI() {
             doc = app.get(data, interceptor = cfKiller, timeout = 120).document
         }
 
+        // 1. Try "Watch Now" button which might lead to watch.php or similar
         val playUrl = doc.select("a.xtgo, a:contains(مشاهدة)").attr("href")
         
-        if (playUrl.isNotBlank()) {
-            val playDoc = app.get(playUrl, referer = data).document
-            playDoc.select("ul.list_servers li, ul.list_embedded li").forEach { li ->
-                 val embedData = li.attr("data-embed") 
-                 if (embedData.isNotBlank()) {
-                     val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
-                     if (!iframeSrc.isNullOrBlank()) {
-                         loadExtractor(iframeSrc, playUrl, subtitleCallback, callback)
-                     }
-                 }
-            }
+        // 2. Fallback: Check if we are already on a watch page or similar
+        var watchDoc = if (playUrl.isNotBlank()) {
+             app.get(playUrl, referer = data).document
         } else {
-             // Fallback: Check if the current page has servers (sometimes happens with series episodes or different layouts)
-             doc.select("ul.list_servers li, ul.list_embedded li").forEach { li ->
-                 val embedData = li.attr("data-embed") 
-                 if (embedData.isNotBlank()) {
-                     val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
-                     if (!iframeSrc.isNullOrBlank()) {
-                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                     }
-                 }
-            }
+             doc
         }
+
+        // 3. New flow: Check for "Download Servers" link (common on .lol domain)
+        // This leads to downloads.php which contains the server list
+        val downloadServersLink = watchDoc.select("a[href*='downloads.php'], a:contains(سيرفرات التحميل)").attr("href")
+        if (downloadServersLink.isNotBlank()) {
+            val downloadDoc = app.get(downloadServersLink, referer = watchDoc.baseUri()).document
+            extractServers(downloadDoc, downloadServersLink, subtitleCallback, callback)
+        }
+
+        // 4. Standard flow: Check current doc for servers (old or alternative domains)
+        extractServers(watchDoc, watchDoc.baseUri(), subtitleCallback, callback)
+
         return true
+    }
+
+    private suspend fun extractServers(
+        doc: Element,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        doc.select("ul.list_servers li, ul.list_embedded li, .download-sec a, .btnDowns").forEach { el ->
+             val embedData = el.attr("data-embed") 
+             val href = el.attr("href")
+             
+             if (embedData.isNotBlank()) {
+                 val iframeSrc = Regex("src=['\"](.*?)['\"]").find(embedData)?.groupValues?.get(1)
+                 if (!iframeSrc.isNullOrBlank()) {
+                     loadExtractor(iframeSrc, referer, subtitleCallback, callback)
+                 }
+             } else if (href.isNotBlank() && !href.contains("javascript")) {
+                 // Check if it's a direct server link or download link
+                 if (href.startsWith("http")) {
+                     loadExtractor(href, referer, subtitleCallback, callback)
+                 }
+             }
+        }
+        
+        // Also check iframes directly on page
+        doc.select("iframe").forEach { iframe ->
+             val src = iframe.attr("src")
+             if (src.isNotBlank()) {
+                 loadExtractor(src, referer, subtitleCallback, callback)
+             }
+        }
     }
 }
