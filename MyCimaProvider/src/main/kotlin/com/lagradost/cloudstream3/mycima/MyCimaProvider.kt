@@ -36,20 +36,28 @@ class MyCimaProvider : MainAPI() {
     )
 
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
+        "Sec-Ch-Ua" to "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile" to "?0",
+        "Sec-Ch-Ua-Platform" to "\"Windows\"",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-User" to "?1",
+        "Upgrade-Insecure-Requests" to "1"
     )
 
     private val headers: Map<String, String>
-        get() = baseHeaders + mapOf("Referer" to activeDomain)
+        get() = baseHeaders + mapOf("Referer" to "$activeDomain/")
 
     // ---------- AUTO DOMAIN DETECTOR ----------
     private suspend fun ensureDomain(): Boolean {
         if (checkedDomain) {
             val stillWorks = runCatching {
                 val res = app.get(activeDomain, timeout = 10)
-                res.isSuccessful && !isCloudflare(res.document)
+                res.isSuccessful && !isBlocked(res.document)
             }.getOrDefault(false)
 
             if (stillWorks) return true
@@ -61,7 +69,7 @@ class MyCimaProvider : MainAPI() {
             val working = runCatching {
                 // Use a generous timeout for the initial connection/Cloudflare solver
                 val res = app.get(domain, timeout = 120, interceptor = cfKiller)
-                res.isSuccessful && !isCloudflare(res.document)
+                res.isSuccessful && !isBlocked(res.document)
             }.getOrDefault(false)
 
             if (working) {
@@ -75,10 +83,12 @@ class MyCimaProvider : MainAPI() {
         return false
     }
 
-    private fun isCloudflare(doc: Document): Boolean {
+    private fun isBlocked(doc: Document): Boolean {
         val title = doc.select("title").text().lowercase()
         val body = doc.body().text().lowercase()
-        return title.contains("just a moment") || 
+        val html = doc.html().lowercase()
+        
+        val blocked = title.contains("just a moment") || 
                title.contains("security verification") || 
                title.contains("access denied") ||
                title.contains("cloudflare") ||
@@ -87,7 +97,16 @@ class MyCimaProvider : MainAPI() {
                body.contains("cloudflare") ||
                body.contains("verifying you are not a bot") ||
                body.contains("performing security verification") ||
-               body.contains("checking your browser")
+               body.contains("checking your browser") ||
+               // Detect 'disable-devtool' redirect page
+               html.contains("disable-devtool") ||
+               html.contains("theajack/disable-devtool") ||
+               title.contains("404") && html.contains("disable-devtool")
+
+        if (blocked) {
+            println("DEBUG_MYCIMA: Blocked detected! Title: $title, Head: ${doc.head().html().take(100)}")
+        }
+        return blocked
     }
 
 
@@ -99,7 +118,7 @@ class MyCimaProvider : MainAPI() {
         val response = runCatching {
             // First try with a decent timeout
             val res = app.get(fullUrl, headers = headers, timeout = 15)
-            if (res.isSuccessful && !isCloudflare(res.document) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
+            if (res.isSuccessful && !isBlocked(res.document) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
                 res
             } else {
                 println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Using CloudflareKiller with 120s timeout...")
@@ -112,8 +131,8 @@ class MyCimaProvider : MainAPI() {
 
         if (response?.isSuccessful == true) {
             val doc = response.document
-            if (isCloudflare(doc)) {
-                println("DEBUG_MYCIMA: BLOCKED BY CLOUDFLARE (Detection Check) - $fullUrl")
+            if (isBlocked(doc)) {
+                println("DEBUG_MYCIMA: BLOCKED (Detection Check) - $fullUrl")
                 return null
             }
             return doc
@@ -132,7 +151,7 @@ class MyCimaProvider : MainAPI() {
                 interceptor = cfKiller,
                 timeout = 120
             )
-            if (res.isSuccessful && !isCloudflare(res.document)) res.document else null
+            if (res.isSuccessful && !isBlocked(res.document)) res.document else null
         }.getOrNull()
     }
 
@@ -157,9 +176,11 @@ class MyCimaProvider : MainAPI() {
             baseUrl
         }
         
+        println("DEBUG_MYCIMA: Loading Main Page ($page): $url")
         val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
         
         val items = doc.select("div.GridItem, .GridItem")
+        println("DEBUG_MYCIMA: Found ${items.size} items on $url")
         val searchResults = items.mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, searchResults, hasNext = true)
