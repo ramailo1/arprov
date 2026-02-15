@@ -27,8 +27,9 @@ class MyCimaProvider : MainAPI() {
     private var activeDomain: String = domainPool.first()
     private var checkedDomain = false
     
-    // Rate limiting for anti-bot bypass
-    private var lastRequestTime: Long = 0
+    // Thread-safe rate limiting
+    private val rateLimitMutex = Mutex()
+    private var lastRequestTime: Long = 0L
 
     override var mainUrl = activeDomain
     override var name = "MyCima"
@@ -94,7 +95,6 @@ class MyCimaProvider : MainAPI() {
     private fun isBlocked(doc: Document, expectedUrl: String = ""): Boolean {
         val title = doc.select("title").text().lowercase()
         val body = doc.body().text().lowercase()
-        val html = doc.html().lowercase()
         val actualUrl = doc.location()
         
         val blocked = title.contains("just a moment") || 
@@ -106,11 +106,7 @@ class MyCimaProvider : MainAPI() {
                body.contains("cloudflare") ||
                body.contains("verifying you are not a bot") ||
                body.contains("performing security verification") ||
-               body.contains("checking your browser") ||
-               // Detect 'disable-devtool' redirect page
-               html.contains("disable-devtool") ||
-               html.contains("theajack/disable-devtool") ||
-               title.contains("404") && html.contains("disable-devtool")
+               body.contains("checking your browser")
         
         // Check for redirect to main page (anti-automation detection)
         val redirected = if (expectedUrl.isNotEmpty()) {
@@ -133,18 +129,20 @@ class MyCimaProvider : MainAPI() {
 
         val fullUrl = if (url.startsWith("http")) url else activeDomain + url
         
-        // Rate limiting: enforce 2-second delay between requests
-        val now = System.currentTimeMillis()
-        val timeSinceLastRequest = now - lastRequestTime
-        if (timeSinceLastRequest < 2000) {
-            delay(2000 - timeSinceLastRequest)
+        // Thread-safe rate limiting: serialize all requests with 2s gap
+        rateLimitMutex.withLock {
+            val now = System.currentTimeMillis()
+            val timeSinceLastRequest = now - lastRequestTime
+            if (timeSinceLastRequest < 2000) {
+                delay(2000 - timeSinceLastRequest)
+            }
+            lastRequestTime = System.currentTimeMillis()
         }
-        lastRequestTime = System.currentTimeMillis()
         
         val response = runCatching {
             // First try with normal headers
             val res = app.get(fullUrl, headers = headers, timeout = 15)
-            if (res.isSuccessful && !isBlocked(res.document, fullUrl) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
+            if (res.isSuccessful && !isBlocked(res.document, fullUrl)) {
                 res
             } else {
                 println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Syncing with Mutex for CloudflareKiller...")
@@ -194,12 +192,7 @@ class MyCimaProvider : MainAPI() {
     override val mainPage = mainPageOf(
        "$mainUrl/" to "الرئيسية",
        "$mainUrl/movies/" to "أفلام",
-       "$mainUrl/episodes/" to "أحدث الحلقات",
-       "$mainUrl/series/" to "مسلسلات",
-       "$mainUrl/category/مسلسلات-اجنبي/" to "مسلسلات أجنبية",
-       "$mainUrl/category/مسلسلات-عربي/" to "مسلسلات عربية",
-       "$mainUrl/category/مسلسلات-تركي/" to "مسلسلات تركية",
-       "$mainUrl/category/مسلسلات-اسيوي/" to "مسلسلات آسيوية"
+       "$mainUrl/series/" to "مسلسلات"
      )
 
 
@@ -276,12 +269,21 @@ class MyCimaProvider : MainAPI() {
 
     private fun extractPosterUrl(element: Element, document: Element? = null): String? {
         val cssUrlRegex = Regex("""url\(['"]?([^')"]+)['"]?\)""")
+        val cssVarRegex = Regex("""--image:\s*url\(['"]?([^')"]+)['"]?\)""")
         val attrs = listOf("style", "data-lazy-style", "data-style", "data-bg", "data-bgset")
         
         // 1. Check the element itself and common child elements
         val elems = listOf(element) + element.select(".BG--GridItem, .BG--Single-begin, .Img--Poster--Single-begin, .Thumb--GridItem, span, a, picture, img, wecima")
         
         for (el in elems) {
+            // Priority: Check --image CSS custom property (used by current MyCima site)
+            val style = el.attr("style")
+            if (style.isNotBlank()) {
+                cssVarRegex.find(style)?.groupValues?.getOrNull(1)?.takeIf {
+                    it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder")
+                }?.let { return fixUrl(it) }
+            }
+            
             // a) Check attributes for CSS url(...) or direct link
             for (attr in attrs) {
                 el.attr(attr).takeIf { it.isNotBlank() }?.let { value ->
