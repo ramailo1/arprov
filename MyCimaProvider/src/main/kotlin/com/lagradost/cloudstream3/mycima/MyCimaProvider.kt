@@ -192,7 +192,7 @@ class MyCimaProvider : MainAPI() {
     override val mainPage = mainPageOf(
        "$mainUrl/" to "الرئيسية",
        "$mainUrl/movies/" to "أفلام",
-       "$mainUrl/series/" to "مسلسلات"
+       "$mainUrl/episodes/" to "مسلسلات"
      )
 
 
@@ -207,8 +207,11 @@ class MyCimaProvider : MainAPI() {
         println("DEBUG_MYCIMA: Loading Main Page ($page): $url")
         val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
         
-        val items = doc.select("div.GridItem, .GridItem")
-        println("DEBUG_MYCIMA: Found ${items.size} items on $url")
+        // Exclude slider items (inside .Slider--Grid / wecimabegin) from results
+        val items = doc.select("div.GridItem, .GridItem").filter { el ->
+            el.parents().none { it.hasClass("Slider--Grid") || it.tagName().equals("wecimabegin", ignoreCase = true) }
+        }
+        println("DEBUG_MYCIMA: Found ${items.size} items on $url (after slider filter)")
         val searchResults = items.mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, searchResults, hasNext = true)
@@ -270,7 +273,8 @@ class MyCimaProvider : MainAPI() {
     private fun extractPosterUrl(element: Element, document: Element? = null): String? {
         val cssUrlRegex = Regex("""url\(['"]?([^')"]+)['"]?\)""")
         val cssVarRegex = Regex("""--image:\s*url\(['"]?([^')"]+)['"]?\)""")
-        val attrs = listOf("style", "data-lazy-style", "data-style", "data-bg", "data-bgset")
+        // Added data-poster and specific background-image style checks
+        val attrs = listOf("style", "data-lazy-style", "data-style", "data-bg", "data-bgset", "data-poster")
         
         // 1. Check the element itself and common child elements
         val elems = listOf(element) + element.select(".BG--GridItem, .BG--Single-begin, .Img--Poster--Single-begin, .Thumb--GridItem, span, a, picture, img, wecima")
@@ -282,6 +286,13 @@ class MyCimaProvider : MainAPI() {
                 cssVarRegex.find(style)?.groupValues?.getOrNull(1)?.takeIf {
                     it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder")
                 }?.let { return fixUrl(it) }
+                
+                // Also check for standard background-image: url(...)
+                if (style.contains("background-image")) {
+                     cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.takeIf {
+                        it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder")
+                    }?.let { return fixUrl(it) }
+                }
             }
             
             // a) Check attributes for CSS url(...) or direct link
@@ -293,8 +304,9 @@ class MyCimaProvider : MainAPI() {
                     }?.let { return fixUrl(it) }
                     
                     // Direct HTTP/HTTPS or protocol-relative
-                    if (value.startsWith("http") && !value.contains("logo") && !value.contains("placeholder")) return fixUrl(value)
-                    if (value.startsWith("//") && !value.contains("logo") && !value.contains("placeholder")) return fixUrl("https:$value")
+                    if ((value.startsWith("http") || value.startsWith("//")) && !value.contains("logo") && !value.contains("placeholder")) {
+                         return fixUrl(if (value.startsWith("//")) "https:$value" else value)
+                    }
                 }
             }
 
