@@ -2,7 +2,7 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "Shahid4u Provider - (In Progress)"
+    description = "Shahid4u Provider"
 
 	language = "ar"
 	

@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.*
 
 class MyCimaProvider : MainAPI() {
@@ -20,6 +22,7 @@ class MyCimaProvider : MainAPI() {
         "https://mycima.live"
     )
 
+    private val mutex = Mutex()
     private val cfKiller = CloudflareKiller()
     private var activeDomain: String = domainPool.first()
     private var checkedDomain = false
@@ -54,33 +57,35 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- AUTO DOMAIN DETECTOR ----------
     private suspend fun ensureDomain(): Boolean {
-        if (checkedDomain) {
-            val stillWorks = runCatching {
-                val res = app.get(activeDomain, timeout = 10)
-                res.isSuccessful && !isBlocked(res.document)
-            }.getOrDefault(false)
+        return mutex.withLock {
+            if (checkedDomain) {
+                val stillWorks = runCatching {
+                    val res = app.get(activeDomain, timeout = 10)
+                    res.isSuccessful && !isBlocked(res.document)
+                }.getOrDefault(false)
 
-            if (stillWorks) return true
-            checkedDomain = false
-        }
-
-        println("DEBUG_MYCIMA: Rotating domains...")
-        for (domain in domainPool) {
-            val working = runCatching {
-                // Use a generous timeout for the initial connection/Cloudflare solver
-                val res = app.get(domain, timeout = 120, interceptor = cfKiller)
-                res.isSuccessful && !isBlocked(res.document)
-            }.getOrDefault(false)
-
-            if (working) {
-                println("DEBUG_MYCIMA: Working domain found: $domain")
-                activeDomain = domain
-                mainUrl = domain
-                checkedDomain = true
-                return true
+                if (stillWorks) return@withLock true
+                checkedDomain = false
             }
+
+            println("DEBUG_MYCIMA: Rotating domains...")
+            for (domain in domainPool) {
+                val working = runCatching {
+                    // Use a generous timeout for the initial connection/Cloudflare solver
+                    val res = app.get(domain, timeout = 120, interceptor = cfKiller)
+                    res.isSuccessful && !isBlocked(res.document)
+                }.getOrDefault(false)
+
+                if (working) {
+                    println("DEBUG_MYCIMA: Working domain found: $domain")
+                    activeDomain = domain
+                    mainUrl = domain
+                    checkedDomain = true
+                    return@withLock true
+                }
+            }
+            false
         }
-        return false
     }
 
     private fun isBlocked(doc: Document): Boolean {
@@ -110,7 +115,7 @@ class MyCimaProvider : MainAPI() {
     }
 
 
-    private suspend fun safeGet(url: String): org.jsoup.nodes.Document? {
+    private suspend fun safeGet(url: String): Document? {
         if (!ensureDomain()) return null
 
         val fullUrl = if (url.startsWith("http")) url else activeDomain + url
@@ -121,18 +126,20 @@ class MyCimaProvider : MainAPI() {
             if (res.isSuccessful && !isBlocked(res.document) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
                 res
             } else {
-                println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Using CloudflareKiller with 120s timeout...")
-                // Use 120s for the solver as per plan to handle slow Turnstile/challenges
-                val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
-                if (cfRes.isSuccessful) delay(1500) 
-                cfRes
+                println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Syncing with Mutex for CloudflareKiller...")
+                // Lock specifically around the Cloudflare solver to prevent resource exhaustion
+                mutex.withLock {
+                    val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
+                    if (cfRes.isSuccessful) delay(1500) 
+                    cfRes
+                }
             }
         }.getOrNull()
 
         if (response?.isSuccessful == true) {
             val doc = response.document
             if (isBlocked(doc)) {
-                println("DEBUG_MYCIMA: BLOCKED (Detection Check) - $fullUrl")
+                println("DEBUG_MYCIMA: BLOCKED (Detection Check Post-Solve) - $fullUrl")
                 return null
             }
             return doc
@@ -145,13 +152,15 @@ class MyCimaProvider : MainAPI() {
         if (!ensureDomain()) return null
 
         return runCatching {
-            val res = app.get(
-                if (url.startsWith("http")) url else activeDomain + url,
-                headers = headers,
-                interceptor = cfKiller,
-                timeout = 120
-            )
-            if (res.isSuccessful && !isBlocked(res.document)) res.document else null
+            mutex.withLock {
+                val res = app.get(
+                    if (url.startsWith("http")) url else activeDomain + url,
+                    headers = headers,
+                    interceptor = cfKiller,
+                    timeout = 120
+                )
+                if (res.isSuccessful && !isBlocked(res.document)) res.document else null
+            }
         }.getOrNull()
     }
 
@@ -538,190 +547,200 @@ class MyCimaProvider : MainAPI() {
         val usedLinks = mutableSetOf<String>()
         val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        // Helper to process and use a URL
-        suspend fun processUrl(rawUrl: String) {
-            println("DEBUG_MYCIMA: Processing URL: $rawUrl")
-            var finalUrl = fixUrl(decodeProxy(rawUrl))
 
-            // Fix malformed URLs (e.g. https://mxdrop.to/e/IDhttps://mxdrop.to)
-            val duplicationMatch = Regex("""(https?://.*?)(?<![?=&])(https?://.*)""").find(finalUrl)
-            if (duplicationMatch != null) {
-                println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
-                finalUrl = duplicationMatch.groupValues[1]
+
+
+        // Method 1: Robust Regex Extraction from Page Source
+        println("DEBUG_MYCIMA: Starting Method 1 (Regex)")
+        // a) Embed IDs: /e/NUMBER
+        for (match in Regex("""/e/(\d+)/?[?]""").findAll(pageHtml)) {
+            val embedId = match.groupValues[1]
+            println("DEBUG_MYCIMA: Found Embed ID: $embedId")
+            processUrl("$activeDomain/e/$embedId/", data, usedLinks, foundAtomic, subtitleCallback, callback)
+        }
+        // b) Base64 Play Links: /play/BASE64
+        for (match in Regex("""/play/([A-Za-z0-9+/=_-]+)""").findAll(pageHtml)) {
+            val base64 = match.groupValues[1]
+            println("DEBUG_MYCIMA: Found Play Link (Base64)")
+            processUrl("$activeDomain/play/$base64/", data, usedLinks, foundAtomic, subtitleCallback, callback)
+        }
+
+        // Method 2: Script Tag Parsing
+        println("DEBUG_MYCIMA: Starting Method 2 (Script Parsing)")
+        for (script in document.select("script")) {
+            val scriptText = script.html()
+            for (match in Regex("""data-watch\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText)) {
+                println("DEBUG_MYCIMA: Found data-watch in script")
+                processUrl(match.groupValues[1], data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
-
-            // Handle slp_watch (Base64 encoded redirect)
-            if (finalUrl.contains("slp_watch=")) {
-                val slpMatch = Regex("""slp_watch=([a-zA-Z0-9+/=]+)""").find(finalUrl)
-                if (slpMatch != null) {
-                    val base64Url = slpMatch.groupValues[1]
+            for (match in Regex("""data-id\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText)) {
+                val serverId = match.groupValues[1]
+                if (serverId.isNotBlank()) {
                     try {
-                        val decodedUrl = String(android.util.Base64.decode(base64Url, android.util.Base64.DEFAULT))
-                        println("DEBUG_MYCIMA: Decoded slp_watch URL: $decodedUrl")
-                        processUrl(decodedUrl)
-                        return
+                        val response = app.post(
+                            "$activeDomain/wp-admin/admin-ajax.php",
+                            headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                            data = mapOf("action" to "get_player", "server" to serverId)
+                        ).document
+                        val iframeSrc = response.selectFirst("iframe")?.attr("src")
+                        if (!iframeSrc.isNullOrBlank()) {
+                            processUrl(iframeSrc, data, usedLinks, foundAtomic, subtitleCallback, callback)
+                        }
                     } catch (e: Exception) {
-                        println("DEBUG_MYCIMA: Failed to decode slp_watch: ${e.message}")
+                        // Ignore
                     }
+                }
+            }
+        }
+
+        // Method 3: Static HTML Extraction (Enhanced)
+        println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
+
+        // User Request: Target specific download section
+        val downloadItems = document.select("div.DownloadsList a[href]")
+        println("DEBUG_MYCIMA: Found ${downloadItems.size} download list items")
+        for (link in downloadItems) {
+            val href = link.attr("href")
+            if (href.isNotBlank()) processUrl(href, data, usedLinks, foundAtomic, subtitleCallback, callback)
+        }
+        
+        // a) Broad Download & Embed Link Search
+        val allLinks = document.select("a[href]")
+        println("DEBUG_MYCIMA: Scanning ${allLinks.size} total links")
+        
+        for (link in allLinks) {
+            val href = link.attr("href")
+            if (href.isBlank()) continue
+            
+            val absoluteHref = if (href.startsWith("http")) href else {
+                if (href.startsWith("/")) "$activeDomain$href" else "$activeDomain/$href"
+            }
+            
+            // Check for known servers (case-insensitive)
+            val lowerHref = absoluteHref.lowercase()
+            val shouldProcess = listOf(
+                "hglink", "vinovo", "mxdrop", "dsvplay", "filemoon", 
+                "govid", "vidsharing", "streamhg", "dood", "uqload", "voe", "fsdcmo", "fdewsdc",
+                "/e/", "/play/"
+            ).any { lowerHref.contains(it) }
+            
+            if (shouldProcess) {
+                println("DEBUG_MYCIMA: Found matching link: $absoluteHref")
+                processUrl(absoluteHref, data, usedLinks, foundAtomic, subtitleCallback, callback)
+            }
+        }
+
+        // b) Standard Iframes
+        for (iframe in document.select("iframe[src]")) {
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                println("DEBUG_MYCIMA: Found iframe: $src")
+                processUrl(src, data, usedLinks, foundAtomic, subtitleCallback, callback)
+            }
+        }
+
+        // c) Server List DOM (Fallback if they ARE present)
+        val serverItems = document.select(".WatchServersList li, #watch li")
+        println("DEBUG_MYCIMA: Found ${serverItems.size} server list items")
+        
+        for (li in serverItems) {
+            val id = li.attr("data-id")
+            val watchUrl = li.attr("data-watch")
+            
+            if (id.isNotBlank()) {
+                println("DEBUG_MYCIMA: Found server with data-id: $id")
+                try {
+                    val response = app.post(
+                        "$activeDomain/wp-admin/admin-ajax.php",
+                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
+                        data = mapOf("action" to "get_player", "server" to id)
+                    ).document
+                    val iframeSrc = response.selectFirst("iframe")?.attr("src")
+                    if (!iframeSrc.isNullOrBlank()) {
+                        processUrl(iframeSrc, data, usedLinks, foundAtomic, subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                    // Ignore
                 }
             }
             
-            // Handle direct links (e.g. linkfas2)
-            if (finalUrl.contains("linkfas2.ecotabia.online")) {
-                 println("DEBUG_MYCIMA: Found direct linkfas2 link: $finalUrl")
-                 callback(
-                    newExtractorLink(
-                        this.name,
-                        "MyCima Server",
-                        finalUrl,
-                        if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = getQuality(finalUrl)
-                    }
-                )
-                foundAtomic.set(true)
-                return
-            }
-
-            if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
-                println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
-                if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo") || finalUrl.contains("fdewsdc")) {
-                    if (getMohixLink(finalUrl, data, callback)) {
-                        foundAtomic.set(true)
-                    }
-                }
-                loadExtractor(finalUrl, data, subtitleCallback) { link ->
-                    println("DEBUG_MYCIMA: Extractor found link: ${link.url}")
-                    foundAtomic.set(true)
-                    callback(link)
-                }
-            } else {
-                println("DEBUG_MYCIMA: URL ignored (blank or duplicate): $finalUrl")
+            if (watchUrl.isNotBlank()) {
+                println("DEBUG_MYCIMA: Found server with data-watch: $watchUrl")
+                processUrl(watchUrl, data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
         }
 
-        coroutineScope {
-            listOf(
-                // Method 1: Robust Regex Extraction from Page Source
-                async {
-                    println("DEBUG_MYCIMA: Starting Method 1 (Regex)")
-                    // a) Embed IDs: /e/NUMBER
-                    Regex("""/e/(\d+)/?[?]""").findAll(pageHtml).forEach { match ->
-                        val embedId = match.groupValues[1]
-                        println("DEBUG_MYCIMA: Found Embed ID: $embedId")
-                        processUrl("$activeDomain/e/$embedId/")
-                    }
-                    // b) Base64 Play Links: /play/BASE64
-                    Regex("""/play/([A-Za-z0-9+/=_-]+)""").findAll(pageHtml).forEach { match ->
-                        val base64 = match.groupValues[1]
-                        println("DEBUG_MYCIMA: Found Play Link (Base64)")
-                        processUrl("$activeDomain/play/$base64/")
-                    }
-                },
-
-                // Method 2: Script Tag Parsing
-                async {
-                    println("DEBUG_MYCIMA: Starting Method 2 (Script Parsing)")
-                    document.select("script").forEach { script ->
-                        val scriptText = script.html()
-                        Regex("""data-watch\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
-                            println("DEBUG_MYCIMA: Found data-watch in script")
-                            processUrl(match.groupValues[1])
-                        }
-                        Regex("""data-id\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText).forEach { match ->
-                            val serverId = match.groupValues[1]
-                            if (serverId.isNotBlank()) {
-                                runCatching {
-                                    val response = app.post(
-                                        "$activeDomain/wp-admin/admin-ajax.php",
-                                        headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                        data = mapOf("action" to "get_player", "server" to serverId)
-                                    ).document
-                                    response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
-                                }
-                            }
-                        }
-                    }
-                },
-
-                // Method 3: Static HTML Extraction (Enhanced)
-                async {
-                    println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
-
-                    // User Request: Target specific download section
-                    val downloadItems = document.select("div.DownloadsList a[href]")
-                    println("DEBUG_MYCIMA: Found ${downloadItems.size} download list items")
-                    downloadItems.forEach { link ->
-                        val href = link.attr("href")
-                        if (href.isNotBlank()) processUrl(href)
-                    }
-                    
-                    // a) Broad Download & Embed Link Search
-                    val allLinks = document.select("a[href]")
-                    println("DEBUG_MYCIMA: Scanning ${allLinks.size} total links")
-                    
-                    allLinks.forEach { link ->
-                        val href = link.attr("href")
-                        if (href.isBlank()) return@forEach
-                        
-                        val absoluteHref = if (href.startsWith("http")) href else {
-                            if (href.startsWith("/")) "$activeDomain$href" else "$activeDomain/$href"
-                        }
-                        
-                        // Check for known servers (case-insensitive)
-                        val lowerHref = absoluteHref.lowercase()
-                        val shouldProcess = listOf(
-                            "hglink", "vinovo", "mxdrop", "dsvplay", "filemoon", 
-                            "govid", "vidsharing", "streamhg", "dood", "uqload", "voe", "fsdcmo", "fdewsdc",
-                            "/e/", "/play/"
-                        ).any { lowerHref.contains(it) }
-                        
-                        if (shouldProcess) {
-                            println("DEBUG_MYCIMA: Found matching link: $absoluteHref")
-                            processUrl(absoluteHref)
-                        }
-                    }
-
-                    // b) Standard Iframes
-                    document.select("iframe[src]").forEach { iframe ->
-                        val src = iframe.attr("src")
-                        if (src.isNotBlank()) {
-                            println("DEBUG_MYCIMA: Found iframe: $src")
-                            processUrl(src)
-                        }
-                    }
-
-                    // c) Server List DOM (Fallback if they ARE present)
-                    val serverItems = document.select(".WatchServersList li, #watch li")
-                    println("DEBUG_MYCIMA: Found ${serverItems.size} server list items")
-                    
-                    serverItems.forEach { li ->
-                        val id = li.attr("data-id")
-                        val watchUrl = li.attr("data-watch")
-                        
-                        if (id.isNotBlank()) {
-                            println("DEBUG_MYCIMA: Found server with data-id: $id")
-                            runCatching {
-                                val response = app.post(
-                                    "$activeDomain/wp-admin/admin-ajax.php",
-                                    headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                    data = mapOf("action" to "get_player", "server" to id)
-                                ).document
-                                response.selectFirst("iframe")?.attr("src")?.let { processUrl(it) }
-                            }
-                        }
-                        
-                        if (watchUrl.isNotBlank()) {
-                            println("DEBUG_MYCIMA: Found server with data-watch: $watchUrl")
-                            processUrl(watchUrl)
-                        }
-                    }
-                }
-            ).awaitAll()
-        }
 
         val result = foundAtomic.get()
         println("DEBUG_MYCIMA: loadLinks finished. Result: $result")
         return result
+    }
+
+    private suspend fun processUrl(
+        rawUrl: String, 
+        data: String, 
+        usedLinks: MutableSet<String>, 
+        foundAtomic: java.util.concurrent.atomic.AtomicBoolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        println("DEBUG_MYCIMA: Processing URL: $rawUrl")
+        var finalUrl = fixUrl(decodeProxy(rawUrl))
+
+        // Fix malformed URLs (e.g. https://mxdrop.to/e/IDhttps://mxdrop.to)
+        val duplicationMatch = Regex("""(https?://.*?)(?<![?=&])(https?://.*)""").find(finalUrl)
+        if (duplicationMatch != null) {
+            println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
+            finalUrl = duplicationMatch.groupValues[1]
+        }
+
+        // Handle slp_watch (Base64 encoded redirect)
+        if (finalUrl.contains("slp_watch=")) {
+            val slpMatch = Regex("""slp_watch=([a-zA-Z0-9+/=]+)""").find(finalUrl)
+            if (slpMatch != null) {
+                val base64Url = slpMatch.groupValues[1]
+                try {
+                    val decodedUrl = String(android.util.Base64.decode(base64Url, android.util.Base64.DEFAULT))
+                    println("DEBUG_MYCIMA: Decoded slp_watch URL: $decodedUrl")
+                    processUrl(decodedUrl, data, usedLinks, foundAtomic, subtitleCallback, callback)
+                    return
+                } catch (e: Exception) {
+                    println("DEBUG_MYCIMA: Failed to decode slp_watch: ${e.message}")
+                }
+            }
+        }
+        
+        // Handle direct links (e.g. linkfas2)
+        if (finalUrl.contains("linkfas2.ecotabia.online")) {
+             println("DEBUG_MYCIMA: Found direct linkfas2 link: $finalUrl")
+             callback(
+                newExtractorLink(
+                    this.name,
+                    "MyCima Server",
+                    finalUrl,
+                    if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = getQuality(finalUrl)
+                }
+            )
+            foundAtomic.set(true)
+            return
+        }
+
+        if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
+            println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
+            if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo") || finalUrl.contains("fdewsdc")) {
+                if (getMohixLink(finalUrl, data, callback)) {
+                    foundAtomic.set(true)
+                }
+            }
+            loadExtractor(finalUrl, data, subtitleCallback) { link ->
+                println("DEBUG_MYCIMA: Extractor found link: ${link.url}")
+                foundAtomic.set(true)
+                callback(link)
+            }
+        } else {
+            println("DEBUG_MYCIMA: URL ignored (blank or duplicate): $finalUrl")
+        }
     }
 }
