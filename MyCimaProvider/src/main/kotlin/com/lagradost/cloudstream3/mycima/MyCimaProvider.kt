@@ -48,20 +48,24 @@ class MyCimaProvider : MainAPI() {
     private suspend fun ensureDomain(): Boolean {
         if (checkedDomain) {
             val stillWorks = runCatching {
-                app.get(activeDomain, timeout = 5).isSuccessful
+                val res = app.get(activeDomain, timeout = 10)
+                res.isSuccessful && !isCloudflare(res.document)
             }.getOrDefault(false)
 
             if (stillWorks) return true
             checkedDomain = false
         }
 
+        println("DEBUG_MYCIMA: Rotating domains...")
         for (domain in domainPool) {
             val working = runCatching {
-                val res = app.get(domain, timeout = 10, interceptor = cfKiller)
-                res.isSuccessful && !res.document.select("title").text().contains("Just a moment")
+                // Use a generous timeout for the initial connection/Cloudflare solver
+                val res = app.get(domain, timeout = 120, interceptor = cfKiller)
+                res.isSuccessful && !isCloudflare(res.document)
             }.getOrDefault(false)
 
             if (working) {
+                println("DEBUG_MYCIMA: Working domain found: $domain")
                 activeDomain = domain
                 mainUrl = domain
                 checkedDomain = true
@@ -86,21 +90,22 @@ class MyCimaProvider : MainAPI() {
                body.contains("checking your browser")
     }
 
+
     private suspend fun safeGet(url: String): org.jsoup.nodes.Document? {
         if (!ensureDomain()) return null
 
         val fullUrl = if (url.startsWith("http")) url else activeDomain + url
 
         val response = runCatching {
-            // First try without interceptor to be fast
-            val res = app.get(fullUrl, headers = headers, timeout = 10)
-            if (res.isSuccessful && !isCloudflare(res.document) && res.document.select("div#MainFiltar").isNotEmpty()) {
+            // First try with a decent timeout
+            val res = app.get(fullUrl, headers = headers, timeout = 15)
+            if (res.isSuccessful && !isCloudflare(res.document) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
                 res
             } else {
-                println("DEBUG_MYCIMA: First attempt failed, blocked, or grid empty ($fullUrl). Trying CloudflareKiller...")
-                // Fallback to cfKiller with a slightly longer timeout and delay
-                val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
-                if (cfRes.isSuccessful) delay(1500) // Small delay for content stabilization
+                println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Using CloudflareKiller with 120s timeout...")
+                // Use 120s for the solver as per plan to handle slow Turnstile/challenges
+                val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
+                if (cfRes.isSuccessful) delay(1500) 
                 cfRes
             }
         }.getOrNull()
@@ -116,7 +121,7 @@ class MyCimaProvider : MainAPI() {
             println("DEBUG_MYCIMA: Request Failed - $fullUrl (Code: ${response?.code})")
         }
 
-        // Final attempt with domain rotation
+        // Final attempt with domain rotation reset
         checkedDomain = false
         if (!ensureDomain()) return null
 
@@ -125,7 +130,7 @@ class MyCimaProvider : MainAPI() {
                 if (url.startsWith("http")) url else activeDomain + url,
                 headers = headers,
                 interceptor = cfKiller,
-                timeout = 60
+                timeout = 120
             )
             if (res.isSuccessful && !isCloudflare(res.document)) res.document else null
         }.getOrNull()
@@ -147,14 +152,14 @@ class MyCimaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
         val url = if (page > 1) {
-            "${baseUrl}page/$page/"
+            "${baseUrl.removeSuffix("/")}/page/$page/"
         } else {
             baseUrl
         }
         
         val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
         
-        val items = doc.select("div#MainFiltar .GridItem, .GridItem")
+        val items = doc.select("div.GridItem, .GridItem")
         val searchResults = items.mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, searchResults, hasNext = true)
