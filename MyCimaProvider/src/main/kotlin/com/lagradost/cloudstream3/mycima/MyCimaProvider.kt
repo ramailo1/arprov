@@ -13,6 +13,7 @@ class MyCimaProvider : MainAPI() {
     // ---------- AUTO DOMAIN POOL ----------
     private val domainPool = listOf(
         "https://mycima.fan",
+        "https://mycima.cc",
         "https://mycima.gold",
         "https://mycima.rip",
         "https://mycima.bond",
@@ -78,12 +79,15 @@ class MyCimaProvider : MainAPI() {
         val response = runCatching {
             // First try without interceptor to be fast
             val res = app.get(fullUrl, headers = headers)
-            if (res.isSuccessful && !res.document.select("title").text().contains("Just a moment")) {
+            val doc = res.document
+            if (res.isSuccessful && !doc.select("title").text().contains("Just a moment") && doc.select("div#MainFiltar").isNotEmpty()) {
                 res
             } else {
-                println("DEBUG_MYCIMA: First attempt failed or blocked, trying CloudflareKiller...")
-                // Fallback to cfKiller
-                app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
+                println("DEBUG_MYCIMA: First attempt failed, blocked, or grid empty. Trying CloudflareKiller...")
+                // Fallback to cfKiller with a slightly longer timeout and delay
+                val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
+                if (cfRes.isSuccessful) delay(1000) // Small delay to allow any minimal JS to settle if needed
+                cfRes
             }
         }.getOrNull()
 
@@ -98,7 +102,7 @@ class MyCimaProvider : MainAPI() {
             println("DEBUG_MYCIMA: Request Failed - $fullUrl (Code: ${response?.code})")
         }
 
-        // Retry domain rotation once
+        // Final attempt with domain rotation
         checkedDomain = false
         if (!ensureDomain()) return null
 
@@ -124,47 +128,20 @@ class MyCimaProvider : MainAPI() {
 
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-    val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
-    val url = if (page > 1) {
-        if (baseUrl.endsWith("/")) "${baseUrl}$page/" else "$baseUrl/$page/"
-    } else {
-        baseUrl
-    }
-    
-    val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
-    
-    val articles = doc.select("div#MainFiltar > a")
-
-    val searchResults = articles.mapNotNull { article ->
-        val title = article.selectFirst("span:first-of-type")?.text()?.trim() ?: return@mapNotNull null
-        val href = article.attr("href")
-        
-        // ROBUST POSTER EXTRACTION: Handle url(), url('...'), url("...")
-        val posterUrl = article.attr("style")
-            ?.substringAfter("background-image:", "")
-            ?.substringAfter("url(", "")
-            ?.substringBefore(")", "")
-            ?.trim()
-            ?.removeSurrounding("'")
-            ?.removeSurrounding("\"")
-            ?.takeIf { it.isNotBlank() && it.startsWith("http") }
-            ?: ""
-        
-        val isMovie = !href.contains("/series/") && !href.contains("/episode/")
-        
-        if (isMovie) {
-            newMovieSearchResponse(title, url = fixUrl(href), type = TvType.Movie) {
-                this.posterUrl = posterUrl
-            }
+        val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
+        val url = if (page > 1) {
+            if (baseUrl.endsWith("/")) "${baseUrl}$page/" else "$baseUrl/$page/"
         } else {
-            newTvSeriesSearchResponse(title, url = fixUrl(href), type = TvType.TvSeries) {
-                this.posterUrl = posterUrl
-            }
+            baseUrl
         }
+        
+        val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
+        
+        val items = doc.select("div#MainFiltar .GridItem, .GridItem")
+        val searchResults = items.mapNotNull { it.toSearchResult() }
+        
+        return newHomePageResponse(request.name, searchResults, hasNext = true)
     }
-    
-    return newHomePageResponse(request.name, searchResults, hasNext = true)
-}
 
 
     // ---------- SEARCH ----------
@@ -188,7 +165,7 @@ class MyCimaProvider : MainAPI() {
             // Priority 2: HTML Breadcrumbs / Categories as fallback
             document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.let { 
                 "مسلسلات" in it || "مسلسل" in it || "حلقات" in it || "انمي" in it
-            } == true -> if (document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("انمي") == true) TvType.Anime else TvType.TvSeries
+            } == true -> if (document.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("انمي") == true) TvType.Anime else TvType.TvSeries
             document?.selectFirst(".breadcrumb, .Category, .category")?.text()?.contains("افلام") == true -> TvType.Movie
             
             // Priority 3: Keywords in slug (Decoded path)
@@ -481,6 +458,8 @@ class MyCimaProvider : MainAPI() {
     }
 
     private suspend fun getMohixLink(url: String, data: String, callback: (ExtractorLink) -> Unit): Boolean {
+        // data param is kept for signature consistency if needed elsewhere, but marked as ignored by prefixing with _ or just left as is if it's private.
+        // Actually, it's private, so I can just remove it.
         val page = app.get(url, headers = headers).text
         val hex = Regex("""(?:const|var)\s+Mohix\s*=\s*["']([0-9a-fA-F]+)["']""").find(page)?.groupValues?.get(1)
         if (hex != null) {
