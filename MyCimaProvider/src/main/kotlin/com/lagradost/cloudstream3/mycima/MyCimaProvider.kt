@@ -27,9 +27,7 @@ class MyCimaProvider : MainAPI() {
     private var activeDomain: String = domainPool.first()
     private var checkedDomain = false
     
-    // Cookie persistence for anti-bot bypass
-    private var cloudflareCookies: Map<String, String> = emptyMap()
-    private var cookiesExpiry: Long = 0
+    // Rate limiting for anti-bot bypass
     private var lastRequestTime: Long = 0
 
     override var mainUrl = activeDomain
@@ -143,17 +141,9 @@ class MyCimaProvider : MainAPI() {
         }
         lastRequestTime = System.currentTimeMillis()
         
-        // Build headers with cookies if available
-        val requestHeaders = if (cloudflareCookies.isNotEmpty() && System.currentTimeMillis() < cookiesExpiry) {
-            val cookieHeader = cloudflareCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-            headers + mapOf("Cookie" to cookieHeader)
-        } else {
-            headers
-        }
-
         val response = runCatching {
-            // First try with stored cookies
-            val res = app.get(fullUrl, headers = requestHeaders, timeout = 15)
+            // First try with normal headers
+            val res = app.get(fullUrl, headers = headers, timeout = 15)
             if (res.isSuccessful && !isBlocked(res.document, fullUrl) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
                 res
             } else {
@@ -162,10 +152,6 @@ class MyCimaProvider : MainAPI() {
                 mutex.withLock {
                     val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
                     if (cfRes.isSuccessful) {
-                        // Store cookies after successful WebView bypass
-                        cloudflareCookies = cfRes.cookies
-                        cookiesExpiry = System.currentTimeMillis() + (30 * 60 * 1000) // 30 minutes
-                        println("DEBUG_MYCIMA: Stored ${cloudflareCookies.size} cookies after WebView bypass")
                         delay(2000) // Additional delay after WebView
                     }
                     cfRes
@@ -177,9 +163,6 @@ class MyCimaProvider : MainAPI() {
             val doc = response.document
             if (isBlocked(doc, fullUrl)) {
                 println("DEBUG_MYCIMA: BLOCKED (Detection Check Post-Solve) - $fullUrl")
-                // Clear cookies if they're not working
-                cloudflareCookies = emptyMap()
-                cookiesExpiry = 0
                 return null
             }
             return doc
@@ -200,9 +183,6 @@ class MyCimaProvider : MainAPI() {
                     timeout = 120
                 )
                 if (res.isSuccessful) {
-                    // Store cookies from final attempt
-                    cloudflareCookies = res.cookies
-                    cookiesExpiry = System.currentTimeMillis() + (30 * 60 * 1000)
                     delay(2000)
                 }
                 if (res.isSuccessful && !isBlocked(res.document, fullUrl)) res.document else null

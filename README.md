@@ -77,12 +77,12 @@ graph TD
 | **Shahid4u** | Movies & Series | `com.lagradost.cloudstream3.shahid4u` |
 | **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
-| **TukTok** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 ### 🛠️ In Development (Coming Soon)
+- [ ] **TukTok** - `Movies & Series`
 - [ ] **Topcinema** - `Development`
 ### 🚫 Blocked / Not Working
 These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
