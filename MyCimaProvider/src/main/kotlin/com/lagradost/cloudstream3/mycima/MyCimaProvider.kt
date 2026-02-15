@@ -26,6 +26,11 @@ class MyCimaProvider : MainAPI() {
     private val cfKiller = CloudflareKiller()
     private var activeDomain: String = domainPool.first()
     private var checkedDomain = false
+    
+    // Cookie persistence for anti-bot bypass
+    private var cloudflareCookies: Map<String, String> = emptyMap()
+    private var cookiesExpiry: Long = 0
+    private var lastRequestTime: Long = 0
 
     override var mainUrl = activeDomain
     override var name = "MyCima"
@@ -88,10 +93,11 @@ class MyCimaProvider : MainAPI() {
         }
     }
 
-    private fun isBlocked(doc: Document): Boolean {
+    private fun isBlocked(doc: Document, expectedUrl: String = ""): Boolean {
         val title = doc.select("title").text().lowercase()
         val body = doc.body().text().lowercase()
         val html = doc.html().lowercase()
+        val actualUrl = doc.location()
         
         val blocked = title.contains("just a moment") || 
                title.contains("security verification") || 
@@ -107,11 +113,20 @@ class MyCimaProvider : MainAPI() {
                html.contains("disable-devtool") ||
                html.contains("theajack/disable-devtool") ||
                title.contains("404") && html.contains("disable-devtool")
+        
+        // Check for redirect to main page (anti-automation detection)
+        val redirected = if (expectedUrl.isNotEmpty()) {
+            val expectedPath = expectedUrl.substringAfter(activeDomain).substringBefore("?")
+            val actualPath = actualUrl.substringAfter(activeDomain).substringBefore("?")
+            expectedPath.isNotEmpty() && actualPath.isNotEmpty() && 
+            !actualPath.contains(expectedPath.substringAfterLast("/")) &&
+            (actualPath == "/" || actualPath.isEmpty())
+        } else false
 
-        if (blocked) {
-            println("DEBUG_MYCIMA: Blocked detected! Title: $title, Head: ${doc.head().html().take(100)}")
+        if (blocked || redirected) {
+            println("DEBUG_MYCIMA: Blocked detected! Title: $title, Redirected: $redirected (Expected: $expectedUrl, Got: $actualUrl)")
         }
-        return blocked
+        return blocked || redirected
     }
 
 
@@ -119,18 +134,40 @@ class MyCimaProvider : MainAPI() {
         if (!ensureDomain()) return null
 
         val fullUrl = if (url.startsWith("http")) url else activeDomain + url
+        
+        // Rate limiting: enforce 2-second delay between requests
+        val now = System.currentTimeMillis()
+        val timeSinceLastRequest = now - lastRequestTime
+        if (timeSinceLastRequest < 2000) {
+            delay(2000 - timeSinceLastRequest)
+        }
+        lastRequestTime = System.currentTimeMillis()
+        
+        // Build headers with cookies if available
+        val requestHeaders = if (cloudflareCookies.isNotEmpty() && System.currentTimeMillis() < cookiesExpiry) {
+            val cookieHeader = cloudflareCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            headers + mapOf("Cookie" to cookieHeader)
+        } else {
+            headers
+        }
 
         val response = runCatching {
-            // First try with a decent timeout
-            val res = app.get(fullUrl, headers = headers, timeout = 15)
-            if (res.isSuccessful && !isBlocked(res.document) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
+            // First try with stored cookies
+            val res = app.get(fullUrl, headers = requestHeaders, timeout = 15)
+            if (res.isSuccessful && !isBlocked(res.document, fullUrl) && res.document.select("div.GridItem, .GridItem").isNotEmpty()) {
                 res
             } else {
                 println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Syncing with Mutex for CloudflareKiller...")
                 // Lock specifically around the Cloudflare solver to prevent resource exhaustion
                 mutex.withLock {
                     val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
-                    if (cfRes.isSuccessful) delay(1500) 
+                    if (cfRes.isSuccessful) {
+                        // Store cookies after successful WebView bypass
+                        cloudflareCookies = cfRes.cookies
+                        cookiesExpiry = System.currentTimeMillis() + (30 * 60 * 1000) // 30 minutes
+                        println("DEBUG_MYCIMA: Stored ${cloudflareCookies.size} cookies after WebView bypass")
+                        delay(2000) // Additional delay after WebView
+                    }
                     cfRes
                 }
             }
@@ -138,8 +175,11 @@ class MyCimaProvider : MainAPI() {
 
         if (response?.isSuccessful == true) {
             val doc = response.document
-            if (isBlocked(doc)) {
+            if (isBlocked(doc, fullUrl)) {
                 println("DEBUG_MYCIMA: BLOCKED (Detection Check Post-Solve) - $fullUrl")
+                // Clear cookies if they're not working
+                cloudflareCookies = emptyMap()
+                cookiesExpiry = 0
                 return null
             }
             return doc
@@ -159,7 +199,13 @@ class MyCimaProvider : MainAPI() {
                     interceptor = cfKiller,
                     timeout = 120
                 )
-                if (res.isSuccessful && !isBlocked(res.document)) res.document else null
+                if (res.isSuccessful) {
+                    // Store cookies from final attempt
+                    cloudflareCookies = res.cookies
+                    cookiesExpiry = System.currentTimeMillis() + (30 * 60 * 1000)
+                    delay(2000)
+                }
+                if (res.isSuccessful && !isBlocked(res.document, fullUrl)) res.document else null
             }
         }.getOrNull()
     }

@@ -32,11 +32,12 @@
     "QisatTv",
     "Shahid4u",
     "ShahidMBC",
-    "Shed4u",
+    "TukTok",
     "TopCinema"
   ],
   "extractors": [
     "StreamTape",
+    "Aflamy",
     "DoodStream",
     "MixDrop",
     "MegaUp",
