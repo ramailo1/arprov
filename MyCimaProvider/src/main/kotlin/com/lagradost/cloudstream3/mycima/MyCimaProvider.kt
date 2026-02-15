@@ -71,6 +71,21 @@ class MyCimaProvider : MainAPI() {
         return false
     }
 
+    private fun isCloudflare(doc: Document): Boolean {
+        val title = doc.select("title").text().lowercase()
+        val body = doc.body().text().lowercase()
+        return title.contains("just a moment") || 
+               title.contains("security verification") || 
+               title.contains("access denied") ||
+               title.contains("cloudflare") ||
+               title.contains("verify you are human") ||
+               title.contains("performing security verification") ||
+               body.contains("cloudflare") ||
+               body.contains("verifying you are not a bot") ||
+               body.contains("performing security verification") ||
+               body.contains("checking your browser")
+    }
+
     private suspend fun safeGet(url: String): org.jsoup.nodes.Document? {
         if (!ensureDomain()) return null
 
@@ -78,23 +93,22 @@ class MyCimaProvider : MainAPI() {
 
         val response = runCatching {
             // First try without interceptor to be fast
-            val res = app.get(fullUrl, headers = headers)
-            val doc = res.document
-            if (res.isSuccessful && !doc.select("title").text().contains("Just a moment") && doc.select("div#MainFiltar").isNotEmpty()) {
+            val res = app.get(fullUrl, headers = headers, timeout = 10)
+            if (res.isSuccessful && !isCloudflare(res.document) && res.document.select("div#MainFiltar").isNotEmpty()) {
                 res
             } else {
-                println("DEBUG_MYCIMA: First attempt failed, blocked, or grid empty. Trying CloudflareKiller...")
+                println("DEBUG_MYCIMA: First attempt failed, blocked, or grid empty ($fullUrl). Trying CloudflareKiller...")
                 // Fallback to cfKiller with a slightly longer timeout and delay
                 val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 60)
-                if (cfRes.isSuccessful) delay(1000) // Small delay to allow any minimal JS to settle if needed
+                if (cfRes.isSuccessful) delay(1500) // Small delay for content stabilization
                 cfRes
             }
         }.getOrNull()
 
         if (response?.isSuccessful == true) {
             val doc = response.document
-            if (doc.select("title").text().contains("Just a moment")) {
-                println("DEBUG_MYCIMA: BLOCKED BY CLOUDFLARE (Title Check) - $fullUrl")
+            if (isCloudflare(doc)) {
+                println("DEBUG_MYCIMA: BLOCKED BY CLOUDFLARE (Detection Check) - $fullUrl")
                 return null
             }
             return doc
@@ -107,30 +121,33 @@ class MyCimaProvider : MainAPI() {
         if (!ensureDomain()) return null
 
         return runCatching {
-            app.get(
+            val res = app.get(
                 if (url.startsWith("http")) url else activeDomain + url,
-                headers = headers
-            ).document
+                headers = headers,
+                interceptor = cfKiller,
+                timeout = 60
+            )
+            if (res.isSuccessful && !isCloudflare(res.document)) res.document else null
         }.getOrNull()
     }
 
     // ---------- MAIN PAGE ----------
     override val mainPage = mainPageOf(
-       "$mainUrl/page/" to "الرئيسية",
-       "$mainUrl/movies/page/" to "أفلام",
-       "$mainUrl/episodes/page/" to "أحدث الحلقات",
-       "$mainUrl/series/page/" to "مسلسلات",
-       "$mainUrl/category/مسلسلات-اجنبي/page/" to "مسلسلات أجنبية",
-       "$mainUrl/category/مسلسلات-عربي/page/" to "مسلسلات عربية",
-       "$mainUrl/category/مسلسلات-تركي/page/" to "مسلسلات تركية",
-       "$mainUrl/category/مسلسلات-اسيوي/page/" to "مسلسلات آسيوية"
+       "$mainUrl/" to "الرئيسية",
+       "$mainUrl/movies/" to "أفلام",
+       "$mainUrl/episodes/" to "أحدث الحلقات",
+       "$mainUrl/series/" to "مسلسلات",
+       "$mainUrl/category/مسلسلات-اجنبي/" to "مسلسلات أجنبية",
+       "$mainUrl/category/مسلسلات-عربي/" to "مسلسلات عربية",
+       "$mainUrl/category/مسلسلات-تركي/" to "مسلسلات تركية",
+       "$mainUrl/category/مسلسلات-اسيوي/" to "مسلسلات آسيوية"
      )
 
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
         val url = if (page > 1) {
-            if (baseUrl.endsWith("/")) "${baseUrl}$page/" else "$baseUrl/$page/"
+            "${baseUrl}page/$page/"
         } else {
             baseUrl
         }
