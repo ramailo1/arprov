@@ -80,7 +80,7 @@ class TopCinemaProvider : MainAPI() {
         val response = app.get(url, headers = headers)
         val document = response.document
         
-        val home = document.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
+        val home = document.select("section:not(.Slides--Main) .Block--Item, section:not(.Slides--Main) .Small--Box, section:not(.Slides--Main) .AsidePost, section:not(.Slides--Main) .GridItem, .MainContainer .Block--Item, .MainContainer .Small--Box").mapNotNull {
             it.toSearchResponse()
         }
 
