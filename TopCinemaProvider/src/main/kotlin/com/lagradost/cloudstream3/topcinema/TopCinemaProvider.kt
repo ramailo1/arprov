@@ -28,24 +28,34 @@ class TopCinemaProvider : MainAPI() {
     }
     
     private fun String.cleanTitle(): String {
-        return this.replace("مشاهدة فيلم|مترجم|مسلسل|كامل|جميع الحلقات|الموسم|الحلقة".toRegex(), "")
+        return this.replace("مشاهدة|فيلم|مترجم|مسلسل|اون لاين|كامل|جميع الحلقات|الموسم|الحلقة|انمي".toRegex(), "")
+            .replace(Regex("\\(\\d+\\)"), "")
+            .replace(Regex("\\s+"), " ")
             .trim()
     }
     
     private fun Element.toSearchResponse(): SearchResponse {
-        val title = select("h3").text().cleanTitle()
+        val titleRaw = select("h3").text().ifEmpty { select("a").attr("title") }.ifEmpty { select(".title").text() }
+        val title = titleRaw.cleanTitle()
         val posterUrl = select("img").let { img -> 
             img.attr("data-src").ifEmpty { img.attr("src") } 
         }
-        val href = select("a").attr("href")
-        val tvType = if (href.contains("/series/|/مسلسل/".toRegex())) TvType.TvSeries else TvType.Movie
+        val href = fixUrl(select("a").attr("href"))
         
-        return newMovieSearchResponse(
-            title,
-            href,
-            tvType,
-        ) {
-            this.posterUrl = posterUrl
+        // Better type detection: if title has "episode" or "season" keyword, it's a series
+        val isSeries = href.contains("/series/|/مسلسل/|/season/|/episodes/".toRegex()) || 
+                       titleRaw.contains("مسلسل|انمي|حلقة|موسم".toRegex())
+        
+        val tvType = if (isSeries) TvType.TvSeries else TvType.Movie
+        
+        return if (tvType == TvType.TvSeries) {
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 
@@ -70,7 +80,7 @@ class TopCinemaProvider : MainAPI() {
         val response = app.get(url, headers = headers)
         val document = response.document
         
-        val home = document.select(".Block--Item, .Small--Box, .AsidePost").mapNotNull {
+        val home = document.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
             it.toSearchResponse()
         }
 
@@ -88,18 +98,29 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url, headers = headers).document
-        val title = doc.select("h1.title, .movie-title, .PostTitle").text().cleanTitle()
-        val isMovie = !url.contains("/series/|/مسلسل/".toRegex())
-
-        val posterUrl = doc.select(".poster img, .movie-poster img, .MainSingle .image img").let { img -> 
-            img.attr("data-src").ifEmpty { img.attr("src") } 
+        var doc = app.get(url, headers = headers).document
+        
+        // Smart Redirect: If on episode page, find breadcrumb series link
+        val seriesLink = doc.select(".breadcrumbs a[href*='/series/'], .breadcrumbs a[href*='/مسلسل/'], .breadcrumbs a:nth-last-child(2)").firstOrNull()
+        if (seriesLink != null && url.contains("/episodes/|/الحلقة/".toRegex())) {
+            val seriesUrl = fixUrl(seriesLink.attr("href"))
+            if (seriesUrl != url) {
+                doc = app.get(seriesUrl, headers = headers).document
+            }
         }
-        // val rating = doc.select(".rating, .imdb-rating, .imdbR span").text().getIntFromText()
-        val synopsis = doc.select(".description, .plot, .summary, .StoryArea").text()
-        val year = doc.select(".year, .release-year").text().getIntFromText()
+
+        val title = doc.select("h1.title, .movie-title, .PostTitle, h1").text().cleanTitle()
+        val isMovie = !doc.select(".allepcont, .EpisodesList, .list-episodes, .seasonslist").any() && 
+                     !url.contains("/series/|/مسلسل/|/season/".toRegex())
+
+        val posterUrl = doc.select(".poster img, .movie-poster img, .MainSingle .image img, meta[property='og:image']").let { img -> 
+            img.attr("data-src").ifEmpty { img.attr("src") }.ifEmpty { img.attr("content") } 
+        }
+        val synopsis = doc.select(".description, .plot, .summary, .StoryArea, .Story").text()
+        val year = doc.select(".year, .release-year, a[href*='/release-year/']").text().getIntFromText()
         val tags = doc.select(".genre a, .categories a, .TaxContent a").map { it.text() }
-        val recommendations = doc.select(".related-movies .movie-item, .similar-movies .movie-item, .Small--Box, .Block--Item, .AsidePost").mapNotNull { element ->
+        
+        val recommendations = doc.select(".related-movies .movie-item, .Block--Item, .Small--Box, .AsidePost").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -114,32 +135,47 @@ class TopCinemaProvider : MainAPI() {
                 this.recommendations = recommendations
                 this.plot = synopsis
                 this.tags = tags
-                // this.rating = rating
                 this.year = year
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            // Selector for episodes: .allepcont .row a
-            for (episode in doc.select(".allepcont .row a")) {
-                val epLink = episode.attr("href")
-                if (epLink.isNotEmpty()) {
-                    episodes.add(newEpisode(epLink) {
-                        this.name = episode.select(".ep-info h2").text().cleanTitle()
-                        this.season = 1 // Default to 1 as season info is often separate or implied
-                        this.episode = episode.select(".epnum").text().getIntFromText()
-                        this.posterUrl = episode.select("img").let { img -> 
-                            img.attr("data-src").ifEmpty { img.attr("src") } 
-                        }
-                    })
+            
+            // Layout 1: List style (.allepcont .row a)
+            doc.select(".allepcont .row a, .EpisodesList .row a").forEach { episode ->
+                val epLink = fixUrl(episode.attr("href"))
+                val epName = episode.select(".ep-info h2").text().ifEmpty { episode.text() }.cleanTitle()
+                val epNum = episode.select(".epnum").text().getIntFromText() ?: epName.getIntFromText()
+                
+                episodes.add(newEpisode(epLink) {
+                    this.name = epName
+                    this.episode = epNum
+                    this.season = 1 
+                })
+            }
+            
+            // Layout 2: Grid style (.Small--Box, often for anime)
+            if (episodes.isEmpty()) {
+                doc.select(".Small--Box, .Block--Item, .GridItem").forEach { episode ->
+                    val a = episode.selectFirst("a") ?: return@forEach
+                    val epLink = fixUrl(a.attr("href"))
+                    val epName = a.select("h3").text().ifEmpty { a.attr("title") }.cleanTitle()
+                    val epNum = episode.select(".number em").text().getIntFromText() ?: epName.getIntFromText()
+                    
+                    if (epName.contains("حلقة|الحلقة".toRegex()) || epNum != null) {
+                        episodes.add(newEpisode(epLink) {
+                            this.name = epName
+                            this.episode = epNum
+                            this.season = 1
+                        })
+                    }
                 }
             }
             
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis
                 this.recommendations = recommendations
-                // this.rating = rating
                 this.year = year
             }
         }
