@@ -86,10 +86,12 @@ class TopCinemaProvider : MainAPI() {
             request.data
         }
 
-        val document = app.get(url, headers = requestHeaders).document
-        val home = document.select(".Block--Item, .Small--Box").mapNotNull {
+        val response = app.get(url, headers = requestHeaders)
+        val document = response.document
+        val home = document.select(".Block--Item, .Small--Box, .AsidePost").mapNotNull {
             it.toSearchResponse()
         }
+
         return newHomePageResponse(request.name, home)
     }
 
@@ -102,7 +104,7 @@ class TopCinemaProvider : MainAPI() {
         Thread.sleep((1000..2500).random().toLong())
         
         val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
-        return doc.select(".Block--Item, .Small--Box").mapNotNull {
+        return doc.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
             it.toSearchResponse()
         }
     }
@@ -126,7 +128,7 @@ class TopCinemaProvider : MainAPI() {
         val synopsis = doc.select(".description, .plot, .summary, .StoryArea").text()
         val year = doc.select(".year, .release-year").text().getIntFromText()
         val tags = doc.select(".genre a, .categories a, .TaxContent a").map { it.text() }
-        val recommendations = doc.select(".related-movies .movie-item, .similar-movies .movie-item, .Small--Box").mapNotNull { element ->
+        val recommendations = doc.select(".related-movies .movie-item, .similar-movies .movie-item, .Small--Box, .Block--Item, .AsidePost").mapNotNull { element ->
             element.toSearchResponse()
         }
 

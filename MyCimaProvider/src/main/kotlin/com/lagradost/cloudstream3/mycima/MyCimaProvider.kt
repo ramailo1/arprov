@@ -69,7 +69,7 @@ class MyCimaProvider : MainAPI() {
                 checkedDomain = false
             }
 
-            println("DEBUG_MYCIMA: Checking domains in parallel...")
+            // println("DEBUG_MYCIMA: Checking domains in parallel...")
             
             val workingDomain = coroutineScope {
                 val deferreds = domainPool.map { domain ->
@@ -78,7 +78,7 @@ class MyCimaProvider : MainAPI() {
                             // FAST CHECK: Normal HTTP, short timeout (15s)
                             val res = app.get(domain, timeout = 15)
                             if (res.isSuccessful && !isBlocked(res.document)) {
-                                println("DEBUG_MYCIMA: Fast check passed for $domain")
+                                // println("DEBUG_MYCIMA: Fast check passed for $domain")
                                 return@runCatching true
                             }
                             false
@@ -88,19 +88,11 @@ class MyCimaProvider : MainAPI() {
                     }
                 }
                 
-                // Wait for all checks to complete or finding a working one
-                // We use awaitAll to get results, but we can also just pick the first one that works
-                // improved: Wait for all to finish to pick the BEST one (first in list usually preferred if multiple work? 
-                // or just first to respond? Let's stick to list order preference if multiple work, or first to respond if speed is critical.
-                // Given the user wants speed, let's take the first one that passes checks from the list order OR just valid ones.
-                // To keep it simple and deterministic: check all, filter working, pick first.
-                // To be faster: we could use select, but map+awaitAll is robust enough for 6 domains.
-                
                 deferreds.awaitAll().firstOrNull { it.second }?.first
             }
 
             if (workingDomain != null) {
-                println("DEBUG_MYCIMA: Switching to working domain: $workingDomain")
+                // println("DEBUG_MYCIMA: Switching to working domain: $workingDomain")
                 activeDomain = workingDomain
                 mainUrl = workingDomain
                 checkedDomain = true
@@ -109,7 +101,7 @@ class MyCimaProvider : MainAPI() {
 
             // Fallback: If no "clean" unblocked domain found, try to find ANY reachable domain 
             // (even if blocked, cloudflare killer might handle it later)
-             println("DEBUG_MYCIMA: No clean domain found, checking for reachable (even if blocked)...")
+             // println("DEBUG_MYCIMA: No clean domain found, checking for reachable (even if blocked)...")
              val reachableDomain = coroutineScope {
                 val deferreds = domainPool.map { domain ->
                     async {
@@ -124,7 +116,7 @@ class MyCimaProvider : MainAPI() {
             }
 
             if (reachableDomain != null) {
-                println("DEBUG_MYCIMA: Setting reachable (potentially blocked) domain: $reachableDomain")
+                // println("DEBUG_MYCIMA: Setting reachable (potentially blocked) domain: $reachableDomain")
                 activeDomain = reachableDomain
                 mainUrl = reachableDomain
                 // Don't set checkedDomain = true so safeGet triggers proper CF check/solve if needed
@@ -161,7 +153,7 @@ class MyCimaProvider : MainAPI() {
         } else false
 
         if (blocked || redirected) {
-            println("DEBUG_MYCIMA: Blocked detected! Title: $title, Redirected: $redirected (Expected: $expectedUrl, Got: $actualUrl)")
+            // println("DEBUG_MYCIMA: Blocked detected! Title: $title, Redirected: $redirected (Expected: $expectedUrl, Got: $actualUrl)")
         }
         return blocked || redirected
     }
@@ -188,7 +180,7 @@ class MyCimaProvider : MainAPI() {
             if (res.isSuccessful && !isBlocked(res.document, fullUrl)) {
                 res
             } else {
-                println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Syncing with Mutex for CloudflareKiller...")
+                // println("DEBUG_MYCIMA: First attempt failed or blocked ($fullUrl). Syncing with Mutex for CloudflareKiller...")
                 // Lock specifically around the Cloudflare solver to prevent resource exhaustion
                 mutex.withLock {
                     val cfRes = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 120)
@@ -203,12 +195,12 @@ class MyCimaProvider : MainAPI() {
         if (response?.isSuccessful == true) {
             val doc = response.document
             if (isBlocked(doc, fullUrl)) {
-                println("DEBUG_MYCIMA: BLOCKED (Detection Check Post-Solve) - $fullUrl")
+                // println("DEBUG_MYCIMA: BLOCKED (Detection Check Post-Solve) - $fullUrl")
                 return null
             }
             return doc
         } else {
-            println("DEBUG_MYCIMA: Request Failed - $fullUrl (Code: ${response?.code})")
+            // println("DEBUG_MYCIMA: Request Failed - $fullUrl (Code: ${response?.code})")
         }
 
         // Final attempt with domain rotation reset
@@ -247,14 +239,14 @@ class MyCimaProvider : MainAPI() {
             baseUrl
         }
         
-        println("DEBUG_MYCIMA: Loading Main Page ($page): $url")
+        // println("DEBUG_MYCIMA: Loading Main Page ($page): $url")
         val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
         
         // Exclude slider items (inside .Slider--Grid / wecimabegin) from results
         val items = doc.select("div.GridItem, .GridItem").filter { el ->
             el.parents().none { it.hasClass("Slider--Grid") || it.tagName().equals("wecimabegin", ignoreCase = true) }
         }
-        println("DEBUG_MYCIMA: Found ${items.size} items on $url (after slider filter)")
+        // println("DEBUG_MYCIMA: Found ${items.size} items on $url (after slider filter)")
         val searchResults = items.mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, searchResults, hasNext = true)
@@ -299,7 +291,11 @@ class MyCimaProvider : MainAPI() {
             ?: this.selectFirst("strong")?.text()?.trim()
             ?: return null
             
-        val href = fixUrl(anchor?.attr("href") ?: this.attr("href"))
+        var href = anchor?.attr("href") ?: this.attr("href")
+        if (href.isNotEmpty()) {
+            if (href.startsWith("//")) href = "https:$href"
+            else if (!href.startsWith("http")) href = "$activeDomain${if(href.startsWith("/")) "" else "/"}$href"
+        }
         val posterUrl = extractPosterUrl(this)
         val type = detectType(href, this.ownerDocument())
         
@@ -328,13 +324,23 @@ class MyCimaProvider : MainAPI() {
             if (style.isNotBlank()) {
                 cssVarRegex.find(style)?.groupValues?.getOrNull(1)?.takeIf {
                     it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder")
-                }?.let { return fixUrl(it) }
+                }?.let { 
+                    var url = it
+                    if (url.startsWith("//")) url = "https:$url"
+                    else if (!url.startsWith("http")) url = "$activeDomain${if(url.startsWith("/")) "" else "/"}$url"
+                    return url
+                }
                 
                 // Also check for standard background-image: url(...)
                 if (style.contains("background-image")) {
                      cssUrlRegex.find(style)?.groupValues?.getOrNull(1)?.takeIf {
                         it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder")
-                    }?.let { return fixUrl(it) }
+                    }?.let { 
+                        var url = it
+                        if (url.startsWith("//")) url = "https:$url"
+                        else if (!url.startsWith("http")) url = "$activeDomain${if(url.startsWith("/")) "" else "/"}$url"
+                        return url
+                    }
                 }
             }
             
@@ -344,11 +350,17 @@ class MyCimaProvider : MainAPI() {
                     // CSS url(...)
                     cssUrlRegex.find(value)?.groupValues?.getOrNull(1)?.takeIf { 
                         it.isNotBlank() && !it.contains("logo") && !it.contains("placeholder") 
-                    }?.let { return fixUrl(it) }
+                    }?.let { 
+                        var url = it
+                        if (url.startsWith("//")) url = "https:$url"
+                        else if (!url.startsWith("http")) url = "$activeDomain${if(url.startsWith("/")) "" else "/"}$url"
+                        return url
+                    }
                     
                     // Direct HTTP/HTTPS or protocol-relative
                     if ((value.startsWith("http") || value.startsWith("//")) && !value.contains("logo") && !value.contains("placeholder")) {
-                         return fixUrl(if (value.startsWith("//")) "https:$value" else value)
+                         var url = if (value.startsWith("//")) "https:$value" else value
+                         return url
                     }
                 }
             }
@@ -358,13 +370,23 @@ class MyCimaProvider : MainAPI() {
                 val url = img.attr("data-src").ifBlank {
                     img.attr("data-lazy-src").ifBlank { img.attr("src").ifBlank { img.attr("data-srcset") } }
                 }
-                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) return fixUrl(url)
+                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) {
+                    var finalUrl = url
+                    if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+                    else if (!finalUrl.startsWith("http")) finalUrl = "$activeDomain${if(finalUrl.startsWith("/")) "" else "/"}$finalUrl"
+                    return finalUrl
+                }
             }
 
             // c) Check <picture> sources
             el.select("picture source[data-srcset], picture img[data-src]").forEach { pic ->
                 val url = pic.attr("data-srcset").ifBlank { pic.attr("data-src") }
-                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) return fixUrl(url)
+                if (url.isNotBlank() && !url.contains("logo") && !url.contains("placeholder")) {
+                    var finalUrl = url
+                    if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+                    else if (!finalUrl.startsWith("http")) finalUrl = "$activeDomain${if(finalUrl.startsWith("/")) "" else "/"}$finalUrl"
+                    return finalUrl
+                }
             }
         }
 
@@ -373,7 +395,12 @@ class MyCimaProvider : MainAPI() {
             listOf("meta[property=og:image]", "meta[name=twitter:image]", "link[rel=image_src]").forEach { selector ->
                 doc.selectFirst(selector)?.attr("content")?.takeIf { 
                     it.isNotBlank() && !it.contains("logo") && !it.contains("default") && !it.contains("placeholder")
-                }?.let { return fixUrl(it) }
+                }?.let { 
+                    var url = it
+                    if (url.startsWith("//")) url = "https:$url"
+                    else if (!url.startsWith("http")) url = "$activeDomain${if(url.startsWith("/")) "" else "/"}$url"
+                    return url
+                }
             }
 
         }
@@ -385,7 +412,9 @@ class MyCimaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
 
         val document = safeGet(url) ?: return null
-        val fixedUrl = fixUrl(url)
+        var fixedUrl = url
+        if (fixedUrl.startsWith("//")) fixedUrl = "https:$fixedUrl"
+        else if (!fixedUrl.startsWith("http")) fixedUrl = "$activeDomain${if(fixedUrl.startsWith("/")) "" else "/"}$fixedUrl"
 
         val title = document.selectFirst(
             "h1[itemprop=name], h1, h2, .Title, .title, meta[property=og:title]"
@@ -447,7 +476,9 @@ class MyCimaProvider : MainAPI() {
             // 2. Get episodes from current page list or seasons
             document.select(".EpisodesList a, div.episodes-list a, div.season-episodes a, a:has(span.episode), a.GridItem:has(strong)").forEach { ep ->
                 val epHref = ep.attr("href")
-                val fixedEp = fixUrl(epHref)
+                var fixedEp = epHref
+                if (fixedEp.startsWith("//")) fixedEp = "https:$fixedEp"
+                else if (fixedEp.isNotEmpty() && !fixedEp.startsWith("http")) fixedEp = "$activeDomain${if(fixedEp.startsWith("/")) "" else "/"}$fixedEp"
                 // softened filter: only skip if it's the exact series root or category
                 if (!fixedEp.startsWith("http") || fixedEp.endsWith("/series/") || fixedEp.contains("/category/") || !episodeUrls.add(fixedEp)) return@forEach
                 
@@ -485,7 +516,9 @@ class MyCimaProvider : MainAPI() {
                             val currentSeason = seasonNumber ?: 1
                             for (epLabelInner in epLabels) {
                                 val epHref = epLabelInner.attr("href")
-                                val fixedEp = fixUrl(epHref)
+                                var fixedEp = epHref
+                                if (fixedEp.startsWith("//")) fixedEp = "https:$fixedEp"
+                                else if (fixedEp.isNotEmpty() && !fixedEp.startsWith("http")) fixedEp = "$activeDomain${if(fixedEp.startsWith("/")) "" else "/"}$fixedEp"
                                 if (!fixedEp.startsWith("http") || !episodeUrls.add(fixedEp)) continue
                                 
                                 val epText = epLabelInner.text().trim()
@@ -624,8 +657,10 @@ class MyCimaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = safeGet(data) ?: return false.also { println("DEBUG_MYCIMA: Failed to get document for $data") }
-        println("DEBUG_MYCIMA: loadLinks started for $data")
+        val document = safeGet(data) ?: return false.also { 
+            // println("DEBUG_MYCIMA: Failed to get document for $data") 
+        }
+        // println("DEBUG_MYCIMA: loadLinks started for $data")
         val pageHtml = document.html()
         val usedLinks = mutableSetOf<String>()
         val foundAtomic = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -634,26 +669,26 @@ class MyCimaProvider : MainAPI() {
 
 
         // Method 1: Robust Regex Extraction from Page Source
-        println("DEBUG_MYCIMA: Starting Method 1 (Regex)")
+        // println("DEBUG_MYCIMA: Starting Method 1 (Regex)")
         // a) Embed IDs: /e/NUMBER
         for (match in Regex("""/e/(\d+)/?[?]""").findAll(pageHtml)) {
             val embedId = match.groupValues[1]
-            println("DEBUG_MYCIMA: Found Embed ID: $embedId")
+            // println("DEBUG_MYCIMA: Found Embed ID: $embedId")
             processUrl("$activeDomain/e/$embedId/", data, usedLinks, foundAtomic, subtitleCallback, callback)
         }
         // b) Base64 Play Links: /play/BASE64
         for (match in Regex("""/play/([A-Za-z0-9+/=_-]+)""").findAll(pageHtml)) {
             val base64 = match.groupValues[1]
-            println("DEBUG_MYCIMA: Found Play Link (Base64)")
+            // println("DEBUG_MYCIMA: Found Play Link (Base64)")
             processUrl("$activeDomain/play/$base64/", data, usedLinks, foundAtomic, subtitleCallback, callback)
         }
 
         // Method 2: Script Tag Parsing
-        println("DEBUG_MYCIMA: Starting Method 2 (Script Parsing)")
+        // println("DEBUG_MYCIMA: Starting Method 2 (Script Parsing)")
         for (script in document.select("script")) {
             val scriptText = script.html()
             for (match in Regex("""data-watch\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText)) {
-                println("DEBUG_MYCIMA: Found data-watch in script")
+                // println("DEBUG_MYCIMA: Found data-watch in script")
                 processUrl(match.groupValues[1], data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
             for (match in Regex("""data-id\s*[=:]\s*["']([^"']+)["']""").findAll(scriptText)) {
@@ -677,11 +712,11 @@ class MyCimaProvider : MainAPI() {
         }
 
         // Method 3: Static HTML Extraction (Enhanced)
-        println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
+        // println("DEBUG_MYCIMA: Starting Method 3 (Broad Static HTML)")
 
         // User Request: Target specific download section
         val downloadItems = document.select("div.DownloadsList a[href]")
-        println("DEBUG_MYCIMA: Found ${downloadItems.size} download list items")
+        // println("DEBUG_MYCIMA: Found ${downloadItems.size} download list items")
         for (link in downloadItems) {
             val href = link.attr("href")
             if (href.isNotBlank()) processUrl(href, data, usedLinks, foundAtomic, subtitleCallback, callback)
@@ -689,7 +724,7 @@ class MyCimaProvider : MainAPI() {
         
         // a) Broad Download & Embed Link Search
         val allLinks = document.select("a[href]")
-        println("DEBUG_MYCIMA: Scanning ${allLinks.size} total links")
+        // println("DEBUG_MYCIMA: Scanning ${allLinks.size} total links")
         
         for (link in allLinks) {
             val href = link.attr("href")
@@ -708,7 +743,7 @@ class MyCimaProvider : MainAPI() {
             ).any { lowerHref.contains(it) }
             
             if (shouldProcess) {
-                println("DEBUG_MYCIMA: Found matching link: $absoluteHref")
+                // println("DEBUG_MYCIMA: Found matching link: $absoluteHref")
                 processUrl(absoluteHref, data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
         }
@@ -717,21 +752,21 @@ class MyCimaProvider : MainAPI() {
         for (iframe in document.select("iframe[src]")) {
             val src = iframe.attr("src")
             if (src.isNotBlank()) {
-                println("DEBUG_MYCIMA: Found iframe: $src")
+                // println("DEBUG_MYCIMA: Found iframe: $src")
                 processUrl(src, data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
         }
 
         // c) Server List DOM (Fallback if they ARE present)
         val serverItems = document.select(".WatchServersList li, #watch li")
-        println("DEBUG_MYCIMA: Found ${serverItems.size} server list items")
+        // println("DEBUG_MYCIMA: Found ${serverItems.size} server list items")
         
         for (li in serverItems) {
             val id = li.attr("data-id")
             val watchUrl = li.attr("data-watch")
             
             if (id.isNotBlank()) {
-                println("DEBUG_MYCIMA: Found server with data-id: $id")
+                // println("DEBUG_MYCIMA: Found server with data-id: $id")
                 try {
                     val response = app.post(
                         "$activeDomain/wp-admin/admin-ajax.php",
@@ -748,16 +783,17 @@ class MyCimaProvider : MainAPI() {
             }
             
             if (watchUrl.isNotBlank()) {
-                println("DEBUG_MYCIMA: Found server with data-watch: $watchUrl")
+                // println("DEBUG_MYCIMA: Found server with data-watch: $watchUrl")
                 processUrl(watchUrl, data, usedLinks, foundAtomic, subtitleCallback, callback)
             }
         }
 
 
         val result = foundAtomic.get()
-        println("DEBUG_MYCIMA: loadLinks finished. Result: $result")
+        // println("DEBUG_MYCIMA: loadLinks finished. Result: $result")
         return result
-    }
+    } // Exact closing brace for loadLinks
+
 
     private suspend fun processUrl(
         rawUrl: String, 
@@ -767,13 +803,15 @@ class MyCimaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        println("DEBUG_MYCIMA: Processing URL: $rawUrl")
-        var finalUrl = fixUrl(decodeProxy(rawUrl))
+        // println("DEBUG_MYCIMA: Processing URL: $rawUrl")
+        var finalUrl = decodeProxy(rawUrl)
+        if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+        else if (finalUrl.isNotEmpty() && !finalUrl.startsWith("http")) finalUrl = "$activeDomain${if(finalUrl.startsWith("/")) "" else "/"}$finalUrl"
 
         // Fix malformed URLs (e.g. https://mxdrop.to/e/IDhttps://mxdrop.to)
         val duplicationMatch = Regex("""(https?://.*?)(?<![?=&])(https?://.*)""").find(finalUrl)
         if (duplicationMatch != null) {
-            println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
+            // println("DEBUG_MYCIMA: Fixing malformed URL: $finalUrl -> ${duplicationMatch.groupValues[1]}")
             finalUrl = duplicationMatch.groupValues[1]
         }
 
@@ -784,21 +822,21 @@ class MyCimaProvider : MainAPI() {
                 val base64Url = slpMatch.groupValues[1]
                 try {
                     val decodedUrl = String(android.util.Base64.decode(base64Url, android.util.Base64.DEFAULT))
-                    println("DEBUG_MYCIMA: Decoded slp_watch URL: $decodedUrl")
+                    // println("DEBUG_MYCIMA: Decoded slp_watch URL: $decodedUrl")
                     processUrl(decodedUrl, data, usedLinks, foundAtomic, subtitleCallback, callback)
                     return
                 } catch (e: Exception) {
-                    println("DEBUG_MYCIMA: Failed to decode slp_watch: ${e.message}")
+                    // println("DEBUG_MYCIMA: Failed to decode slp_watch: ${e.message}")
                 }
             }
         }
         
         // Handle direct links (e.g. linkfas2)
         if (finalUrl.contains("linkfas2.ecotabia.online")) {
-             println("DEBUG_MYCIMA: Found direct linkfas2 link: $finalUrl")
+             // println("DEBUG_MYCIMA: Found direct linkfas2 link: $finalUrl")
              callback(
                 newExtractorLink(
-                    this.name,
+                    this@MyCimaProvider.name,
                     "MyCima Server",
                     finalUrl,
                     if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
@@ -811,19 +849,19 @@ class MyCimaProvider : MainAPI() {
         }
 
         if (finalUrl.isNotBlank() && usedLinks.add(finalUrl)) {
-            println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
+          //  println("DEBUG_MYCIMA: Found valid candidate: $finalUrl")
             if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo") || finalUrl.contains("fdewsdc")) {
                 if (getMohixLink(finalUrl, data, callback)) {
                     foundAtomic.set(true)
                 }
             }
             loadExtractor(finalUrl, data, subtitleCallback) { link ->
-                println("DEBUG_MYCIMA: Extractor found link: ${link.url}")
+              //  println("DEBUG_MYCIMA: Extractor found link: ${link.url}")
                 foundAtomic.set(true)
                 callback(link)
             }
         } else {
-            println("DEBUG_MYCIMA: URL ignored (blank or duplicate): $finalUrl")
+          //  println("DEBUG_MYCIMA: URL ignored (blank or duplicate): $finalUrl")
         }
     }
-}
+} // Exact closing brace for MyCimaProvider
