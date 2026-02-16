@@ -12,28 +12,15 @@ class TopCinemaProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://topcima.online"
     override var name = "TopCinema (In Progress)"
-    override val usesWebView = false
+    override val usesWebView = true
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
-
-    // Anti-bot configuration
-    private val userAgents = listOf(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
-    )
 
     private val headers = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "DNT" to "1",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none"
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "Referer" to "$mainUrl/"
     )
 
     private fun String.getIntFromText(): Int? {
@@ -63,83 +50,45 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/last/" to "المضاف حديثا",
-        "$mainUrl/movies/" to "أحدث الأفلام",
-        "$mainUrl/series/" to "أحدث المسلسلات",
-        "$mainUrl/anime/" to "الانمي",
+        "$mainUrl" to "الرئيسية",
+        "$mainUrl/episodes/" to "آخر الحلقات المضافة",
+        "$mainUrl/movies/" to "الأفلام الجديدة",
+        "$mainUrl/series/" to "المسلسلات الجديدة",
+        "$mainUrl/anime/" to "الأنمي الجديد",
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val randomUserAgent = userAgents.random()
-        val requestHeaders = headers.toMutableMap()
-        requestHeaders["User-Agent"] = randomUserAgent
-        
-        // Add delay to mimic human behavior
-        Thread.sleep((1000..3000).random().toLong())
-        
-        val url = if (page > 1) {
-            "${request.data}page/$page/"
-        } else {
+        val url = if (page == 1) {
             request.data
+        } else {
+            "${request.data.trimEnd('/')}/page/$page/"
         }
 
-        val response = app.get(url, headers = requestHeaders)
-        println("DEBUG_TOPCIMA: Code ${response.code}")
+        val response = app.get(url, headers = headers)
         val document = response.document
         
-        if (response.code != 200) {
-             println("DEBUG_TOPCIMA: Failed to fetch. HTML: ${response.text.take(500)}")
-        }
-
-        val items = document.select(".Block--Item, .Small--Box, .AsidePost")
-        println("DEBUG_TOPCIMA: Raw Select Found ${items.size} items") // Check raw count
-        
-        val home = items.mapNotNull {
-            try {
-                val res = it.toSearchResponse()
-                // println("DEBUG_TOPCIMA: Item: ${res.name} | ${res.url}") // Too noisy, maybe just one
-                res
-            } catch (e: Exception) {
-                println("DEBUG_TOPCIMA: Error parsing item: ${e.message}")
-                null
-            }
-        }
-        
-        if (home.isNotEmpty()) {
-             println("DEBUG_TOPCIMA: First Item: ${home.first().name} | ${home.first().posterUrl}")
-        } else {
-             println("DEBUG_TOPCIMA: HTML Dump: ${document.html().take(2000)}")
+        val home = document.select(".Block--Item, .Small--Box, .AsidePost").mapNotNull {
+            it.toSearchResponse()
         }
 
         return newHomePageResponse(request.name, home)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val randomUserAgent = userAgents.random()
-        val requestHeaders = headers.toMutableMap()
-        requestHeaders["User-Agent"] = randomUserAgent
-        
-        // Add delay to mimic human behavior
-        Thread.sleep((1000..2500).random().toLong())
-        
-        val doc = app.get("$mainUrl/search/?s=$query", headers = requestHeaders).document
-        return doc.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
+        val url = "$mainUrl/?s=$query"
+        val response = app.get(url, headers = headers)
+        val document = response.document
+
+        return document.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
             it.toSearchResponse()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val randomUserAgent = userAgents.random()
-        val requestHeaders = headers.toMutableMap()
-        requestHeaders["User-Agent"] = randomUserAgent
-        
-        // Add delay to mimic human behavior
-        Thread.sleep((1500..3500).random().toLong())
-        
-        val doc = app.get(url, headers = requestHeaders).document
+        val doc = app.get(url, headers = headers).document
         val title = doc.select("h1.title, .movie-title, .PostTitle").text().cleanTitle()
         val isMovie = !url.contains("/series/|/مسلسل/".toRegex())
 
@@ -202,23 +151,16 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val randomUserAgent = userAgents.random()
-        val requestHeaders = headers.toMutableMap()
-        requestHeaders["User-Agent"] = randomUserAgent
-        
-        // Add delay to mimic human behavior
-        Thread.sleep((2000..4000).random().toLong())
-        
         var watchUrl = data
         if (!data.contains("/watch")) {
-            val doc = app.get(data, headers = requestHeaders).document
+            val doc = app.get(data, headers = headers).document
             val watchLink = doc.select("a.watch").attr("href")
             if (watchLink.isNotEmpty()) {
                 watchUrl = watchLink
             }
         }
         
-        val doc = app.get(watchUrl, headers = requestHeaders).document
+        val doc = app.get(watchUrl, headers = headers).document
         
         // Extract servers from ul#watch li (User provided structure)
         doc.select("ul#watch li").forEach { element ->
