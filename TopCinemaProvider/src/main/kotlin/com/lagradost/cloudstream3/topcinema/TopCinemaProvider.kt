@@ -87,9 +87,31 @@ class TopCinemaProvider : MainAPI() {
         }
 
         val response = app.get(url, headers = requestHeaders)
+        println("DEBUG_TOPCIMA: Code ${response.code}")
         val document = response.document
-        val home = document.select(".Block--Item, .Small--Box, .AsidePost").mapNotNull {
-            it.toSearchResponse()
+        
+        if (response.code != 200) {
+             println("DEBUG_TOPCIMA: Failed to fetch. HTML: ${response.text.take(500)}")
+        }
+
+        val items = document.select(".Block--Item, .Small--Box, .AsidePost")
+        println("DEBUG_TOPCIMA: Raw Select Found ${items.size} items") // Check raw count
+        
+        val home = items.mapNotNull {
+            try {
+                val res = it.toSearchResponse()
+                // println("DEBUG_TOPCIMA: Item: ${res.name} | ${res.url}") // Too noisy, maybe just one
+                res
+            } catch (e: Exception) {
+                println("DEBUG_TOPCIMA: Error parsing item: ${e.message}")
+                null
+            }
+        }
+        
+        if (home.isNotEmpty()) {
+             println("DEBUG_TOPCIMA: First Item: ${home.first().name} | ${home.first().posterUrl}")
+        } else {
+             println("DEBUG_TOPCIMA: HTML Dump: ${document.html().take(2000)}")
         }
 
         return newHomePageResponse(request.name, home)
