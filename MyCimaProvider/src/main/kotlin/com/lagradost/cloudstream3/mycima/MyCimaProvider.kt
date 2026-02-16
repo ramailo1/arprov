@@ -63,6 +63,7 @@ class MyCimaProvider : MainAPI() {
     private suspend fun ensureDomain(): Boolean {
         return mutex.withLock {
             if (checkedDomain) {
+                // Quick re-verify of current domain
                 val stillWorks = runCatching {
                     val res = app.get(activeDomain, timeout = 10)
                     res.isSuccessful && !isBlocked(res.document)
@@ -72,22 +73,68 @@ class MyCimaProvider : MainAPI() {
                 checkedDomain = false
             }
 
-            println("DEBUG_MYCIMA: Rotating domains...")
-            for (domain in domainPool) {
-                val working = runCatching {
-                    // Use a generous timeout for the initial connection/Cloudflare solver
-                    val res = app.get(domain, timeout = 120, interceptor = cfKiller)
-                    res.isSuccessful && !isBlocked(res.document)
-                }.getOrDefault(false)
-
-                if (working) {
-                    println("DEBUG_MYCIMA: Working domain found: $domain")
-                    activeDomain = domain
-                    mainUrl = domain
-                    checkedDomain = true
-                    return@withLock true
+            println("DEBUG_MYCIMA: Checking domains in parallel...")
+            
+            val workingDomain = coroutineScope {
+                val deferreds = domainPool.map { domain ->
+                    async {
+                        val isWorking = runCatching {
+                            // FAST CHECK: Normal HTTP, short timeout (15s)
+                            val res = app.get(domain, timeout = 15)
+                            if (res.isSuccessful && !isBlocked(res.document)) {
+                                println("DEBUG_MYCIMA: Fast check passed for $domain")
+                                return@runCatching true
+                            }
+                            false
+                        }.getOrDefault(false)
+                        
+                        domain to isWorking
+                    }
                 }
+                
+                // Wait for all checks to complete or finding a working one
+                // We use awaitAll to get results, but we can also just pick the first one that works
+                // improved: Wait for all to finish to pick the BEST one (first in list usually preferred if multiple work? 
+                // or just first to respond? Let's stick to list order preference if multiple work, or first to respond if speed is critical.
+                // Given the user wants speed, let's take the first one that passes checks from the list order OR just valid ones.
+                // To keep it simple and deterministic: check all, filter working, pick first.
+                // To be faster: we could use select, but map+awaitAll is robust enough for 6 domains.
+                
+                deferreds.awaitAll().firstOrNull { it.second }?.first
             }
+
+            if (workingDomain != null) {
+                println("DEBUG_MYCIMA: Switching to working domain: $workingDomain")
+                activeDomain = workingDomain
+                mainUrl = workingDomain
+                checkedDomain = true
+                return@withLock true
+            }
+
+            // Fallback: If no "clean" unblocked domain found, try to find ANY reachable domain 
+            // (even if blocked, cloudflare killer might handle it later)
+             println("DEBUG_MYCIMA: No clean domain found, checking for reachable (even if blocked)...")
+             val reachableDomain = coroutineScope {
+                val deferreds = domainPool.map { domain ->
+                    async {
+                        val isReachable = runCatching {
+                            val res = app.get(domain, timeout = 10)
+                            res.code < 500 // Not a server error
+                        }.getOrDefault(false)
+                        domain to isReachable
+                    }
+                }
+                deferreds.awaitAll().firstOrNull { it.second }?.first
+            }
+
+            if (reachableDomain != null) {
+                println("DEBUG_MYCIMA: Setting reachable (potentially blocked) domain: $reachableDomain")
+                activeDomain = reachableDomain
+                mainUrl = reachableDomain
+                // Don't set checkedDomain = true so safeGet triggers proper CF check/solve if needed
+                return@withLock true
+            }
+
             false
         }
     }
