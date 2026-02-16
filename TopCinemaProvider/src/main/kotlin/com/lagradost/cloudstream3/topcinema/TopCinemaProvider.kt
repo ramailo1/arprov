@@ -63,7 +63,7 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/last/ " to "المضاف حديثا",
+        "$mainUrl/last/" to "المضاف حديثا",
         "$mainUrl/movies/" to "أحدث الأفلام",
         "$mainUrl/series/" to "أحدث المسلسلات",
         "$mainUrl/anime/" to "الانمي",
@@ -80,7 +80,13 @@ class TopCinemaProvider : MainAPI() {
         // Add delay to mimic human behavior
         Thread.sleep((1000..3000).random().toLong())
         
-        val document = app.get(request.data + page, headers = requestHeaders).document
+        val url = if (page > 1) {
+            "${request.data}page/$page/"
+        } else {
+            request.data
+        }
+
+        val document = app.get(url, headers = requestHeaders).document
         val home = document.select(".Block--Item, .Small--Box").mapNotNull {
             it.toSearchResponse()
         }
@@ -116,7 +122,7 @@ class TopCinemaProvider : MainAPI() {
         val posterUrl = doc.select(".poster img, .movie-poster img, .MainSingle .image img").let { img -> 
             img.attr("data-src").ifEmpty { img.attr("src") } 
         }
-        val rating = doc.select(".rating, .imdb-rating, .imdbR span").text().getIntFromText()
+        // val rating = doc.select(".rating, .imdb-rating, .imdbR span").text().getIntFromText()
         val synopsis = doc.select(".description, .plot, .summary, .StoryArea").text()
         val year = doc.select(".year, .release-year").text().getIntFromText()
         val tags = doc.select(".genre a, .categories a, .TaxContent a").map { it.text() }
@@ -190,16 +196,18 @@ class TopCinemaProvider : MainAPI() {
         
         val doc = app.get(watchUrl, headers = requestHeaders).document
         
-        // Extract servers from ul#watch li
+        // Extract servers from ul#watch li (User provided structure)
         doc.select("ul#watch li").forEach { element ->
-            val serverUrl = element.attr("data-watch")
+            val serverUrl = element.attr("data-watch").ifEmpty { 
+                element.select("iframe").attr("src") 
+            }
             if (serverUrl.isNotEmpty()) {
                 loadExtractor(serverUrl, data, subtitleCallback, callback)
             }
         }
         
         // Fallback or additional server extraction
-        doc.select(".watch-servers li, .servers-list li").forEach { element ->
+        doc.select(".watch-servers li, .servers-list li, .watch--servers--list li").forEach { element ->
              val serverUrl = element.attr("data-link") ?: element.attr("data-url")
              if (!serverUrl.isNullOrEmpty()) {
                  loadExtractor(serverUrl, data, subtitleCallback, callback)
