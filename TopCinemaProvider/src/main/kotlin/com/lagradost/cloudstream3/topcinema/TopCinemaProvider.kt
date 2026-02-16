@@ -28,8 +28,9 @@ class TopCinemaProvider : MainAPI() {
     }
     
     private fun String.cleanTitle(): String {
-        return this.replace("مشاهدة|فيلم|مترجم|مسلسل|اون لاين|كامل|جميع الحلقات|الموسم|الحلقة|انمي".toRegex(), "")
+        return this.replace("مشاهدة|فيلم|مترجم|مسلسل|اون لاين|كامل|جميع الحلقات|الموسم|الحلقة|انمي|تحميل".toRegex(), "")
             .replace(Regex("\\(\\d+\\)"), "")
+            .replace(Regex("\\b(19|20)\\d{2}\\b"), "") // Remove years
             .replace(Regex("\\s+"), " ")
             .trim()
     }
@@ -61,10 +62,9 @@ class TopCinemaProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl" to "الرئيسية",
-        "$mainUrl/episodes/" to "آخر الحلقات المضافة",
+        "$mainUrl/last/" to "المضاف حديثا",
         "$mainUrl/movies/" to "الأفلام الجديدة",
         "$mainUrl/series/" to "المسلسلات الجديدة",
-        "$mainUrl/anime/" to "الأنمي الجديد",
     )
 
     override suspend fun getMainPage(
@@ -109,7 +109,8 @@ class TopCinemaProvider : MainAPI() {
             }
         }
 
-        val title = doc.select("h1.title, .movie-title, .PostTitle, h1").text().cleanTitle()
+        val titleRaw = doc.select("h1.title, .movie-title, .PostTitle, h1").text()
+        val title = titleRaw.cleanTitle()
         val isMovie = !doc.select(".allepcont, .EpisodesList, .list-episodes, .seasonslist").any() && 
                      !url.contains("/series/|/مسلسل/|/season/".toRegex())
 
@@ -139,16 +140,28 @@ class TopCinemaProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
+            val cleanSeriesTitle = title.split(" ").take(3).joinToString(" ") // Reference for stripping
             
             // Layout 1: List style (.allepcont .row a)
             doc.select(".allepcont .row a, .EpisodesList .row a").forEach { episode ->
                 val epLink = fixUrl(episode.attr("href"))
-                val epName = episode.select(".ep-info h2").text().ifEmpty { episode.text() }.cleanTitle()
-                val epNum = episode.select(".epnum").text().getIntFromText() ?: epName.getIntFromText()
+                val epRawName = episode.select(".ep-info h2").text().ifEmpty { episode.text() }
+                var epName = epRawName.cleanTitle()
+                
+                // Strip redundant series title if present
+                if (epName.contains(cleanSeriesTitle, true)) {
+                    epName = epName.replace(cleanSeriesTitle, "", true).trim()
+                }
+                
+                val epNum = episode.select(".epnum").text().getIntFromText() ?: epRawName.getIntFromText()
+                val epPoster = episode.select("img").let { img ->
+                    img.attr("data-src").ifEmpty { img.attr("src") }
+                }.ifEmpty { posterUrl }
                 
                 episodes.add(newEpisode(epLink) {
-                    this.name = epName
+                    this.name = epName.ifBlank { "الحلقة $epNum" }
                     this.episode = epNum
+                    this.posterUrl = epPoster
                     this.season = 1 
                 })
             }
@@ -158,13 +171,24 @@ class TopCinemaProvider : MainAPI() {
                 doc.select(".Small--Box, .Block--Item, .GridItem").forEach { episode ->
                     val a = episode.selectFirst("a") ?: return@forEach
                     val epLink = fixUrl(a.attr("href"))
-                    val epName = a.select("h3").text().ifEmpty { a.attr("title") }.cleanTitle()
-                    val epNum = episode.select(".number em").text().getIntFromText() ?: epName.getIntFromText()
+                    val epRawName = a.select("h3").text().ifEmpty { a.attr("title") }.ifEmpty { a.text() }
+                    var epName = epRawName.cleanTitle()
                     
-                    if (epName.contains("حلقة|الحلقة".toRegex()) || epNum != null) {
+                    // Strip redundant series title
+                    if (epName.contains(cleanSeriesTitle, true)) {
+                        epName = epName.replace(cleanSeriesTitle, "", true).trim()
+                    }
+                    
+                    val epNum = episode.select(".number em").text().getIntFromText() ?: epRawName.getIntFromText()
+                    val epPoster = episode.select("img").let { img ->
+                        img.attr("data-src").ifEmpty { img.attr("src") }
+                    }.ifEmpty { posterUrl }
+                    
+                    if (epRawName.contains("حلقة|الحلقة".toRegex()) || epNum != null) {
                         episodes.add(newEpisode(epLink) {
-                            this.name = epName
+                            this.name = epName.ifBlank { "الحلقة $epNum" }
                             this.episode = epNum
+                            this.posterUrl = epPoster
                             this.season = 1
                         })
                     }
