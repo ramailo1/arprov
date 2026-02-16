@@ -47,7 +47,9 @@ class TopCinemaProvider : MainAPI() {
     
     private fun Element.toSearchResponse(): SearchResponse {
         val title = select("h3").text().cleanTitle()
-        val posterUrl = select("img").attr("src")
+        val posterUrl = select("img").let { img -> 
+            img.attr("data-src").ifEmpty { img.attr("src") } 
+        }
         val href = select("a").attr("href")
         val tvType = if (href.contains("/series/|/مسلسل/".toRegex())) TvType.TvSeries else TvType.Movie
         
@@ -61,6 +63,7 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
+        "$mainUrl/last/ " to "المضاف حديثا",
         "$mainUrl/movies/" to "أحدث الأفلام",
         "$mainUrl/series/" to "أحدث المسلسلات",
         "$mainUrl/anime/" to "الانمي",
@@ -107,15 +110,17 @@ class TopCinemaProvider : MainAPI() {
         Thread.sleep((1500..3500).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
-        val title = doc.select("h1.title, .movie-title").text().cleanTitle()
+        val title = doc.select("h1.title, .movie-title, .PostTitle").text().cleanTitle()
         val isMovie = !url.contains("/series/|/مسلسل/".toRegex())
 
-        val posterUrl = doc.select(".poster img, .movie-poster img").attr("src")
-        val rating = doc.select(".rating, .imdb-rating").text().getIntFromText()
-        val synopsis = doc.select(".description, .plot, .summary").text()
+        val posterUrl = doc.select(".poster img, .movie-poster img, .MainSingle .image img").let { img -> 
+            img.attr("data-src").ifEmpty { img.attr("src") } 
+        }
+        val rating = doc.select(".rating, .imdb-rating, .imdbR span").text().getIntFromText()
+        val synopsis = doc.select(".description, .plot, .summary, .StoryArea").text()
         val year = doc.select(".year, .release-year").text().getIntFromText()
-        val tags = doc.select(".genre a, .categories a").map { it.text() }
-        val recommendations = doc.select(".related-movies .movie-item, .similar-movies .movie-item").mapNotNull { element ->
+        val tags = doc.select(".genre a, .categories a, .TaxContent a").map { it.text() }
+        val recommendations = doc.select(".related-movies .movie-item, .similar-movies .movie-item, .Small--Box").mapNotNull { element ->
             element.toSearchResponse()
         }
 
@@ -135,12 +140,19 @@ class TopCinemaProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            for (episode in doc.select(".episodes-list li, .episode-item")) {
-                episodes.add(newEpisode(episode.select("a").attr("href")) {
-                    this.name = episode.select("a").text().cleanTitle()
-                    this.season = 0
-                    this.episode = episode.select("a").text().getIntFromText()
-                })
+            // Selector for episodes: .allepcont .row a
+            for (episode in doc.select(".allepcont .row a")) {
+                val epLink = episode.attr("href")
+                if (epLink.isNotEmpty()) {
+                    episodes.add(newEpisode(epLink) {
+                        this.name = episode.select(".ep-info h2").text().cleanTitle()
+                        this.season = 1 // Default to 1 as season info is often separate or implied
+                        this.episode = episode.select(".epnum").text().getIntFromText()
+                        this.posterUrl = episode.select("img").let { img -> 
+                            img.attr("data-src").ifEmpty { img.attr("src") } 
+                        }
+                    })
+                }
             }
             
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinct().sortedBy { it.episode }) {
@@ -167,16 +179,33 @@ class TopCinemaProvider : MainAPI() {
         // Add delay to mimic human behavior
         Thread.sleep((2000..4000).random().toLong())
         
-        val doc = app.get(data, headers = requestHeaders).document
-        
-        // Try multiple server selection methods
-        for (element in doc.select(".servers-list li, .watch-links a, .download-links a")) {
-            val url = element.attr("href") ?: element.attr("data-link")
-            if (url.isNotEmpty()) {
-                loadExtractor(url, data, subtitleCallback, callback)
+        var watchUrl = data
+        if (!data.contains("/watch")) {
+            val doc = app.get(data, headers = requestHeaders).document
+            val watchLink = doc.select("a.watch").attr("href")
+            if (watchLink.isNotEmpty()) {
+                watchUrl = watchLink
             }
         }
         
+        val doc = app.get(watchUrl, headers = requestHeaders).document
+        
+        // Extract servers from ul#watch li
+        doc.select("ul#watch li").forEach { element ->
+            val serverUrl = element.attr("data-watch")
+            if (serverUrl.isNotEmpty()) {
+                loadExtractor(serverUrl, data, subtitleCallback, callback)
+            }
+        }
+        
+        // Fallback or additional server extraction
+        doc.select(".watch-servers li, .servers-list li").forEach { element ->
+             val serverUrl = element.attr("data-link") ?: element.attr("data-url")
+             if (!serverUrl.isNullOrEmpty()) {
+                 loadExtractor(serverUrl, data, subtitleCallback, callback)
+             }
+        }
+
         return true
     }
 }

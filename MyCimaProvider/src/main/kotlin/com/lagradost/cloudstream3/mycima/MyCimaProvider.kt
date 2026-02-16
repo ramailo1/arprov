@@ -15,11 +15,7 @@ class MyCimaProvider : MainAPI() {
     // ---------- AUTO DOMAIN POOL ----------
     private val domainPool = listOf(
         "https://mycima.fan",
-        "https://mycima.cc",
-        "https://mycima.gold",
-        "https://mycima.rip",
-        "https://mycima.bond",
-        "https://mycima.live"
+        "https://mycima.study"
     )
 
     private val mutex = Mutex()
