@@ -93,10 +93,14 @@ class TukProvider : MainAPI() {
                     val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
                     val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
                         ?: epTitle.filter { it.isDigit() }.toIntOrNull()
+                    val epThumb = ep.selectFirst(".image img")?.let { img ->
+                        img.attr("data-src").ifBlank { img.attr("src") }
+                    }
                     
                     episodes.add(newEpisode(href) {
-                        this.name = epTitle
+                        this.name = if (epNum != null) "Episode $epNum" else epTitle
                         this.episode = epNum
+                        this.posterUrl = epThumb
                     })
                 }
             }
@@ -112,10 +116,14 @@ class TukProvider : MainAPI() {
                             val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
                             val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
                                 ?: epTitle.filter { it.isDigit() }.toIntOrNull()
+                            val epThumb = ep.selectFirst(".image img")?.let { img ->
+                                img.attr("data-src").ifBlank { img.attr("src") }
+                            }
                             
                             episodes.add(newEpisode(href) {
-                                this.name = epTitle
+                                this.name = if (epNum != null) "Episode $epNum" else epTitle
                                 this.episode = epNum
+                                this.posterUrl = epThumb
                             })
                         }
                     }
@@ -127,6 +135,7 @@ class TukProvider : MainAPI() {
                 episodes.add(newEpisode(url) {
                     this.name = title
                     this.episode = title.filter { it.isDigit() }.toIntOrNull()
+                    this.posterUrl = posterUrl
                 })
             }
 
@@ -151,7 +160,7 @@ class TukProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val watchUrl = if (data.endsWith("/watch/")) data else "${data.removeSuffix("/")}/watch/"
-        val doc = app.get(watchUrl).document
+        val doc = app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/")).document
 
         doc.select(".watch--servers--list .server--item").amap { li ->
             val b64 = li.attr("data-linkbase64")
