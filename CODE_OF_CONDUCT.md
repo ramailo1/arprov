@@ -1,25 +1,29 @@
-# 📋 Code of Conduct - ArProv
+# 📋 ميثاق القواعد والسلوك - ArProv
 
-## 🎯 Our Commitment
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to make participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
+<p align="center">
+  <strong>العربية</strong> | <a href="CODE_OF_CONDUCT_EN.md"><strong>English</strong></a>
+</p>
 
-## 🌟 Our Standards
-- **Show Empathy**: Be kind and respectful to fellow community members.
-- **Constructive Communication**: Use professional and welcoming language.
-- **Integrity**: Prioritize the quality and safety of the codebase.
+## 🎯 التزامنا
+من أجل تعزيز بيئة مفتوحة ومرحبة، نتعهد نحن كمساهمين ومديرين بجعل المشاركة في مشروعنا ومجتمعنا تجربة خالية من المضايقات للجميع، بغض النظر عن العمر، أو حجم الجسم، أو الإعاقة، أو العرق، أو الخصائص الجنسية، أو الهوية والتعبير الجندري، أو مستوى الخبرة، أو التعليم، أو الوضع الاجتماعي والاقتصادي، أو الجنسية، أو المظهر الشخصي، أو العرق، أو الدين، أو الهوية والميول الجنسية.
 
-## 🚨 Enforcement
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at **ramailo1@github.com**.
+## 🌟 معاييرنا
+- **إظهار التعاطف**: كن لطيفاً ومحترماً مع زملائك في المجتمع.
+- **التواصل البناء**: استخدم لغة مهنية ومرحبة.
+- **النزاهة**: إعطاء الأولوية لجودة وسلامة التعليمات البرمجية.
+
+## 🚨 الإنفاذ
+يمكن الإبلاغ عن حالات السلوك المسيء أو المضايق أو غير المقبول بأي شكل آخر عن طريق الاتصال بفريق المشروع على **ramailo1@github.com**.
 
 ---
 
-### 🛠️ ملخص التعديلات (Modifications Summary)
-هذه النسخة من المشروع (ArProv) تتضمن تحسينات جوهرية قام بها **ramailo1**:
+### 🛠️ ملخص التعديلات
+تتضمن هذه النسخة من المشروع (ArProv) تحسينات جوهرية قام بها **ramailo1**:
 - **بنية برمجية متطورة**: إعادة تنظيم الكود المصدري لتحقيق أقصى قدر من الاستقرار.
 - **تقنية استخراج البوسترات**: حل جذري لمشكلة البوسترات السوداء عبر نظام الطبقات (Tiered logic).
 - **تجاوز الحماية**: نظام استخراج روابط ذكي يتواصل مباشرة مع السيرفرات (AJAX player retrieval).
 - **توثيق احترافي**: دليل شامل، مخططات بيانية، ومعايير جودة عالية.
 
 > [!NOTE]
-> This project is a professional refinement of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> هذا المشروع هو تحسين احترافي لـ [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
 ---

@@ -1,40 +1,44 @@
-# 🤝 Contributing to ArProv
+# 🤝 المساهمة في ArProv
 
-Thank you for your interest in contributing to ArProv! We welcome all developers who share our passion for high-quality Arabic content delivery.
+<p align="center">
+  <strong>العربية</strong> | <a href="CONTRIBUTING_EN.md"><strong>English</strong></a>
+</p>
 
-## 🚀 Getting Started
+شكراً لاهتمامك بالمساهمة في ArProv! نرحب بجميع المطورين الذين يشاركوننا شغفنا بتقديم محتوى عربي عالي الجودة.
 
-### 1. Fork & Clone
+## 🚀 البدء
+
+### 1. الاستنساخ (Fork & Clone)
 ```bash
 git clone https://github.com/ramailo1/arprov.git
 cd arprov
 ```
 
-### 2. Environment Setup
-- **JDK**: 11 or higher (JDK 17 recommended).
-- **Gradle**: Included wrapper `./gradlew`.
-- **IDE**: Android Studio or IntelliJ IDEA.
+### 2. إعداد البيئة
+- **JDK**: إصدار 11 أو أعلى (ينصح بـ JDK 17).
+- **Gradle**: استخدم `./gradlew` المرفق.
+- **IDE**: Android Studio أو IntelliJ IDEA.
 
-## 🔧 Coding Standards
-- **Language**: Kotlin.
-- **Naming**: PascalCase for Classes, camelCase for functions/variables.
-- **Architecture**: Keep Providers modular and separate from Extractors.
-- **Posters**: Always use the **Tiered Poster Extraction** pattern for consistency.
+## 🔧 معايير البرمجة
+- **اللغة**: Kotlin.
+- **التسمية**: PascalCase للفئات (Classes)، و camelCase للدوال والمتغيرات.
+- **الهندسة**: الحفاظ على المزودين (Providers) كوحدات مستقلة ومنفصلة عن المستخرجات (Extractors).
+- **الملصقات**: استخدم دائماً نمط **Tiered Poster Extraction** لضمان التناسق.
 
-## 📤 Submission Process
-1. Create a feature branch (`git checkout -b feature/cool-new-provider`).
-2. Implement and test locally (`./gradlew assembleDebug`).
-3. Commit with prefix (`[Cima4u] Fix: ...`).
-4. Open a Pull Request with a clear description of changes.
+## 📤 عملية التقديم
+1. أنشئ فرعاً للميزة (`git checkout -b feature/cool-new-provider`).
+2. قم بالتنفيذ والاختبار محلياً (`./gradlew assembleDebug`).
+3. التزم بالرسائل ذات البادئة (`[Cima4u] Fix: ...`).
+4. افتح طلب سحب (Pull Request) مع وصف واضح للتغييرات.
 
 ---
 
-### 🛠️ Modifications and Improvements
-- **Standardized Workflow**: Streamlined the contribution process by removing legacy scripts.
-- **Documentation First**: Every provider update now requires architecture-aligned documentation.
-- **Quality Gates**: Enforced strict adherence to the new Tiered Extraction and AJAX retrieval standards.
+### 🛠️ التعديلات والتحسينات
+- **سير عمل موحد**: تبسيط عملية المساهمة عن طريق إزالة النصوص القديمة.
+- **التوثيق أولاً**: يتطلب كل تحديث للمزود الآن توثيقاً متوافقاً مع هندسة النظام.
+- **معايير الجودة**: فرض الالتزام الصارم بمعايير استخراج الملصقات المتدرج واسترجاع المشغل عبر AJAX.
 
 > [!NOTE]
-> We value the foundation provided by [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
-> Our goal is to push these extensions to the next level of professional reliability.
+> نحن نقدر الأساس الذي وضعه [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> هدفنا هو دفع هذه الإضافات إلى المستوى التالي من الموثوقية المهنية.
 ---

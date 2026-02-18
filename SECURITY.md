@@ -1,30 +1,34 @@
-# 🔒 Security Policy - ArProv
+# 🔒 سياسة الأمن - ArProv
 
-## 🚀 Reporting a Vulnerability
+<p align="center">
+  <strong>العربية</strong> | <a href="SECURITY_EN.md"><strong>English</strong></a>
+</p>
 
-We take the security of this project seriously. If you believe you have found a security vulnerability, please report it privately to ensure the safety of all users.
+## 🚀 الإبلاغ عن ثغرة أمنية
 
-### 📧 Official Channel
-Please send reports to: **ramailo1@github.com**
+نحن نأخذ أمن هذا المشروع على محمل الجد. إذا كنت تعتقد أنك وجدت ثغرة أمنية، فيرجى الإبلاغ عنها بشكل خاص لضمان سلامة جميع المستخدمين.
 
-### 📋 What to include in your report:
-- A detailed description of the vulnerability.
-- Steps to reproduce (proof of concept).
-- Potential impact and affected versions.
+### 📧 القناة الرسمية
+يرجى إرسال التقارير إلى: **ramailo1@github.com**
 
-## ⏰ Response Commitment
-- **Acknowledgement**: Within 24 hours.
-- **Initial Analysis**: Within 72 hours.
-- **Patch Release**: Depends on complexity (typically 1-4 weeks).
+### 📋 ماذا يجب أن تضمن في تقريرك:
+- وصف مفصل للثغرة الأمنية.
+- خطوات إعادة الإنتاج (إثبات المفهوم).
+- التأثير المحتمل والإصدارات المتأثرة.
+
+## ⏰ الالتزام بالاستجابة
+- **التأكيد**: خلال 24 ساعة.
+- **التحليل الأولي**: خلال 72 ساعة.
+- **إصدار التصحيح**: يعتمد على التعقيد (غالباً 1-4 أسابيع).
 
 ---
 
-### 🛠️ Modifications and Improvements
-- **Secret Management**: Pruned all hardcoded credentials and legacy scripts for enhanced security.
-- **Communication Security**: Enforced HTTPS-only protocols across all provider interactions.
-- **Dependency Audit**: Cleaned the repository of defunct maintenance scripts and outdated assets.
+### 🛠️ التعديلات والتحسينات
+- **إدارة الأسرار**: تنقية جميع الاعتمادات المضمنة والنصوص القديمة لتعزيز الأمان.
+- **أمن الاتصالات**: فرض بروتوكولات HTTPS فقط في جميع تفاعلات المزودين.
+- **تدقيق التبعيات**: تنظيف المستودع من نصوص الصيانة البائدة والأصول القديمة.
 
 > [!NOTE]
-> Based on the foundational work of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
-> Optimized and secured by [ramailo1](https://github.com/ramailo1).
+> بناءً على العمل التأسيسي لـ [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> تم التحسين والتأمين بواسطة [ramailo1](https://github.com/ramailo1).
 ---
