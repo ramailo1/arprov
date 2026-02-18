@@ -81,7 +81,7 @@ class TukProvider : MainAPI() {
         val plot = doc.selectFirst(".story p")?.text()?.trim()
         val year = doc.selectFirst(".RightTaxContent a[href*='release-year']")?.text()?.filter { it.isDigit() }?.toIntOrNull()
 
-        val isSeries = doc.selectFirst(".Episodes--Box, .Episodes--List, a[href*='/series/']") != null || url.contains("series") || url.contains("episode")
+        val isSeries = (doc.selectFirst(".Episodes--Box, .Episodes--List, a[href*='/series/']") != null || url.contains("series")) && !doc.selectFirst(".catssection a[href*='/movies/']").let { it != null }
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()

@@ -1,7 +1,7 @@
 {
   "name": "CloudStream Extensions Arabic - نظيف ومنظم",
-  "description": "إضافات عربية متقدمة لـ CloudStream - بشكل نظيف ومنظم مع دعم 48+ موقع",
-  "author": "dhomred",
+  "description": "إضافات عربية متقدمة لـ CloudStream - بشكل نظيف ومنظم مع دعم 21+ موقع",
+  "author": "ramailo1",
   "version": "2.1.0",
   "language": "ar",
   "repository": {
@@ -32,7 +32,7 @@
     "QisatTv",
     "Shahid4u",
     "ShahidMBC",
-    "TukTok",
+    "Tuk",
     "TopCinema"
   ],
   "extractors": [
@@ -53,7 +53,7 @@
     "VoeSx"
   ],
   "features": [
-    "دعم 48+ موقع عربي ودولي",
+    "دعم 21+ موقع عربي ودولي",
     "مستخرجات فيديو متقدمة",
     "توثيق شامل بالعربية",
     "بنية منظمة وسهلة التوسعة",

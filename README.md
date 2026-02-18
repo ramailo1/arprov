@@ -1,4 +1,4 @@
-# 🎬 ArProv - Professional Arabic CloudStream Extensions
+# 🎬 ArProv - إضافات كلاود ستريم عربية احترافية
 
 <p align="center">
   <img src="https://img.shields.io/badge/Project-ArProv-blueviolet?style=for-the-badge&logo=android" alt="ArProv">
@@ -7,35 +7,45 @@
 </p>
 
 <p align="center">
-  <strong>The Gold Standard for Arabic Content on CloudStream. Clean, High-Performance, and Community-Driven.</strong>
+  <strong>المعيار الذهبي للمحتوى العربي على كلاود ستريم. نظيف، عالي الأداء، ومدعوم من المجتمع.</strong>
 </p>
+
+<p align="center">
+  <strong>العربية</strong> | <a href="README_EN.md"><strong>English</strong></a>
+</p>
+
+## 📊 الإحصائيات
+- **المواقع النشطة**: 21+ موقع
+- **المستخرجات**: 15+ مستخرج
+- **اللغات**: العربية والإنجليزية
+- **الجودة**: 4K، 1080p، 720p
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ هندسة النظام
 
-ArProv is designed with a modular architecture that separates content sourcing (Providers) from video link retrieval (Extractors). This ensures maximum stability and easy maintenance.
+تم تصميم ArProv بهندسة معيارية تفصل بين جلب المحتوى (Providers) وبين استخراج روابط الفيديو (Extractors). يضمن ذلك أقصى قدر من الاستقرار وسهولة الصيانة.
 
 ```mermaid
 graph TD
     User([User App]) --> Core[CloudStream Core]
     Core --> Providers[ArProv Providers Library]
     
-    subgraph "ArProv Logic"
+    subgraph "منطق ArProv"
         Providers --> CP[Cima4u Forum]
         Providers --> AS[ArabSeed]
         Providers --> AK[Akwam]
         
-        CP --> tier[Tiered Poster Logic]
-        CP --> ajax[AJAX Player Extraction]
+        CP --> tier[منطق الملصقات المتعدد]
+        CP --> ajax[استخراج المشغل عبر AJAX]
     end
     
-    ajax --> Ext[Common Extractors Box]
+    ajax --> Ext[صندوق المستخرجات المشترك]
     Ext --> FM[FileMoon]
     Ext --> DM[DoodStream]
     Ext --> ST[StreamTape]
     
-    FM --> CDN[(CDN / Video Hosts)]
+    FM --> CDN[(CDN / خوادم الفيديو)]
     DM --> CDN
     ST --> CDN
     
@@ -44,101 +54,107 @@ graph TD
 
 ---
 
-## 🚀 Key Features
+## 🚀 المميزات الرئيسية
 
-*   🛡️ **Tiered Poster Extraction**: proprietary logic to ensure 100% catch rate for movie posters using local UI scoping and safe meta-tag fallbacks.
-*   ⚡ **AJAX Player Retrieval**: Direct communication with server backends (`admin-ajax.php`) to bypass obfuscated frontend code.
-*   🌍 **Universal Compatibility**: Optimized for Android, Android TV, and Web interfaces.
-*   💎 **Premium Quality**: Support for multi-resolution streaming (4K, 1080p, 720p).
-
----
-
-## 📦 Extension Directory
-
-### ✅ Active & Optimized
-| Provider | Genre | Package Name |
-| :--- | :--- | :--- |
-| **Cima4u Forum** | Premium Movies/Series | `com.lagradost.cloudstream3.cima4uforum` |
-| **ArabSeed** | Movies & Series | `com.lagradost.cloudstream3.arabseed` |
-| **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
-| **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
-| **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
-| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
-| **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
-| **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
-| **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
-| **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
-| **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
-| **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
-| **Fushaar** | Movies & Series | `com.lagradost.cloudstream3.fushaar` |
-| **EgyBest** | Movies & Series | `com.lagradost.cloudstream3.egybest` |
-| **EgyDead** | Movies & Series | `com.lagradost.cloudstream3.egydead` |
-| **MyCima** | Movies & Series | `com.lagradost.cloudstream3.mycima` |
-| **Shahid4u** | Movies & Series | `com.lagradost.cloudstream3.shahid4u` |
-| **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
-| **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
-| **TopCinema** | Movies, Series & Anime | `com.lagradost.cloudstream3.topcinema` |
-
-> [!NOTE]
-> **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
-
-### 🛠️ In Development (Coming Soon)
-- [ ] **TukTok** - `Movies & Series`
-### 🚫 Blocked / Not Working
-These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
-
-| Provider | Reason | Status |
-| :--- | :--- | :--- |
-| **AnimeBlkom** | Cloudflare Block | `Disabled` |
-| **FajerShow** | Cloudflare Block | `Disabled` |
-| **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
+*   🛡️ **استخراج الملصقات المتدرج**: منطق خاص لضمان معدل التقاط 100% لملصقات الأفلام باستخدام نطاق واجهة المستخدم المحلي وبدائل العلامات الوصفية الآمنة.
+*   ⚡ **استرجاع المشغل عبر AJAX**: التواصل المباشر مع واجهات الخادم الخلفية (`admin-ajax.php`) لتجاوز أكواد الواجهة الأمامية المعقدة.
+*   🌍 **توافق عالمي**: محسن لواجهات Android و Android TV و الويب.
+*   💎 **جودة ممتازة**: دعم البث المتعدد الدقة (4K, 1080p, 720p).
 
 ---
 
-## 🔧 Installation & Setup
+## 📦 دليل الإضافات
 
 > [!IMPORTANT]
-> **Required Component**: You **MUST** install the **Extractors** extension from this repository. Most providers (like Fushaar, Akwam, etc.) rely on the common Extractors box to retrieve video links. Without it, you will see "No link found" errors.
+> **تحقق من الحالة**: جميع الإضافات المذكورة أدناه تعمل بكامل طاقتها ومحسنة، باستثناء تلك المذكورة في قسم **المحظورة / غير العاملة**.
 
-### Instant Repositories
-You can use the **shortcode** directly in CloudStream:
+### ✅ نشطة ومحسنة
+| الإضافة | النوع | اسم الحزمة |
+| :--- | :--- | :--- |
+| **Cima4u Forum** | أفلام ومسلسلات مميزة | `com.lagradost.cloudstream3.cima4uforum` |
+| **ArabSeed** | أفلام ومسلسلات | `com.lagradost.cloudstream3.arabseed` |
+| **Akwam** | ترفيه عام | `com.lagradost.cloudstream3.akwam` |
+| **FaselHD** | عربي وعالمي | `com.lagradost.cloudstream3.faselhd` |
+| **Anime4up** | أنمي وأفلام | `com.lagradost.cloudstream3` |
+| **Animeiat** | أنمي متخصص | `com.lagradost.cloudstream3.animeiat` |
+| **MovizLand** | أفلام ومسلسلات | `com.lagradost.cloudstream3.movizlands` |
+| **Cima4U** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cima4u` |
+| **CimaClub** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimaclub` |
+| **CimaLeek** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimaleek` |
+| **CimaNow** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimanow` |
+| **QisatTv** | مسلسلات وقصص | `com.lagradost.cloudstream3.qisat` |
+| **Fushaar** | أفلام ومسلسلات | `com.lagradost.cloudstream3.fushaar` |
+| **EgyBest** | أفلام ومسلسلات | `com.lagradost.cloudstream3.egybest` |
+| **EgyDead** | أفلام ومسلسلات | `com.lagradost.cloudstream3.egydead` |
+| **MyCima** | أفلام ومسلسلات | `com.lagradost.cloudstream3.mycima` |
+| **Shahid4u** | أفلام ومسلسلات | `com.lagradost.cloudstream3.shahid4u` |
+| **GateAnime** | أنمي وأفلام | `com.lagradost.cloudstream3.gateanime` |
+| **RistoAnime** | أنمي متخصص | `com.lagradost.cloudstream3.ristoanime` |
+| **TopCinema** | أفلام، مسلسلات وأنمي | `com.lagradost.cloudstream3.topcinema` |
+| **Tuk Tuk Cinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.tuk` |
+
+> [!NOTE]
+> **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.
+
+### 🛠️ قيد التطوير (قريباً)
+- [ ] **Extra Sourced Providers** - `أفلام ومسلسلات`
+> [!TIP]
+> **هل لديك اقتراح؟** إذا كنت ترغب في رؤية موقع معين مضافاً كإضافة، تفضل بفتح "Issue" أو تواصل معنا!
+### 🚫 محظورة / لا تعمل
+هذه الإضافات محظورة حالياً من قِبل مواقعها (مثلاً: حماية Cloudflare، الحظر الجغرافي) أو تعاني من مشاكل كبيرة.
+
+| الإضافة | السبب | الحالة |
+| :--- | :--- | :--- |
+| **AnimeBlkom** | حظر Cloudflare | `Disabled` |
+| **FajerShow** | حظر Cloudflare | `Disabled` |
+| **ShahidMBC** | حظر جغرافي / DRM | `Disabled` |
+
+---
+
+## 🔧 التثبيت والإعداد
+
+> [!IMPORTANT]
+> **مكون مطلوب**: يجب عليك تثبيت إضافة **Extractors** من هذا المستودع. تعتمد معظم الإضافات (مثل Fushaar و Akwam وغيرها) على صندوق المستخرجات المشترك لجلب روابط الفيديو. بدونها، ستظهر لك رسالة "No link found".
+
+### المستودعات الفورية
+يمكنك استخدام **الكود المختصر** (shortcode) مباشرة في CloudStream:
 ```text
 arprov
 ```
 
-Or copy and paste this URL into your CloudStream settings:
+أو انسخ هذا الرابط والصقه في إعدادات مستودعات CloudStream:
 
 ```text
 https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json
 ```
 
-### Manual Build
+### البناء اليدوي
 ```bash
 ./gradlew build
 ```
 
 ---
 
-## 📝 Attribution & Legal
+## 📝 الحقوق والمسؤولية القانونية
 
 > [!NOTE]
-> This project is a refined fork of [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
-> Re-architected and maintained by **ramailo1**.
+> هذا المشروع هو نسخة محسنة ومطورة من [dhomred/cloudstream-extensions-arabic-v2](https://github.com/dhomred/cloudstream-extensions-arabic-v2).
+> تمت إعادة الهيكلة والصيانة بواسطة **ramailo1**.
 
-## 🏆 Hall of Fame
-We honor the brilliant minds who have contributed to the success of ArProv.
+## 🏆 لوحة الشرف
+نكرم العقول المبدعة التي ساهمت في نجاح ArProv.
 
-| Contributor | Achievement | Impact |
+| المساهم | الإنجاز | الأثر |
 | :--- | :--- | :--- |
-| **[Abodabodd](https://github.com/Abodabodd)** | **Anti-Scraping & Server Logic** | Unlocked `CimaNow` provider capabilities. |
-| **[dhomred](https://github.com/dhomred)** | **Original Architect** | Foundation of the v2 extensions. |
+| **[Abodabodd](https://github.com/Abodabodd)** | **منطق تجاوز الحماية والخوادم** | فتح إمكانيات إضافة `CimaNow`. |
+| **[dhomred](https://github.com/dhomred)** | **المعماري الأصلي** | مؤسس إضافات الإصدار الثاني (v2). |
 
-Want to be here? Submit a fix or new provider!
+هل تريد أن تكون هنا؟ أرسل إصلاحاً أو إضافة جديدة!
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
+مرخص تحت رخصة **MIT**. راجع ملف [LICENSE](LICENSE) لمزيد من المعلومات.
 
 ---
 
 <p align="center">
-  ⭐ <strong>Support our work by starring this repository!</strong> ⭐
+  ⭐ <strong>ادعم عملنا عبر وضع نجمة للمستودع!</strong> ⭐
 </p>

@@ -35,6 +35,7 @@ class CimaNowProvider : MainAPI() {
 
     private val homeSections = mapOf(
         "أحدث الإضافات" to "$mainUrl/الاحدث",
+        "رمضان 2026" to "$mainUrl/category/رمضان-2026",
         "أحدث المسلسلات العربية" to "$mainUrl/category/مسلسلات-عربية",
         "أحدث المسلسلات الاجنبية" to "$mainUrl/category/مسلسلات-اجنبية",
         "أحدث المسلسلات التركية" to "$mainUrl/category/مسلسلات-تركية",
