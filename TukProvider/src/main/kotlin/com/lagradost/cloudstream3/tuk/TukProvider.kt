@@ -53,8 +53,8 @@ class TukProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         val a = this.selectFirst("a") ?: return null
         val href = fixUrl(a.attr("href"))
-        val title = this.selectFirst(".title, .Block--Info .title")?.text()?.trim() ?: return null
-        val posterUrl = this.selectFirst(".Poster img")?.let { img ->
+        val title = this.selectFirst(".Block--Info h3")?.text()?.trim() ?: return null
+        val posterUrl = this.selectFirst(".Poster--Block img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
         }
 
@@ -74,12 +74,12 @@ class TukProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
         
-        val title = doc.selectFirst(".Block--Info .title, h1")?.text()?.trim() ?: return null
-        val posterUrl = doc.selectFirst(".Poster img")?.let { img ->
+        val title = doc.selectFirst("h1.post-title")?.text()?.trim() ?: return null
+        val posterUrl = doc.selectFirst(".MainSingle .image img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
         }
-        val plot = doc.selectFirst(".Story, .Post--Content")?.text()?.trim()
-        val year = doc.selectFirst(".Date, .year")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+        val plot = doc.selectFirst(".story p")?.text()?.trim()
+        val year = doc.selectFirst(".RightTaxContent a[href*='release-year']")?.text()?.filter { it.isDigit() }?.toIntOrNull()
 
         val isSeries = doc.selectFirst(".Episodes--Box, .Episodes--List, a[href*='/series/']") != null || url.contains("series") || url.contains("episode")
 
@@ -87,13 +87,16 @@ class TukProvider : MainAPI() {
             val episodes = mutableListOf<Episode>()
             
             // Try to find full list on the page
-            doc.select(".Episodes--List a, .Episodes--Box a, .row a:contains(الحلقة)").forEach { ep ->
+            doc.select(".allepcont .row a").forEach { ep ->
                 val href = ep.attr("href")
                 if (href.isNotBlank()) {
-                    val epText = ep.attr("title").ifBlank { ep.text() }
+                    val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
+                    val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
+                        ?: epTitle.filter { it.isDigit() }.toIntOrNull()
+                    
                     episodes.add(newEpisode(href) {
-                        this.name = epText
-                        this.episode = epText.filter { it.isDigit() }.toIntOrNull()
+                        this.name = epTitle
+                        this.episode = epNum
                     })
                 }
             }
@@ -103,13 +106,16 @@ class TukProvider : MainAPI() {
                 val seriesLink = doc.select(".breadcrumb a[href*='/series/']").attr("href")
                 if (seriesLink.isNotBlank()) {
                     val seriesDoc = app.get(seriesLink).document
-                    seriesDoc.select(".Episodes--List a, .Episodes--Box a, .row a:contains(الحلقة)").forEach { ep ->
+                    seriesDoc.select(".allepcont .row a").forEach { ep ->
                         val href = ep.attr("href")
                         if (href.isNotBlank()) {
-                            val epText = ep.attr("title").ifBlank { ep.text() }
+                            val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
+                            val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
+                                ?: epTitle.filter { it.isDigit() }.toIntOrNull()
+                            
                             episodes.add(newEpisode(href) {
-                                this.name = epText
-                                this.episode = epText.filter { it.isDigit() }.toIntOrNull()
+                                this.name = epTitle
+                                this.episode = epNum
                             })
                         }
                     }
@@ -147,7 +153,7 @@ class TukProvider : MainAPI() {
         val watchUrl = if (data.endsWith("/watch/")) data else "${data.removeSuffix("/")}/watch/"
         val doc = app.get(watchUrl).document
 
-        doc.select(".watch--servers--list li").amap { li ->
+        doc.select(".watch--servers--list .server--item").amap { li ->
             val b64 = li.attr("data-linkbase64")
             val link = if (b64.isNotBlank()) {
                 String(Base64.decode(b64, Base64.DEFAULT))
