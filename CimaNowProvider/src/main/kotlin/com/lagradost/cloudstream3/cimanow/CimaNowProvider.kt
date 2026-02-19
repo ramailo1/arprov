@@ -35,7 +35,7 @@ class CimaNowProvider : MainAPI() {
 
     private val homeSections = mapOf(
         "أحدث الإضافات" to "$mainUrl/الاحدث",
-        "رمضان 2026" to "$mainUrl/category/رمضان-2026",
+        "رمضان 2026" to "$mainUrl/category/رمضان/رمضان-2026",
         "أحدث المسلسلات العربية" to "$mainUrl/category/مسلسلات-عربية",
         "أحدث المسلسلات الاجنبية" to "$mainUrl/category/مسلسلات-اجنبية",
         "أحدث المسلسلات التركية" to "$mainUrl/category/مسلسلات-تركية",
@@ -243,7 +243,7 @@ class CimaNowProvider : MainAPI() {
                 }
                 newHomePageResponse(homePageLists)
             } else {
-                val base = sectionPaginationMap[request.name] ?: return newHomePageResponse(emptyList())
+                val base = sectionPaginationMap[request.name] ?: homeSections[request.name] ?: return newHomePageResponse(emptyList())
                 val doc = decodeHtml(app.get("$base/page/$page/").document)
                 val items = doc.select("section > article[aria-label='post']")
                     .mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
