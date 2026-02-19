@@ -106,6 +106,36 @@ class TopCinemaProvider : MainAPI() {
 
 
 
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val items = ArrayList<HomePageList>()
+
+        mainPage.forEach { (name, data) ->
+            val url = if (data.isEmpty()) {
+                "$mainUrl/wp-json/wp/v2/posts?per_page=10"
+            } else {
+                "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10"
+            }
+
+            try {
+                val responseText = app.get(url).text
+                val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
+                val searchResponses = response.mapNotNull { it.toSearchResponse() }
+
+                if (searchResponses.isNotEmpty()) {
+                    items.add(HomePageList(name, searchResponses))
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        return newHomePageResponse(items)
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10"
         return try {
