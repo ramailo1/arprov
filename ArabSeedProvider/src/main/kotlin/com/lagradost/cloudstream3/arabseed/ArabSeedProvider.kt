@@ -235,46 +235,7 @@ class ArabSeedProvider : MainAPI() {
             // If parsed URL is valid, load it
             if (finalUrl.isNotEmpty()) {
                 if (finalUrl.contains("savefiles.com")) {
-                    // Direct SaveFiles handling logic
-                    try { 
-                        // Extract file code
-                        val code = finalUrl.substringAfter("/e/").substringBefore("?")
-                        val domain = "https://savefiles.com"
-                        
-                        val response = app.post(
-                            "$domain/dl",
-                            data = mapOf(
-                                "op" to "embed",
-                                "file_code" to code,
-                                "auto" to "1",
-                                "referer" to ""
-                            ),
-                            headers = mapOf("Referer" to finalUrl)
-                        ).text
-                        
-                        // Extract m3u8 from: source: '...'
-                        val m3u8 = Regex("""source:\s*['"](.*?)['"]""").find(response)?.groupValues?.get(1)
-                        
-                        if (!m3u8.isNullOrEmpty()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    "$name (SaveFiles)",
-                                    m3u8,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = finalUrl
-                                }
-                            )
-                        } else {
-                             // Fallback to old method just in case or if it fails
-                             loadExtractor(finalUrl, data, subtitleCallback, callback)
-                        }
-
-                    } catch(e: Exception) {
-                        e.printStackTrace()
-                        // loadExtractor(finalUrl, data, subtitleCallback, callback)
-                    }
+                    extractSaveFiles(finalUrl, name, callback)
                 } else if (finalUrl.startsWith("/") || finalUrl.contains("asd.pics") || finalUrl.contains("asd.homes")) {
                      // Internal link presumably
                      val urlToLoad = if (finalUrl.startsWith("/")) mainUrl + finalUrl else finalUrl
@@ -295,7 +256,11 @@ class ArabSeedProvider : MainAPI() {
                      } else {
                          val iframeSrc = doc.select("iframe").attr("src")
                          if (iframeSrc.isNotEmpty()) {
-                             loadExtractor(iframeSrc, data, subtitleCallback, callback)
+                             if (iframeSrc.contains("savefiles.com")) {
+                                 extractSaveFiles(iframeSrc, name, callback)
+                             } else {
+                                 loadExtractor(iframeSrc, data, subtitleCallback, callback)
+                             }
                          }
                      }
                  } else {
@@ -320,5 +285,50 @@ class ArabSeedProvider : MainAPI() {
         }
 
         return true
+    }
+    private suspend fun extractSaveFiles(url: String, name: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            // Extract file code
+            // Url format: https://savefiles.com/e/CODE
+            val code = url.substringAfter("/e/").substringBefore("?")
+            val domain = "https://savefiles.com"
+
+            val response = app.post(
+                "$domain/dl",
+                data = mapOf(
+                    "op" to "embed",
+                    "file_code" to code,
+                    "auto" to "1",
+                    "referer" to ""
+                ),
+                headers = mapOf("Referer" to url)
+            ).text
+
+            // Extract m3u8 from: sources: ["..."] or sources: ['...']
+            // The browser debug showed: sources: ["https://..."]
+            // Also seen: source: "..."
+            val m3u8 = Regex("""sources:\s*\[\s*["'](.*?)["']""").find(response)?.groupValues?.get(1)
+                ?: Regex("""source:\s*["'](.*?)["']""").find(response)?.groupValues?.get(1)
+
+            if (!m3u8.isNullOrEmpty()) {
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        "$name (SaveFiles)",
+                        m3u8,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = url
+                    }
+                )
+            } else {
+                // Fallback: try default extractor if manual parsing fails
+                loadExtractor(url, null, {}, callback)
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+             loadExtractor(url, null, {}, callback)
+        }
     }
 }
