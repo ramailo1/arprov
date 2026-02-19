@@ -11,7 +11,7 @@ import android.util.Base64
 
 class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://a.asd.homes"
+    override var mainUrl = "https://asd.pics"
     override var name = "ArabSeed"
     override val usesWebView = false
     override val hasMainPage = true
@@ -210,11 +210,11 @@ class ArabSeedProvider : MainAPI() {
         }
 
         val servers = watchDoc.select(".servers__list li")
-        
-        servers.map { 
+
+        servers.map {
             val link = it.attr("data-link")
             val name = it.text()
-            
+
             // Extract the actual URL - format can be /play.php?url=BASE64 or /play/?id=BASE64 or direct
             val finalUrl = when {
                 link.contains("url=") -> {
@@ -234,54 +234,48 @@ class ArabSeedProvider : MainAPI() {
 
             // If parsed URL is valid, load it
             if (finalUrl.isNotEmpty()) {
-                 if (finalUrl.contains("savefiles.com")) {
-                     // Direct SaveFiles handling logic
-                     val sourcesFound = mutableListOf<Boolean>()
-                     try {
-                         val doc = app.get(finalUrl).document
-                         val source = doc.select("source").attr("src")
-                         val sourcesFound = mutableListOf<Boolean>() // Re-init not needed but cleaner scope
-                         
-                         if (source.isNotEmpty()) {
-                             callback.invoke(
-                                 newExtractorLink(
-                                     this.name,
-                                     "$name (SaveFiles)",
-                                     source,
-                                     ExtractorLinkType.VIDEO
-                                 ) {
-                                     this.referer = finalUrl
-                                 }
-                             )
-                             sourcesFound.add(true)
-                         }
-                         
-                         // Fallback for SaveFiles
-                         val codeMatch = Regex("/e/(\\w+)").find(finalUrl)
-                         if (codeMatch != null) {
-                             val code = codeMatch.groupValues[1]
-                             val baseUrl = finalUrl.substringBefore("/e/")
-                             mapOf(
-                                 "download_o" to "1080p", "download_x" to "720p",
-                                 "download_h" to "480p", "download_n" to "360p"
-                             ).forEach { (param, quality) ->
-                                  callback.invoke(
-                                      newExtractorLink(
-                                          this.name,
-                                          "$name (SaveFiles $quality)",
-                                          "$baseUrl/$code.html?$param",
-                                          ExtractorLinkType.VIDEO
-                                      ) { this.referer = finalUrl }
-                                  )
-                                  sourcesFound.add(true)
-                             }
-                         }
-                     } catch(e: Exception) {}
-                     
-                     if (sourcesFound.isEmpty()) {
-                         loadExtractor(finalUrl, data, subtitleCallback, callback)
-                     }
-                 } else if (finalUrl.startsWith("/") || finalUrl.contains("asd.homes")) {
+                if (finalUrl.contains("savefiles.com")) {
+                    // Direct SaveFiles handling logic
+                    try { 
+                        // Extract file code
+                        val code = finalUrl.substringAfter("/e/").substringBefore("?")
+                        val domain = "https://savefiles.com"
+                        
+                        val response = app.post(
+                            "$domain/dl",
+                            data = mapOf(
+                                "op" to "embed",
+                                "file_code" to code,
+                                "auto" to "1",
+                                "referer" to ""
+                            ),
+                            headers = mapOf("Referer" to finalUrl)
+                        ).text
+                        
+                        // Extract m3u8 from: source: '...'
+                        val m3u8 = Regex("""source:\s*['"](.*?)['"]""").find(response)?.groupValues?.get(1)
+                        
+                        if (!m3u8.isNullOrEmpty()) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    this.name,
+                                    "$name (SaveFiles)",
+                                    m3u8,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = finalUrl
+                                }
+                            )
+                        } else {
+                             // Fallback to old method just in case or if it fails
+                             loadExtractor(finalUrl, data, subtitleCallback, callback)
+                        }
+
+                    } catch(e: Exception) {
+                        e.printStackTrace()
+                        // loadExtractor(finalUrl, data, subtitleCallback, callback)
+                    }
+                } else if (finalUrl.startsWith("/") || finalUrl.contains("asd.pics") || finalUrl.contains("asd.homes")) {
                      // Internal link presumably
                      val urlToLoad = if (finalUrl.startsWith("/")) mainUrl + finalUrl else finalUrl
                      val doc = app.get(urlToLoad, headers = mapOf("Referer" to watchUrl)).document
@@ -316,7 +310,7 @@ class ArabSeedProvider : MainAPI() {
             try {
                 val downloadDoc = app.get(downloadUrl, headers = mapOf("Referer" to data)).document
                 val downloadLinks = downloadDoc.select(".downloads__links__list li a")
-                downloadLinks.map { 
+                downloadLinks.map {
                     val link = it.attr("href")
                     loadExtractor(link, data, subtitleCallback, callback)
                 }
@@ -324,7 +318,7 @@ class ArabSeedProvider : MainAPI() {
                // Ignore download errors
             }
         }
-        
+
         return true
     }
 }
