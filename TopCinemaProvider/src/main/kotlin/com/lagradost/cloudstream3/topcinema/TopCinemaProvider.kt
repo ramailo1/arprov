@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 
 
 class TopCinemaProvider : MainAPI() {
@@ -26,10 +27,12 @@ class TopCinemaProvider : MainAPI() {
     )
 
     // WordPress API Data Classes
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class WpTitle(
         @JsonProperty("rendered") val rendered: String
     )
     
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class WpPost(
         @JsonProperty("id") val id: Int,
         @JsonProperty("date") val date: String,
@@ -41,6 +44,7 @@ class TopCinemaProvider : MainAPI() {
         @JsonProperty("yoast_head_json") val yoastHead: YoastHead?
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class YoastHead(
         @JsonProperty("og_image") val ogImage: List<Map<String, Any>>? // Handling as generic map to be safe
     )
@@ -100,32 +104,16 @@ class TopCinemaProvider : MainAPI() {
         "59186" to "مسلسلات كورية"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        val categoryId = request.data
-        val url = if (categoryId.isEmpty()) {
-            "$mainUrl/wp-json/wp/v2/posts?page=$page&per_page=12"
-        } else {
-            "$mainUrl/wp-json/wp/v2/posts?categories=$categoryId&page=$page&per_page=12"
-        }
 
-        return try {
-            val response = app.get(url).parsedSafe<List<WpPost>>() ?: emptyList()
-            val home = response.map { it.toSearchResponse() }
-            newHomePageResponse(request.name, home)
-        } catch (e: Exception) {
-            newHomePageResponse(request.name, emptyList())
-        }
-    }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10"
         return try {
-            val response = app.get(url).parsedSafe<List<WpPost>>() ?: emptyList()
-            response.map { it.toSearchResponse() }
+            val responseText = app.get(url).text
+            val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
+            response.mapNotNull { it.toSearchResponse() } // 'it' works here
         } catch (e: Exception) {
+            e.printStackTrace()
             emptyList()
         }
     }
