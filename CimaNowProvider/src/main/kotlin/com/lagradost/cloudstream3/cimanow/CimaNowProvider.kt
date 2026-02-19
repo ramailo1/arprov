@@ -49,7 +49,7 @@ class CimaNowProvider : MainAPI() {
         "أحدث الحفلات" to "$mainUrl/category/حفلات"
     )
 
-    private val sectionPaginationMap = mutableMapOf<String, String>()
+    private val sectionPaginationMap = mutableMapOf<String, String>() // Deprecated, but keeping variable to avoid breaking if referenced elsewhere (deleted below)
 
     private fun String.getIntFromText(): Int? {
         return Regex("""\d+""").find(this)?.value?.toIntOrNull()
@@ -222,7 +222,6 @@ class CimaNowProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return try {
             if (page == 1) {
-                sectionPaginationMap.clear()
                 val homePageLists = mutableListOf<HomePageList>()
                 coroutineScope {
                     val deferredLists = homeSections.map { (name, url) ->
@@ -233,7 +232,6 @@ class CimaNowProvider : MainAPI() {
                                     .mapNotNull { it.toSearchResponse() }
                                     .distinctBy { it.url }
                                 if (items.isNotEmpty()) {
-                                    sectionPaginationMap[name] = url
                                     HomePageList(name, items)
                                 } else null
                             } catch (e: Exception) { null }
@@ -243,7 +241,7 @@ class CimaNowProvider : MainAPI() {
                 }
                 newHomePageResponse(homePageLists)
             } else {
-                val base = sectionPaginationMap[request.name] ?: homeSections[request.name] ?: return newHomePageResponse(emptyList())
+                val base = homeSections[request.name] ?: return newHomePageResponse(emptyList())
                 val doc = decodeHtml(app.get("$base/page/$page/").document)
                 val items = doc.select("section > article[aria-label='post']")
                     .mapNotNull { it.toSearchResponse() }.distinctBy { it.url }
