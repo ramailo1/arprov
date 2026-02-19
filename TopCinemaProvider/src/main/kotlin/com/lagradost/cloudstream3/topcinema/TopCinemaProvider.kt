@@ -261,6 +261,50 @@ class TopCinemaProvider : MainAPI() {
                     }
                 }
             }
+
+            // Layout 3: AJAX Loading (MasterDecode theme)
+            if (episodes.isEmpty() || doc.select(".seasonslist").isNotEmpty()) {
+                try {
+                    val scripts = doc.select("script").joinToString("\n") { it.html() }
+                    val ajaxtUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1)
+                        ?: "https://topcima.online/wp-content/themes/Master%20Decode-TopCinema-2-1/Ajaxt/"
+                    val postId = doc.select("input#shortlink").attr("value").split("?p=").lastOrNull()
+                        ?: Regex("post_id: '(\\d+)'").find(doc.html())?.groupValues?.get(1)
+                        ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
+
+                    if (postId != null) {
+                        val seasonsList = doc.select(".seasonslist li").ifEmpty { listOf(null) }
+                        seasonsList.forEachIndexed { index, seasonEl ->
+                            val seasonNum = seasonEl?.attr("data-season")?.toIntOrNull() ?: (index + 1)
+                            val response = app.post(
+                                "${ajaxtUrl}Single/Episodes.php",
+                                data = mapOf("season" to "$seasonNum", "post_id" to postId),
+                                headers = headers + mapOf("X-Requested-With" to "XMLHttpRequest")
+                            ).text
+                            
+                            val seasonDoc = org.jsoup.Jsoup.parse(response)
+                            seasonDoc.select(".allepcont .row a, .EpisodesList .row a, a").forEach { ep ->
+                                val epLink = fixUrl(ep.attr("href"))
+                                if (epLink.isEmpty() || epLink == mainUrl) return@forEach
+                                
+                                val epRawName = ep.select(".ep-info h2").text().ifEmpty { ep.text() }.trim()
+                                if (epRawName.contains("المشاهدة الان|التحميل الان".toRegex())) return@forEach
+                                
+                                val epNum = ep.select(".epnum").text().toIntOrNull() 
+                                    ?: Regex("\\d+").find(epRawName)?.value?.toIntOrNull()
+                                
+                                episodes.add(newEpisode(epLink) {
+                                    this.name = epRawName.cleanTitle()
+                                    this.episode = epNum
+                                    this.season = seasonNum
+                                })
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
