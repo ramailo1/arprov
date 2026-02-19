@@ -206,7 +206,7 @@ class TopCinemaProvider : MainAPI() {
                 title,
                 url,
                 TvType.Movie,
-                "$url/watch/" // Direct connection to watch page logic
+                url // Use original URL, loadLinks will handle /watch/ or /download/
             ) {
                 this.posterUrl = posterUrl
                 this.recommendations = recommendations
@@ -221,9 +221,6 @@ class TopCinemaProvider : MainAPI() {
             // Layout 1: List style (.allepcont .row a)
             doc.select(".allepcont .row a, .EpisodesList .row a").forEach { episode ->
                 val epLink = fixUrl(episode.attr("href"))
-                // Ensure episode link goes to /watch/ directly if possible? 
-                // No, usually episode links go to episode page, then we click watch.
-                // We'll let loadLinks handle the /watch/ appending or detection.
                 
                 val epRawName = episode.select(".ep-info h2").text().ifEmpty { episode.text() }
                 var epName = epRawName.cleanTitle()
@@ -281,54 +278,65 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Optimized: Directly append /watch/ if not present, bypassing the main page load if possible.
-        // However, some URLs might already be watch URLs or distinct.
-        // Standard Structure: https://topcima.online/movie-name/ -> https://topcima.online/movie-name/watch/
+        android.util.Log.d("TopCinema", "loadLinks data: $data")
         
-        var watchUrl = data
-        if (!data.endsWith("/watch/") && !data.endsWith("/watch")) {
-             watchUrl = if (data.endsWith("/")) "${data}watch/" else "$data/watch/"
-        }
-        
-        var doc = app.get(watchUrl, headers = headers).document
-        
-        // Debugging for "No link found"
-        if (doc.select("ul#watch li").isEmpty()) {
-            android.util.Log.d("TopCinema", "No servers found in ul#watch at: $watchUrl")
-            // android.util.Log.d("TopCinema", "Doc HTML: ${doc.html()}") // Can be large
-            
-            // Fallback: Check for standard iframes if ul#watch is missing
-             doc.select("iframe").forEach { iframe ->
-                 val src = iframe.attr("src")
-                 if (src.isNotEmpty() && !src.contains("facebook") && !src.contains("twitter")) {
-                     loadExtractor(src, data, subtitleCallback, callback)
-                 }
+        val watchUrl = if (data.endsWith("/")) "${data}watch/" else "$data/watch/"
+        val downloadUrl = if (data.endsWith("/")) "${data}download/" else "$data/download/"
+
+        val watchResponse = app.get(watchUrl, headers = headers, cacheTime = 60)
+        if (watchResponse.code == 200) {
+            val doc = watchResponse.document
+            val servers = doc.select("ul#watch li")
+            android.util.Log.d("TopCinema", "Found ${servers.size} servers in $watchUrl")
+
+            servers.forEach { element ->
+                val serverUrl = element.attr("data-watch").ifEmpty {
+                    element.select("iframe").attr("src")
+                }
+                if (serverUrl.isNotEmpty()) {
+                    android.util.Log.d("TopCinema", "Attempting server: $serverUrl")
+                    if (serverUrl.contains("reviewrate.net")) {
+                        // Specialized handling for ReviewRate if standard extractors fail
+                        try {
+                            val reviewResponse = app.get(serverUrl, headers = headers.plus("Referer" to watchUrl)).text
+                            val m3u8 = Regex("file:\"(.*?\\.m3u8)\"").find(reviewResponse)?.groupValues?.get(1)
+                            if (m3u8 != null) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        "M (ReviewRate)",
+                                        "M (ReviewRate)",
+                                        m3u8,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.referer = watchUrl
+                                        this.quality = Qualities.Unknown.value
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    } else {
+                        loadExtractor(serverUrl, watchUrl, subtitleCallback, callback)
+                    }
+                }
             }
         }
 
-        // Fallback: If 404 or redirect to main, it might mean /watch/ pattern doesn't apply (rare but possible)
-        // Or if the page doesn't contain servers, maybe we need to find the link manually.
-        if (doc.select("ul#watch").isEmpty() && doc.select("iframe").isEmpty()) {
-             // Try fetching original data url and finding the watch link
-             doc = app.get(data, headers = headers).document
-             val manualWatchLink = doc.select("a.watch").attr("href")
-             if (manualWatchLink.isNotEmpty()) {
-                 watchUrl = manualWatchLink
-                 doc = app.get(watchUrl, headers = headers).document
-             }
-        }
-        
-        // Extract servers from ul#watch li
-        // Structure: <li data-watch="URL">Server Name</li>
-        doc.select("ul#watch li").forEach { element ->
-            val serverUrl = element.attr("data-watch").ifEmpty { 
-                element.select("iframe").attr("src") 
-            }
-            if (serverUrl.isNotEmpty()) {
-                loadExtractor(serverUrl, data, subtitleCallback, callback)
+        // Fallback to Download page
+        val downloadResponse = app.get(downloadUrl, headers = headers, cacheTime = 60)
+        if (downloadResponse.code == 200) {
+            val doc = downloadResponse.document
+            android.util.Log.d("TopCinema", "Checking download page: $downloadUrl")
+            doc.select("a[href*='download'], a[href*='fredl'], a[href*='savefiles']").forEach { a ->
+                val href = fixUrl(a.attr("href"))
+                if (href.isNotEmpty() && href != downloadUrl) {
+                    android.util.Log.d("TopCinema", "Found download link: $href")
+                    loadExtractor(href, downloadUrl, subtitleCallback, callback)
+                }
             }
         }
-        
+
         return true
     }
 }
