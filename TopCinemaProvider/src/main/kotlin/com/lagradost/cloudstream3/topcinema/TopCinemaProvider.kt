@@ -7,12 +7,14 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
+import com.fasterxml.jackson.annotation.JsonProperty
+
 
 class TopCinemaProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://topcima.online"
     override var name = "TopCinema"
-    override val usesWebView = true
+    override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
 
@@ -23,10 +25,23 @@ class TopCinemaProvider : MainAPI() {
         "Referer" to "$mainUrl/"
     )
 
-    private fun String.getIntFromText(): Int? {
-        return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
-    }
-    
+    // WordPress API Data Classes
+    data class WpTitle(val rendered: String)
+    data class WpPost(
+        val id: Int,
+        val date: String,
+        val slug: String,
+        val link: String,
+        val title: WpTitle,
+        val content: WpTitle?, // Content.rendered
+        val categories: List<Int>?,
+        @JsonProperty("yoast_head_json") val yoastHead: YoastHead?
+    )
+    data class YoastHead(
+        @JsonProperty("og_image") val ogImage: List<OgImage>?
+    )
+    data class OgImage(val url: String)
+
     private fun String.cleanTitle(): String {
         return this.replace("مشاهدة|فيلم|مترجم|مسلسل|اون لاين|كامل|جميع الحلقات|الموسم|الحلقة|انمي|تحميل".toRegex(), "")
             .replace(Regex("\\(\\d+\\)"), "")
@@ -34,22 +49,19 @@ class TopCinemaProvider : MainAPI() {
             .replace(Regex("\\s+"), " ")
             .trim()
     }
-    
-    private fun Element.toSearchResponse(): SearchResponse {
-        val titleRaw = select("h3").text().ifEmpty { select("a").attr("title") }.ifEmpty { select(".title").text() }
+
+    private fun WpPost.toSearchResponse(): SearchResponse {
+        val titleRaw = this.title.rendered.replace("&#8211;", "-").replace("&#038;", "&")
         val title = titleRaw.cleanTitle()
-        val posterUrl = select("img").let { img -> 
-            img.attr("data-src").ifEmpty { img.attr("src") } 
-        }
-        val href = fixUrl(select("a").attr("href"))
+        val posterUrl = this.yoastHead?.ogImage?.firstOrNull()?.url 
+        val href = this.link
         
-        // Better type detection: if title has "episode" or "season" keyword, it's a series
-        val isSeries = href.contains("/series/|/مسلسل/|/season/|/episodes/".toRegex()) || 
-                       titleRaw.contains("مسلسل|انمي|حلقة|موسم".toRegex())
-        
-        val tvType = if (isSeries) TvType.TvSeries else TvType.Movie
-        
-        return if (tvType == TvType.TvSeries) {
+        // Accurate Type Detection via Category IDs
+        // Series IDs: 70137(Ramadan2026), 4, 17979, 53293, 56428, 53911, 53256, 56302, 76, 38, 59186, 67
+        val seriesCategories = setOf(70137, 4, 17979, 53293, 56428, 53911, 53256, 56302, 76, 38, 59186, 67)
+        val isSeries = this.categories?.any { it in seriesCategories } ?: (titleRaw.contains("مسلسل") || titleRaw.contains("انمي"))
+
+        return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
             }
@@ -60,44 +72,61 @@ class TopCinemaProvider : MainAPI() {
         }
     }
 
+    // Map keywords/names to WordPress Category IDs
     override val mainPage = mainPageOf(
-        "$mainUrl" to "الرئيسية",
-        "$mainUrl/last/" to "المضاف حديثا",
-        "$mainUrl/movies/" to "الأفلام الجديدة",
-        "$mainUrl/series/" to "المسلسلات الجديدة",
+        "" to "الأحدث",
+        "1207" to "أفلام أجنبية",
+        "20349" to "أفلام عربية",
+        "56286" to "أفلام Netflix",
+        "64332" to "أفلام تركية",
+        "61015" to "أفلام هندية",
+        "1895" to "أفلام أنمي",
+        "70137" to "مسلسلات رمضان 2026",
+        "4" to "مسلسلات أجنبية",
+        "17979" to "مسلسلات عربية",
+        "53256" to "مسلسلات تركية",
+        "56428" to "مسلسلات Netflix",
+        "38" to "مسلسلات أنمي",
+        "59186" to "مسلسلات كورية"
     )
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = if (page == 1) {
-            request.data
+        val categoryId = request.data
+        val url = if (categoryId.isEmpty()) {
+            "$mainUrl/wp-json/wp/v2/posts?page=$page&per_page=12"
         } else {
-            "${request.data.trimEnd('/')}/page/$page/"
+            "$mainUrl/wp-json/wp/v2/posts?categories=$categoryId&page=$page&per_page=12"
         }
 
-        val response = app.get(url, headers = headers)
-        val document = response.document
-        
-        val home = document.select("section:not(.Slides--Main) .Block--Item, section:not(.Slides--Main) .Small--Box, section:not(.Slides--Main) .AsidePost, section:not(.Slides--Main) .GridItem, .MainContainer .Block--Item, .MainContainer .Small--Box").mapNotNull {
-            it.toSearchResponse()
+        return try {
+            val response = app.get(url).parsedSafe<List<WpPost>>() ?: emptyList()
+            val home = response.map { it.toSearchResponse() }
+            newHomePageResponse(request.name, home)
+        } catch (e: Exception) {
+            newHomePageResponse(request.name, emptyList())
         }
-
-        return newHomePageResponse(request.name, home)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=$query"
-        val response = app.get(url, headers = headers)
-        val document = response.document
-
-        return document.select(".Block--Item, .Small--Box, .AsidePost, .GridItem").mapNotNull {
-            it.toSearchResponse()
+        val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10"
+        return try {
+            val response = app.get(url).parsedSafe<List<WpPost>>() ?: emptyList()
+            response.map { it.toSearchResponse() }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // We still fetch the page HTML for 'load' because we need the episode list/server links which might be stored in meta or HTML structure not fully exposed in the basic API (or requires separate calls).
+        // However, we can optimize by checking cached data if we implemented caching, but standard load is fine for detailed info.
+        
+        // Improvement: Use the '/watch/' url logic directly here if it's a movie to save a click? 
+        // No, we need metadata (plot, year, etc) which is on the main page.
+        
         var doc = app.get(url, headers = headers).document
         
         // Smart Redirect: If on episode page, find breadcrumb series link
@@ -111,18 +140,22 @@ class TopCinemaProvider : MainAPI() {
 
         val titleRaw = doc.select("h1.title, .movie-title, .PostTitle, h1").text()
         val title = titleRaw.cleanTitle()
-        val isMovie = !doc.select(".allepcont, .EpisodesList, .list-episodes, .seasonslist").any() && 
-                     !url.contains("/series/|/مسلسل/|/season/".toRegex())
+        // Determine type: If it has seasons/episodes list, it is a series
+        val hasEpisodes = doc.select(".allepcont, .EpisodesList, .list-episodes, .seasonslist").isNotEmpty()
+        val isMovie = !hasEpisodes && !url.contains("/series/|/مسلسل/|/season/".toRegex())
 
-        val posterUrl = doc.select(".poster img, .movie-poster img, .MainSingle .image img, meta[property='og:image']").let { img -> 
-            img.attr("data-src").ifEmpty { img.attr("src") }.ifEmpty { img.attr("content") } 
-        }
+        val posterUrl = doc.select("meta[property='og:image']").attr("content")
         val synopsis = doc.select(".description, .plot, .summary, .StoryArea, .Story").text()
-        val year = doc.select(".year, .release-year, a[href*='/release-year/']").text().getIntFromText()
-        val tags = doc.select(".genre a, .categories a, .TaxContent a").map { it.text() }
+        val year = doc.select(".year, .release-year, a[href*='/release-year/']").text().filter { it.isDigit() }.toIntOrNull()
+        val tags = doc.select(".genre a, .categories a").map { it.text() }
         
         val recommendations = doc.select(".related-movies .movie-item, .Block--Item, .Small--Box, .AsidePost").mapNotNull { element ->
-            element.toSearchResponse()
+             val recTitle = element.select("h3").text()
+             val recHref = element.select("a").attr("href")
+             val recPoster = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
+             if (recHref.isNotEmpty()) {
+                 newMovieSearchResponse(recTitle, recHref, TvType.Movie) { this.posterUrl = recPoster }
+             } else null
         }
 
         return if (isMovie) {
@@ -130,7 +163,7 @@ class TopCinemaProvider : MainAPI() {
                 title,
                 url,
                 TvType.Movie,
-                url
+                "$url/watch/" // Direct connection to watch page logic
             ) {
                 this.posterUrl = posterUrl
                 this.recommendations = recommendations
@@ -140,23 +173,22 @@ class TopCinemaProvider : MainAPI() {
             }
         } else {
             val episodes = arrayListOf<Episode>()
-            val cleanSeriesTitle = title.split(" ").take(3).joinToString(" ") // Reference for stripping
+            val cleanSeriesTitle = title.split(" ").take(3).joinToString(" ") 
             
             // Layout 1: List style (.allepcont .row a)
             doc.select(".allepcont .row a, .EpisodesList .row a").forEach { episode ->
                 val epLink = fixUrl(episode.attr("href"))
+                // Ensure episode link goes to /watch/ directly if possible? 
+                // No, usually episode links go to episode page, then we click watch.
+                // We'll let loadLinks handle the /watch/ appending or detection.
+                
                 val epRawName = episode.select(".ep-info h2").text().ifEmpty { episode.text() }
                 var epName = epRawName.cleanTitle()
-                
-                // Strip redundant series title if present
                 if (epName.contains(cleanSeriesTitle, true)) {
                     epName = epName.replace(cleanSeriesTitle, "", true).trim()
                 }
-                
-                val epNum = episode.select(".epnum").text().getIntFromText() ?: epRawName.getIntFromText()
-                val epPoster = episode.select("img").let { img ->
-                    img.attr("data-src").ifEmpty { img.attr("src") }
-                }.ifEmpty { posterUrl }
+                val epNum = episode.select(".epnum").text().toIntOrNull() ?: Regex("\\d+").find(epRawName)?.value?.toIntOrNull()
+                val epPoster = episode.select("img").attr("src").ifEmpty { posterUrl }
                 
                 episodes.add(newEpisode(epLink) {
                     this.name = epName.ifBlank { "الحلقة $epNum" }
@@ -166,23 +198,18 @@ class TopCinemaProvider : MainAPI() {
                 })
             }
             
-            // Layout 2: Grid style (.Small--Box, often for anime)
+            // Layout 2: Grid style (.Small--Box)
             if (episodes.isEmpty()) {
                 doc.select(".Small--Box, .Block--Item, .GridItem").forEach { episode ->
                     val a = episode.selectFirst("a") ?: return@forEach
                     val epLink = fixUrl(a.attr("href"))
-                    val epRawName = a.select("h3").text().ifEmpty { a.attr("title") }.ifEmpty { a.text() }
+                    val epRawName = a.select("h3").text()
                     var epName = epRawName.cleanTitle()
-                    
-                    // Strip redundant series title
-                    if (epName.contains(cleanSeriesTitle, true)) {
+                     if (epName.contains(cleanSeriesTitle, true)) {
                         epName = epName.replace(cleanSeriesTitle, "", true).trim()
                     }
-                    
-                    val epNum = episode.select(".number em").text().getIntFromText() ?: epRawName.getIntFromText()
-                    val epPoster = episode.select("img").let { img ->
-                        img.attr("data-src").ifEmpty { img.attr("src") }
-                    }.ifEmpty { posterUrl }
+                    val epNum = episode.select(".number em").text().toIntOrNull() ?: Regex("\\d+").find(epRawName)?.value?.toIntOrNull()
+                    val epPoster = episode.select("img").attr("src").ifEmpty { posterUrl }
                     
                     if (epRawName.contains("حلقة|الحلقة".toRegex()) || epNum != null) {
                         episodes.add(newEpisode(epLink) {
@@ -211,18 +238,31 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Optimized: Directly append /watch/ if not present, bypassing the main page load if possible.
+        // However, some URLs might already be watch URLs or distinct.
+        // Standard Structure: https://topcima.online/movie-name/ -> https://topcima.online/movie-name/watch/
+        
         var watchUrl = data
-        if (!data.contains("/watch")) {
-            val doc = app.get(data, headers = headers).document
-            val watchLink = doc.select("a.watch").attr("href")
-            if (watchLink.isNotEmpty()) {
-                watchUrl = watchLink
-            }
+        if (!data.endsWith("/watch/") && !data.endsWith("/watch")) {
+             watchUrl = if (data.endsWith("/")) "${data}watch/" else "$data/watch/"
         }
         
-        val doc = app.get(watchUrl, headers = headers).document
+        var doc = app.get(watchUrl, headers = headers).document
         
-        // Extract servers from ul#watch li (User provided structure)
+        // Fallback: If 404 or redirect to main, it might mean /watch/ pattern doesn't apply (rare but possible)
+        // Or if the page doesn't contain servers, maybe we need to find the link manually.
+        if (doc.select("ul#watch").isEmpty()) {
+             // Try fetching original data url and finding the watch link
+             doc = app.get(data, headers = headers).document
+             val manualWatchLink = doc.select("a.watch").attr("href")
+             if (manualWatchLink.isNotEmpty()) {
+                 watchUrl = manualWatchLink
+                 doc = app.get(watchUrl, headers = headers).document
+             }
+        }
+        
+        // Extract servers from ul#watch li
+        // Structure: <li data-watch="URL">Server Name</li>
         doc.select("ul#watch li").forEach { element ->
             val serverUrl = element.attr("data-watch").ifEmpty { 
                 element.select("iframe").attr("src") 
@@ -232,14 +272,6 @@ class TopCinemaProvider : MainAPI() {
             }
         }
         
-        // Fallback or additional server extraction
-        doc.select(".watch-servers li, .servers-list li, .watch--servers--list li").forEach { element ->
-             val serverUrl = element.attr("data-link") ?: element.attr("data-url")
-             if (!serverUrl.isNullOrEmpty()) {
-                 loadExtractor(serverUrl, data, subtitleCallback, callback)
-             }
-        }
-
         return true
     }
 }
