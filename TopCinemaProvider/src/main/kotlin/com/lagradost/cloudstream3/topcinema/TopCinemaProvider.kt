@@ -31,6 +31,16 @@ class TopCinemaProvider : MainAPI() {
     data class WpTitle(
         @JsonProperty("rendered") val rendered: String
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class WpFeaturedMedia(
+        @JsonProperty("source_url") val sourceUrl: String?
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class WpEmbedded(
+        @JsonProperty("wp:featuredmedia") val featuredMedia: List<WpFeaturedMedia>?
+    )
     
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class WpPost(
@@ -41,7 +51,8 @@ class TopCinemaProvider : MainAPI() {
         @JsonProperty("title") val title: WpTitle,
         @JsonProperty("content") val content: WpTitle?, 
         @JsonProperty("categories") val categories: List<Int>?,
-        @JsonProperty("yoast_head_json") val yoastHead: YoastHead?
+        @JsonProperty("yoast_head_json") val yoastHead: YoastHead?,
+        @JsonProperty("_embedded") val embedded: WpEmbedded?
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -65,8 +76,10 @@ class TopCinemaProvider : MainAPI() {
         
         val title = titleRaw.cleanTitle()
         
-        // Extract Image safely
-        val posterUrl = this.yoastHead?.ogImage?.firstOrNull()?.get("url")?.toString()
+        // Extract Image safely - Try Embedded first, then Yoast
+        val posterUrl = this.embedded?.featuredMedia?.firstOrNull()?.sourceUrl
+            ?: this.yoastHead?.ogImage?.firstOrNull()?.get("url")?.toString()
+
         val href = this.link
 
         // Accurate Type Detection via Category IDs
@@ -115,9 +128,9 @@ class TopCinemaProvider : MainAPI() {
 
         mainPage.forEach { (name, data) ->
             val url = if (data.isEmpty()) {
-                "$mainUrl/wp-json/wp/v2/posts?per_page=10"
+                "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
             } else {
-                "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10"
+                "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
             }
 
             try {
@@ -137,7 +150,7 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10"
+        val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10&_embed"
         return try {
             val responseText = app.get(url).text
             val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
@@ -277,9 +290,23 @@ class TopCinemaProvider : MainAPI() {
         
         var doc = app.get(watchUrl, headers = headers).document
         
+        // Debugging for "No link found"
+        if (doc.select("ul#watch li").isEmpty()) {
+            android.util.Log.d("TopCinema", "No servers found in ul#watch at: $watchUrl")
+            // android.util.Log.d("TopCinema", "Doc HTML: ${doc.html()}") // Can be large
+            
+            // Fallback: Check for standard iframes if ul#watch is missing
+             doc.select("iframe").forEach { iframe ->
+                 val src = iframe.attr("src")
+                 if (src.isNotEmpty() && !src.contains("facebook") && !src.contains("twitter")) {
+                     loadExtractor(src, data, subtitleCallback, callback)
+                 }
+            }
+        }
+
         // Fallback: If 404 or redirect to main, it might mean /watch/ pattern doesn't apply (rare but possible)
         // Or if the page doesn't contain servers, maybe we need to find the link manually.
-        if (doc.select("ul#watch").isEmpty()) {
+        if (doc.select("ul#watch").isEmpty() && doc.select("iframe").isEmpty()) {
              // Try fetching original data url and finding the watch link
              doc = app.get(data, headers = headers).document
              val manualWatchLink = doc.select("a.watch").attr("href")
