@@ -26,40 +26,50 @@ class TopCinemaProvider : MainAPI() {
     )
 
     // WordPress API Data Classes
-    data class WpTitle(val rendered: String)
+    data class WpTitle(
+        @JsonProperty("rendered") val rendered: String
+    )
+    
     data class WpPost(
-        val id: Int,
-        val date: String,
-        val slug: String,
-        val link: String,
-        val title: WpTitle,
-        val content: WpTitle?, // Content.rendered
-        val categories: List<Int>?,
+        @JsonProperty("id") val id: Int,
+        @JsonProperty("date") val date: String,
+        @JsonProperty("slug") val slug: String,
+        @JsonProperty("link") val link: String,
+        @JsonProperty("title") val title: WpTitle,
+        @JsonProperty("content") val content: WpTitle?, 
+        @JsonProperty("categories") val categories: List<Int>?,
         @JsonProperty("yoast_head_json") val yoastHead: YoastHead?
     )
+
     data class YoastHead(
-        @JsonProperty("og_image") val ogImage: List<OgImage>?
+        @JsonProperty("og_image") val ogImage: List<Map<String, Any>>? // Handling as generic map to be safe
     )
-    data class OgImage(val url: String)
 
     private fun String.cleanTitle(): String {
         return this.replace("مشاهدة|فيلم|مترجم|مسلسل|اون لاين|كامل|جميع الحلقات|الموسم|الحلقة|انمي|تحميل".toRegex(), "")
             .replace(Regex("\\(\\d+\\)"), "")
-            .replace(Regex("\\b(19|20)\\d{2}\\b"), "") // Remove years
+            .replace(Regex("\\b(19|20)\\d{2}\\b"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
     }
 
     private fun WpPost.toSearchResponse(): SearchResponse {
-        val titleRaw = this.title.rendered.replace("&#8211;", "-").replace("&#038;", "&")
-        val title = titleRaw.cleanTitle()
-        val posterUrl = this.yoastHead?.ogImage?.firstOrNull()?.url 
-        val href = this.link
+        val titleRaw = this.title.rendered
+            .replace("&#8211;", "-")
+            .replace("&#038;", "&")
+            .replace("&#8217;", "'")
         
+        val title = titleRaw.cleanTitle()
+        
+        // Extract Image safely
+        val posterUrl = this.yoastHead?.ogImage?.firstOrNull()?.get("url")?.toString()
+        val href = this.link
+
         // Accurate Type Detection via Category IDs
-        // Series IDs: 70137(Ramadan2026), 4, 17979, 53293, 56428, 53911, 53256, 56302, 76, 38, 59186, 67
         val seriesCategories = setOf(70137, 4, 17979, 53293, 56428, 53911, 53256, 56302, 76, 38, 59186, 67)
-        val isSeries = this.categories?.any { it in seriesCategories } ?: (titleRaw.contains("مسلسل") || titleRaw.contains("انمي"))
+        val isSeries = this.categories?.any { it in seriesCategories } == true || 
+                       titleRaw.contains("مسلسل") || 
+                       titleRaw.contains("انمي")
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {

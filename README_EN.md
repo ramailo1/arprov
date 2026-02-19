@@ -97,7 +97,7 @@ graph TD
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 > [!TIP]
-> **Ramadan 2026**: Ramadan 2026 series are now available on **CimaNow** and **ArabSeed** providers. Download them to watch the latest Ramadan content!
+> **Ramadan 2026**: Ramadan 2026 series are now available on **CimaNow**, **ArabSeed** and **TopCinema** providers. Download them to watch the latest Ramadan content!
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Extra Sourced Providers** - `Movies & Series`
