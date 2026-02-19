@@ -90,14 +90,13 @@ graph TD
 | **Shahid4u** | أفلام ومسلسلات | `com.lagradost.cloudstream3.shahid4u` |
 | **GateAnime** | أنمي وأفلام | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | أنمي متخصص | `com.lagradost.cloudstream3.ristoanime` |
-| **TopCinema** | أفلام، مسلسلات وأنمي | `com.lagradost.cloudstream3.topcinema` |
 | **Tuk Tuk Cinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.tuk` |
 
 > [!NOTE]
 > **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.
 
 > [!TIP]
-> **رمضان 2026**: يتوفر الآن مسلسلات رمضان 2026 على إضافتي **CimaNow**، **ArabSeed** و **TopCinema**. قم بتحميلهما لمشاهدة أحدث المحتويات الرمضانية!
+> **رمضان 2026**: يتوفر الآن مسلسلات رمضان 2026 على إضافتي **CimaNow** و **ArabSeed**. قم بتحميلهما لمشاهدة أحدث المحتويات الرمضانية!
 
 ### 🛠️ قيد التطوير (قريباً)
 - [ ] **Extra Sourced Providers** - `أفلام ومسلسلات`
@@ -111,6 +110,7 @@ graph TD
 | **AnimeBlkom** | حظر Cloudflare | `Disabled` |
 | **FajerShow** | حظر Cloudflare | `Disabled` |
 | **ShahidMBC** | حظر جغرافي / DRM | `Disabled` |
+| **TopCinema** | مشكلة في روابط التشغيل | `Broken` |
 
 ---
 

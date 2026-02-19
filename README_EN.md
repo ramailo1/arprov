@@ -90,14 +90,13 @@ graph TD
 | **Shahid4u** | Movies & Series | `com.lagradost.cloudstream3.shahid4u` |
 | **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
-| **TopCinema** | Movies, Series & Anime | `com.lagradost.cloudstream3.topcinema` |
 | **Tuk Tuk Cinema** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
 
 > [!TIP]
-> **Ramadan 2026**: Ramadan 2026 series are now available on **CimaNow**, **ArabSeed** and **TopCinema** providers. Download them to watch the latest Ramadan content!
+> **Ramadan 2026**: Ramadan 2026 series are now available on **CimaNow** and **ArabSeed** providers. Download them to watch the latest Ramadan content!
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Extra Sourced Providers** - `Movies & Series`
@@ -111,6 +110,7 @@ These providers are currently blocked by their respective websites (e.g., Cloudf
 | **AnimeBlkom** | Cloudflare Block | `Disabled` |
 | **FajerShow** | Cloudflare Block | `Disabled` |
 | **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
+| **TopCinema** | Link Retrieval Issues | `Broken` |
 
 ---
 
