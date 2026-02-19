@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream3.topcinema
 
+
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -9,6 +10,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 
 class TopCinemaProvider : MainAPI() {
@@ -102,17 +106,12 @@ class TopCinemaProvider : MainAPI() {
     // Map keywords/names to WordPress Category IDs
     override val mainPage = mainPageOf(
         "" to "الأحدث",
+        "70137" to "مسلسلات رمضان 2026",
         "1207" to "أفلام أجنبية",
         "20349" to "أفلام عربية",
-        "56286" to "أفلام Netflix",
-        "64332" to "أفلام تركية",
-        "61015" to "أفلام هندية",
         "1895" to "أفلام أنمي",
-        "70137" to "مسلسلات رمضان 2026",
         "4" to "مسلسلات أجنبية",
         "17979" to "مسلسلات عربية",
-        "53256" to "مسلسلات تركية",
-        "56428" to "مسلسلات Netflix",
         "38" to "مسلسلات أنمي",
         "59186" to "مسلسلات كورية"
     )
@@ -123,30 +122,33 @@ class TopCinemaProvider : MainAPI() {
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
-    ): HomePageResponse {
-        val items = ArrayList<HomePageList>()
+    ): HomePageResponse = coroutineScope {
+        // Parallel fetching to prevent timeouts
+        val items = mainPage.map { (name, data) ->
+            async {
+                try {
+                    val url = if (data.isEmpty()) {
+                        "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
+                    } else {
+                        "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
+                    }
 
-        mainPage.forEach { (name, data) ->
-            val url = if (data.isEmpty()) {
-                "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
-            } else {
-                "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
-            }
-
-            try {
-                val responseText = app.get(url).text
-                val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
-                val searchResponses = response.mapNotNull { it.toSearchResponse() }
-
-                if (searchResponses.isNotEmpty()) {
-                    items.add(HomePageList(name, searchResponses))
+                    // Log.d("TopCinema", "Fetching: $url")
+                    val responseText = app.get(url).text
+                    val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
+                    val searchResponses = response.mapNotNull { it.toSearchResponse() }
+                    
+                    if (searchResponses.isNotEmpty()) {
+                        HomePageList(name, searchResponses)
+                    } else null
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    null
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
-        }
+        }.awaitAll().filterNotNull()
 
-        return newHomePageResponse(items)
+        newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
