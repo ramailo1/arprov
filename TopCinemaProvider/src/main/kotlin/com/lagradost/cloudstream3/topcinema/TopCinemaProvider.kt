@@ -123,9 +123,13 @@ class TopCinemaProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse = coroutineScope {
+        val startTotal = System.currentTimeMillis()
+        println("TopCinema: getMainPage starting...")
+
         // Parallel fetching to prevent timeouts
         val items = mainPage.map { (name, data) ->
             async {
+                val start = System.currentTimeMillis()
                 try {
                     val url = if (data.isEmpty()) {
                         "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
@@ -133,21 +137,23 @@ class TopCinemaProvider : MainAPI() {
                         "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
                     }
 
-                    // Log.d("TopCinema", "Fetching: $url")
                     val responseText = app.get(url).text
                     val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
                     val searchResponses = response.mapNotNull { it.toSearchResponse() }
+                    
+                    println("TopCinema: Fetched category '$name' in ${System.currentTimeMillis() - start}ms")
                     
                     if (searchResponses.isNotEmpty()) {
                         HomePageList(name, searchResponses)
                     } else null
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    println("TopCinema: Error fetching category '$name' after ${System.currentTimeMillis() - start}ms: ${e.message}")
                     null
                 }
             }
         }.awaitAll().filterNotNull()
 
+        println("TopCinema: getMainPage finished in ${System.currentTimeMillis() - startTotal}ms")
         newHomePageResponse(items)
     }
 
@@ -164,20 +170,20 @@ class TopCinemaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // We still fetch the page HTML for 'load' because we need the episode list/server links which might be stored in meta or HTML structure not fully exposed in the basic API (or requires separate calls).
-        // However, we can optimize by checking cached data if we implemented caching, but standard load is fine for detailed info.
-        
-        // Improvement: Use the '/watch/' url logic directly here if it's a movie to save a click? 
-        // No, we need metadata (plot, year, etc) which is on the main page.
+        val start = System.currentTimeMillis()
+        println("TopCinema: load starting for $url")
         
         var doc = app.get(url, headers = headers).document
+        println("TopCinema: Initial page fetched in ${System.currentTimeMillis() - start}ms")
         
         // Smart Redirect: If on episode page, find breadcrumb series link
         val seriesLink = doc.select(".breadcrumbs a[href*='/series/'], .breadcrumbs a[href*='/مسلسل/'], .breadcrumbs a:nth-last-child(2)").firstOrNull()
         if (seriesLink != null && url.contains("/episodes/|/الحلقة/".toRegex())) {
             val seriesUrl = fixUrl(seriesLink.attr("href"))
             if (seriesUrl != url) {
+                println("TopCinema: Redirecting to series: $seriesUrl")
                 doc = app.get(seriesUrl, headers = headers).document
+                println("TopCinema: Series page fetched in ${System.currentTimeMillis() - start}ms (cumulative)")
             }
         }
 
@@ -264,6 +270,7 @@ class TopCinemaProvider : MainAPI() {
 
             // Layout 3: AJAX Loading (MasterDecode theme)
             if (episodes.isEmpty() || doc.select(".seasonslist").isNotEmpty()) {
+                val startAjax = System.currentTimeMillis()
                 try {
                     val scripts = doc.select("script").joinToString("\n") { it.html() }
                     val ajaxtUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1)
@@ -273,8 +280,10 @@ class TopCinemaProvider : MainAPI() {
                         ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
 
                     if (postId != null) {
+                        println("TopCinema: Identified postId $postId, starting AJAX episode loading from $ajaxtUrl")
                         val seasonsList = doc.select(".seasonslist li").ifEmpty { listOf(null) }
                         seasonsList.forEachIndexed { index, seasonEl ->
+                            val sStart = System.currentTimeMillis()
                             val seasonNum = seasonEl?.attr("data-season")?.toIntOrNull() ?: (index + 1)
                             val response = app.post(
                                 "${ajaxtUrl}Single/Episodes.php",
@@ -299,13 +308,16 @@ class TopCinemaProvider : MainAPI() {
                                     this.season = seasonNum
                                 })
                             }
+                            println("TopCinema: Loaded season $seasonNum in ${System.currentTimeMillis() - sStart}ms")
                         }
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    println("TopCinema: AJAX loading error after ${System.currentTimeMillis() - startAjax}ms: ${e.message}")
                 }
+                println("TopCinema: Total AJAX episode loading took ${System.currentTimeMillis() - startAjax}ms")
             }
             
+            println("TopCinema: load finished in ${System.currentTimeMillis() - start}ms")
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }.sortedBy { it.episode }) {
                 this.posterUrl = posterUrl
                 this.tags = tags
@@ -322,18 +334,21 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        android.util.Log.d("TopCinema", "loadLinks called: $data")
+        val startTotal = System.currentTimeMillis()
+        println("TopCinema: loadLinks called: $data")
 
         val pageUrl = data.trimEnd('/')
         val watchUrl = "$pageUrl/watch/"
 
         // ── Step 1: fetch /watch/ page ──────────────────────────────────────
+        val startWatch = System.currentTimeMillis()
         val watchResponse = try {
             app.get(watchUrl, headers = headers)
         } catch (e: Exception) {
-            android.util.Log.e("TopCinema", "Failed to fetch watch page: ${e.message}")
+            println("TopCinema: Failed to fetch watch page: ${e.message}")
             null
         }
+        println("TopCinema: Watch page fetched in ${System.currentTimeMillis() - startWatch}ms")
 
         if (watchResponse != null && watchResponse.code == 200) {
             val doc = watchResponse.document
@@ -341,13 +356,13 @@ class TopCinemaProvider : MainAPI() {
             // Also immediately try the already-active iframe embed (first loaded server)
             val activeIframeUrl = doc.selectFirst("div.WatchIframe iframe, .player-embed iframe")?.attr("src") ?: ""
             if (activeIframeUrl.isNotEmpty() && !activeIframeUrl.contains("reviewrate.net")) {
-                android.util.Log.d("TopCinema", "Active embed iframe: $activeIframeUrl")
+                println("TopCinema: Active embed iframe: $activeIframeUrl")
                 safeExtract(activeIframeUrl, watchUrl, subtitleCallback, callback)
             }
 
             // Enumerate all server buttons
             val servers = doc.select("ul#watch > li, .servers-list li, [data-watch]")
-            android.util.Log.d("TopCinema", "Server count: ${servers.size}")
+            println("TopCinema: Server count: ${servers.size}")
 
             servers.forEach { li ->
                 // Prefer data-watch; fall back to noscript iframe src
@@ -356,29 +371,32 @@ class TopCinemaProvider : MainAPI() {
                 }
                 if (rawUrl.isEmpty() || rawUrl == pageUrl || rawUrl == watchUrl) return@forEach
 
-                android.util.Log.d("TopCinema", "Server URL: $rawUrl")
+                println("TopCinema: Processing server: $rawUrl")
 
                 when {
-                    // reviewrate.net is JS domain-locked to arabseed.show only – skip direct scrape.
-                    // Try the functionally identical w5.gamehub.cam mirror instead.
                     rawUrl.contains("reviewrate.net") -> {
+                        println("TopCinema: Domain-locked reviewrate detected, trying mirror...")
                         val mirrorUrl = rawUrl
                             .replace("m.reviewrate.net", "w5.gamehub.cam")
                             .replace("reviewrate.net", "w5.gamehub.cam")
-                        android.util.Log.d("TopCinema", "reviewrate mirror: $mirrorUrl")
+                        println("TopCinema: Mirror URL: $mirrorUrl")
                         scrapeM3u8(mirrorUrl, watchUrl, "ReviewRate", callback)
                     }
 
-                    rawUrl.contains("gamehub.cam") ->
+                    rawUrl.contains("gamehub.cam") -> {
+                        println("TopCinema: Handling GameHub/Mirror...")
                         scrapeM3u8(rawUrl, watchUrl, "GameHub", callback)
+                    }
 
-                    // filemoon needs the correct /e/ path (already correct from the HTML)
-                    rawUrl.contains("filemoon") || rawUrl.contains("moonplayer") ->
+                    rawUrl.contains("filemoon") || rawUrl.contains("moonplayer") -> {
+                        println("TopCinema: Handling FileMoon...")
                         safeExtract(rawUrl, watchUrl, subtitleCallback, callback)
+                    }
 
-                    // Standard extractors cover: vidmoly, savefiles, bigwarp, ups2up, doodstream, streamtape …
-                    else ->
+                    else -> {
+                        println("TopCinema: Handling standard extractor...")
                         safeExtract(rawUrl, watchUrl, subtitleCallback, callback)
+                    }
                 }
             }
         }
@@ -394,10 +412,11 @@ class TopCinemaProvider : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.e("TopCinema", "Fallback main page error: ${e.message}")
+                println("TopCinema: Fallback main page error: ${e.message}")
             }
         }
 
+        println("TopCinema: loadLinks finished in ${System.currentTimeMillis() - startTotal}ms")
         return true
     }
 
@@ -411,7 +430,7 @@ class TopCinemaProvider : MainAPI() {
         try {
             loadExtractor(url, referer, subtitleCallback, callback)
         } catch (e: Exception) {
-            android.util.Log.e("TopCinema", "loadExtractor failed for $url : ${e.message}")
+            println("TopCinema: loadExtractor failed for $url : ${e.message}")
             // Last-resort: try to pluck an m3u8 URL directly
             scrapeM3u8(url, referer, "Direct", callback)
         }
@@ -424,6 +443,7 @@ class TopCinemaProvider : MainAPI() {
         sourceName: String,
         callback: (ExtractorLink) -> Unit
     ) {
+        println("TopCinema: scrapeM3u8 starting for $url (Source: $sourceName)")
         try {
             val text = app.get(
                 url,
@@ -435,7 +455,7 @@ class TopCinemaProvider : MainAPI() {
                 .find(text)?.groupValues?.get(1)
 
             if (m3u8 != null) {
-                android.util.Log.d("TopCinema", "Scraped m3u8 from $url : $m3u8")
+                println("TopCinema: SUCCESS: Scraped m3u8 from $url -> $m3u8")
                 callback.invoke(
                     newExtractorLink(
                         sourceName, sourceName, m3u8,
@@ -455,7 +475,7 @@ class TopCinemaProvider : MainAPI() {
                 .firstOrNull { it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4")) }
 
             if (fileUrl != null) {
-                android.util.Log.d("TopCinema", "Scraped file from $url : $fileUrl")
+                println("TopCinema: SUCCESS: Scraped file from $url -> $fileUrl")
                 val type = if (fileUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
                     newExtractorLink(sourceName, sourceName, fileUrl, type = type) {
@@ -463,9 +483,11 @@ class TopCinemaProvider : MainAPI() {
                         this.quality = Qualities.Unknown.value
                     }
                 )
+            } else {
+                println("TopCinema: FAILURE: No m3u8/file found in $url source")
             }
         } catch (e: Exception) {
-            android.util.Log.e("TopCinema", "scrapeM3u8 failed for $url : ${e.message}")
+            println("TopCinema: scrapeM3u8 exception for $url : ${e.message}")
         }
     }
 }
