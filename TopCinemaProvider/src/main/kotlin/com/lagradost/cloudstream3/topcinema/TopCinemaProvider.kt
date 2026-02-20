@@ -13,6 +13,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 
 
 class TopCinemaProvider : MainAPI() {
@@ -119,41 +123,72 @@ class TopCinemaProvider : MainAPI() {
 
 
 
+    companion object {
+        private val cacheMutex = Mutex()
+        private var cachedHomePage: HomePageResponse? = null
+        private var lastCacheTime: Long = 0
+        private const val CACHE_TTL = 60 * 1000 // 60 seconds
+        
+        // Limit global parallel category fetches to avoid server throttling
+        private val categorySemaphore = Semaphore(3)
+    }
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
-    ): HomePageResponse = coroutineScope {
-        val startTotal = System.currentTimeMillis()
-        println("TopCinema: getMainPage starting...")
+    ): HomePageResponse {
+        val now = System.currentTimeMillis()
+        
+        // Handle concurrent calls by waiting for the same lock and reusing cache
+        cacheMutex.withLock {
+            if (cachedHomePage != null && (now - lastCacheTime) < CACHE_TTL) {
+                println("TopCinema: Returning cached getMainPage (Age: ${now - lastCacheTime}ms)")
+                return cachedHomePage!!
+            }
+            
+            println("TopCinema: getMainPage cache expired or empty, fetching fresh data...")
+            val result = fetchMainPageInternal()
+            
+            cachedHomePage = result
+            lastCacheTime = System.currentTimeMillis()
+            return result
+        }
+    }
 
-        // Parallel fetching to prevent timeouts
+    private suspend fun fetchMainPageInternal(): HomePageResponse = coroutineScope {
+        val startTotal = System.currentTimeMillis()
+        println("TopCinema: fetchMainPageInternal starting...")
+
+        // Parallel fetching with semaphore to limit concurrency
         val items = mainPage.map { (name, data) ->
             async {
-                val start = System.currentTimeMillis()
-                try {
-                    val url = if (data.isEmpty()) {
-                        "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
-                    } else {
-                        "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
-                    }
+                categorySemaphore.withPermit {
+                    val start = System.currentTimeMillis()
+                    try {
+                        val url = if (data.isEmpty()) {
+                            "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
+                        } else {
+                            "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
+                        }
 
-                    val responseText = app.get(url).text
-                    val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
-                    val searchResponses = response.mapNotNull { it.toSearchResponse() }
-                    
-                    println("TopCinema: Fetched category '$name' in ${System.currentTimeMillis() - start}ms")
-                    
-                    if (searchResponses.isNotEmpty()) {
-                        HomePageList(name, searchResponses)
-                    } else null
-                } catch (e: Exception) {
-                    println("TopCinema: Error fetching category '$name' after ${System.currentTimeMillis() - start}ms: ${e.message}")
-                    null
+                        val responseText = app.get(url).text
+                        val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
+                        val searchResponses = response.mapNotNull { it.toSearchResponse() }
+                        
+                        println("TopCinema: Fetched category '$name' in ${System.currentTimeMillis() - start}ms")
+                        
+                        if (searchResponses.isNotEmpty()) {
+                            HomePageList(name, searchResponses)
+                        } else null
+                    } catch (e: Exception) {
+                        println("TopCinema: Error fetching category '$name' after ${System.currentTimeMillis() - start}ms: ${e.message}")
+                        null
+                    }
                 }
             }
         }.awaitAll().filterNotNull()
 
-        println("TopCinema: getMainPage finished in ${System.currentTimeMillis() - startTotal}ms")
+        println("TopCinema: fetchMainPageInternal finished in ${System.currentTimeMillis() - startTotal}ms")
         newHomePageResponse(items)
     }
 
@@ -343,7 +378,7 @@ class TopCinemaProvider : MainAPI() {
         // ── Step 1: fetch /watch/ page ──────────────────────────────────────
         val startWatch = System.currentTimeMillis()
         val watchResponse = try {
-            app.get(watchUrl, headers = headers)
+            app.get(watchUrl, headers = headers + mapOf("Referer" to pageUrl))
         } catch (e: Exception) {
             println("TopCinema: Failed to fetch watch page: ${e.message}")
             null
@@ -355,7 +390,7 @@ class TopCinemaProvider : MainAPI() {
 
             // Also immediately try the already-active iframe embed (first loaded server)
             val activeIframeUrl = doc.selectFirst("div.WatchIframe iframe, .player-embed iframe")?.attr("src") ?: ""
-            if (activeIframeUrl.isNotEmpty() && !activeIframeUrl.contains("reviewrate.net")) {
+            if (activeIframeUrl.isNotEmpty()) {
                 println("TopCinema: Active embed iframe: $activeIframeUrl")
                 safeExtract(activeIframeUrl, watchUrl, subtitleCallback, callback)
             }
@@ -365,7 +400,6 @@ class TopCinemaProvider : MainAPI() {
             println("TopCinema: Server count: ${servers.size}")
 
             servers.forEach { li ->
-                // Prefer data-watch; fall back to noscript iframe src
                 val rawUrl = li.attr("data-watch").trim().ifEmpty {
                     li.select("noscript iframe, iframe").attr("src").trim()
                 }
@@ -374,18 +408,10 @@ class TopCinemaProvider : MainAPI() {
                 println("TopCinema: Processing server: $rawUrl")
 
                 when {
-                    rawUrl.contains("reviewrate.net") -> {
-                        println("TopCinema: Domain-locked reviewrate detected, trying mirror...")
-                        val mirrorUrl = rawUrl
-                            .replace("m.reviewrate.net", "w5.gamehub.cam")
-                            .replace("reviewrate.net", "w5.gamehub.cam")
-                        println("TopCinema: Mirror URL: $mirrorUrl")
-                        scrapeM3u8(mirrorUrl, watchUrl, "ReviewRate", callback)
-                    }
-
-                    rawUrl.contains("gamehub.cam") -> {
-                        println("TopCinema: Handling GameHub/Mirror...")
-                        scrapeM3u8(rawUrl, watchUrl, "GameHub", callback)
+                    rawUrl.contains("reviewrate.net") || rawUrl.contains("gamehub.cam") -> {
+                        println("TopCinema: Handling ReviewRate/Mirror...")
+                        // Direct extraction with Referer is often better than static mirror
+                        scrapeM3u8(rawUrl, watchUrl, "ReviewRate", callback)
                     }
 
                     rawUrl.contains("filemoon") || rawUrl.contains("moonplayer") -> {
@@ -407,7 +433,7 @@ class TopCinemaProvider : MainAPI() {
                 val mainDoc = app.get(pageUrl, headers = headers).document
                 mainDoc.select("iframe[src]").forEach { iframe ->
                     val src = iframe.attr("src").trim()
-                    if (src.isNotEmpty() && !src.contains("reviewrate.net")) {
+                    if (src.isNotEmpty() && !src.contains(Regex("ads|google|facebook"))) {
                         safeExtract(src, pageUrl, subtitleCallback, callback)
                     }
                 }
@@ -428,7 +454,8 @@ class TopCinemaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            loadExtractor(url, referer, subtitleCallback, callback)
+            // Standardize referer to the site's main URL to bypass simple domain locks
+            loadExtractor(url, "https://topcima.online/", subtitleCallback, callback)
         } catch (e: Exception) {
             println("TopCinema: loadExtractor failed for $url : ${e.message}")
             // Last-resort: try to pluck an m3u8 URL directly
@@ -445,9 +472,10 @@ class TopCinemaProvider : MainAPI() {
     ) {
         println("TopCinema: scrapeM3u8 starting for $url (Source: $sourceName)")
         try {
+            // Essential: Domain-locked servers like ReviewRate REQUIRE the site referer
             val text = app.get(
                 url,
-                headers = headers + mapOf("Referer" to referer)
+                headers = headers + mapOf("Referer" to "https://topcima.online/")
             ).text
 
             // Look for HLS
@@ -468,8 +496,8 @@ class TopCinemaProvider : MainAPI() {
                 return
             }
 
-            // Fallback look for JW-player "file" key
-            val fileUrl = Regex("""(?:file|src)\s*[=:]\s*["']([^"']+)["']""")
+            // Fallback look for JW-player or similar link patterns
+            val fileUrl = Regex("""(?:file|src|url|link)\s*[=:]\s*["']([^"']+)["']""")
                 .findAll(text)
                 .map { it.groupValues[1] }
                 .firstOrNull { it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4")) }
