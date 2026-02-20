@@ -91,6 +91,7 @@ graph TD
 | **GateAnime** | أنمي وأفلام | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | أنمي متخصص | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.tuk` |
+| **TopCinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.topcinema` |
 
 > [!NOTE]
 > **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.
@@ -110,7 +111,6 @@ graph TD
 | **AnimeBlkom** | حظر Cloudflare | `Disabled` |
 | **FajerShow** | حظر Cloudflare | `Disabled` |
 | **ShahidMBC** | حظر جغرافي / DRM | `Disabled` |
-| **TopCinema** | مشكلة في روابط التشغيل | `Broken` |
 
 ---
 

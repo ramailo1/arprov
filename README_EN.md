@@ -91,6 +91,7 @@ graph TD
 | **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
+| **TopCinema** | Movies & Series | `com.lagradost.cloudstream3.topcinema` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
@@ -110,7 +111,6 @@ These providers are currently blocked by their respective websites (e.g., Cloudf
 | **AnimeBlkom** | Cloudflare Block | `Disabled` |
 | **FajerShow** | Cloudflare Block | `Disabled` |
 | **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
-| **TopCinema** | Link Retrieval Issues | `Broken` |
 
 ---
 
