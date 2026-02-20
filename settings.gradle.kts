@@ -3,8 +3,7 @@ rootProject.name = "ArProv"
 val disabled = listOf<String>(
     "AnimeBlkomProvider",
     "FajerShowProvider", 
-    "ShahidMBCProvider",
-    "TopCinemaProvider"
+    "ShahidMBCProvider"
 )
 
 File(rootDir, ".").eachDir { dir ->

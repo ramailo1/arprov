@@ -322,65 +322,150 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        android.util.Log.d("TopCinema", "loadLinks data: $data")
-        
-        val watchUrl = if (data.endsWith("/")) "${data}watch/" else "$data/watch/"
-        val downloadUrl = if (data.endsWith("/")) "${data}download/" else "$data/download/"
+        android.util.Log.d("TopCinema", "loadLinks called: $data")
 
-        val watchResponse = app.get(watchUrl, headers = headers, cacheTime = 60)
-        if (watchResponse.code == 200) {
+        val pageUrl = data.trimEnd('/')
+        val watchUrl = "$pageUrl/watch/"
+
+        // ── Step 1: fetch /watch/ page ──────────────────────────────────────
+        val watchResponse = try {
+            app.get(watchUrl, headers = headers)
+        } catch (e: Exception) {
+            android.util.Log.e("TopCinema", "Failed to fetch watch page: ${e.message}")
+            null
+        }
+
+        if (watchResponse != null && watchResponse.code == 200) {
             val doc = watchResponse.document
-            val servers = doc.select("ul#watch li")
-            android.util.Log.d("TopCinema", "Found ${servers.size} servers in $watchUrl")
 
-            servers.forEach { element ->
-                val serverUrl = element.attr("data-watch").ifEmpty {
-                    element.select("iframe").attr("src")
+            // Also immediately try the already-active iframe embed (first loaded server)
+            val activeIframeUrl = doc.selectFirst("div.WatchIframe iframe, .player-embed iframe")?.attr("src") ?: ""
+            if (activeIframeUrl.isNotEmpty() && !activeIframeUrl.contains("reviewrate.net")) {
+                android.util.Log.d("TopCinema", "Active embed iframe: $activeIframeUrl")
+                safeExtract(activeIframeUrl, watchUrl, subtitleCallback, callback)
+            }
+
+            // Enumerate all server buttons
+            val servers = doc.select("ul#watch > li, .servers-list li, [data-watch]")
+            android.util.Log.d("TopCinema", "Server count: ${servers.size}")
+
+            servers.forEach { li ->
+                // Prefer data-watch; fall back to noscript iframe src
+                val rawUrl = li.attr("data-watch").trim().ifEmpty {
+                    li.select("noscript iframe, iframe").attr("src").trim()
                 }
-                if (serverUrl.isNotEmpty()) {
-                    android.util.Log.d("TopCinema", "Attempting server: $serverUrl")
-                    if (serverUrl.contains("reviewrate.net")) {
-                        // Specialized handling for ReviewRate if standard extractors fail
-                        try {
-                            val reviewResponse = app.get(serverUrl, headers = headers.plus("Referer" to watchUrl)).text
-                            val m3u8 = Regex("file:\"(.*?\\.m3u8)\"").find(reviewResponse)?.groupValues?.get(1)
-                            if (m3u8 != null) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        "M (ReviewRate)",
-                                        "M (ReviewRate)",
-                                        m3u8,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = watchUrl
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    } else {
-                        loadExtractor(serverUrl, watchUrl, subtitleCallback, callback)
+                if (rawUrl.isEmpty() || rawUrl == pageUrl || rawUrl == watchUrl) return@forEach
+
+                android.util.Log.d("TopCinema", "Server URL: $rawUrl")
+
+                when {
+                    // reviewrate.net is JS domain-locked to arabseed.show only – skip direct scrape.
+                    // Try the functionally identical w5.gamehub.cam mirror instead.
+                    rawUrl.contains("reviewrate.net") -> {
+                        val mirrorUrl = rawUrl
+                            .replace("m.reviewrate.net", "w5.gamehub.cam")
+                            .replace("reviewrate.net", "w5.gamehub.cam")
+                        android.util.Log.d("TopCinema", "reviewrate mirror: $mirrorUrl")
+                        scrapeM3u8(mirrorUrl, watchUrl, "ReviewRate", callback)
                     }
+
+                    rawUrl.contains("gamehub.cam") ->
+                        scrapeM3u8(rawUrl, watchUrl, "GameHub", callback)
+
+                    // filemoon needs the correct /e/ path (already correct from the HTML)
+                    rawUrl.contains("filemoon") || rawUrl.contains("moonplayer") ->
+                        safeExtract(rawUrl, watchUrl, subtitleCallback, callback)
+
+                    // Standard extractors cover: vidmoly, savefiles, bigwarp, ups2up, doodstream, streamtape …
+                    else ->
+                        safeExtract(rawUrl, watchUrl, subtitleCallback, callback)
                 }
             }
         }
 
-        // Fallback to Download page
-        val downloadResponse = app.get(downloadUrl, headers = headers, cacheTime = 60)
-        if (downloadResponse.code == 200) {
-            val doc = downloadResponse.document
-            android.util.Log.d("TopCinema", "Checking download page: $downloadUrl")
-            doc.select("a[href*='download'], a[href*='fredl'], a[href*='savefiles']").forEach { a ->
-                val href = fixUrl(a.attr("href"))
-                if (href.isNotEmpty() && href != downloadUrl) {
-                    android.util.Log.d("TopCinema", "Found download link: $href")
-                    loadExtractor(href, downloadUrl, subtitleCallback, callback)
+        // ── Step 2: fallback – scrape the main movie page for any iframe ────
+        if (watchResponse == null || watchResponse.code != 200) {
+            try {
+                val mainDoc = app.get(pageUrl, headers = headers).document
+                mainDoc.select("iframe[src]").forEach { iframe ->
+                    val src = iframe.attr("src").trim()
+                    if (src.isNotEmpty() && !src.contains("reviewrate.net")) {
+                        safeExtract(src, pageUrl, subtitleCallback, callback)
+                    }
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("TopCinema", "Fallback main page error: ${e.message}")
             }
         }
 
         return true
+    }
+
+    /** Wrap loadExtractor with per-server error isolation. */
+    private suspend fun safeExtract(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            loadExtractor(url, referer, subtitleCallback, callback)
+        } catch (e: Exception) {
+            android.util.Log.e("TopCinema", "loadExtractor failed for $url : ${e.message}")
+            // Last-resort: try to pluck an m3u8 URL directly
+            scrapeM3u8(url, referer, "Direct", callback)
+        }
+    }
+
+    /** Fetch a player page and scrape the first m3u8 / mp4 link found. */
+    private suspend fun scrapeM3u8(
+        url: String,
+        referer: String,
+        sourceName: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val text = app.get(
+                url,
+                headers = headers + mapOf("Referer" to referer)
+            ).text
+
+            // Look for HLS
+            val m3u8 = Regex("""["']?(https?://[^"'\s]+\.m3u8[^"'\s]*)["']?""")
+                .find(text)?.groupValues?.get(1)
+
+            if (m3u8 != null) {
+                android.util.Log.d("TopCinema", "Scraped m3u8 from $url : $m3u8")
+                callback.invoke(
+                    newExtractorLink(
+                        sourceName, sourceName, m3u8,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+                return
+            }
+
+            // Fallback look for JW-player "file" key
+            val fileUrl = Regex("""(?:file|src)\s*[=:]\s*["']([^"']+)["']""")
+                .findAll(text)
+                .map { it.groupValues[1] }
+                .firstOrNull { it.startsWith("http") && (it.contains(".m3u8") || it.contains(".mp4")) }
+
+            if (fileUrl != null) {
+                android.util.Log.d("TopCinema", "Scraped file from $url : $fileUrl")
+                val type = if (fileUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                callback.invoke(
+                    newExtractorLink(sourceName, sourceName, fileUrl, type = type) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("TopCinema", "scrapeM3u8 failed for $url : ${e.message}")
+        }
     }
 }
