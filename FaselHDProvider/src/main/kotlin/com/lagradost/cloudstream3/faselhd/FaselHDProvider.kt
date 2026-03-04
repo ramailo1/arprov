@@ -141,7 +141,17 @@ class FaselHDProvider : MainAPI() {
 
         // Extract the player iframe URL
         val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
-        val playerUrl = playerIframe?.absUrl("src")
+        var playerUrl = playerIframe?.absUrl("src")?.ifEmpty { playerIframe.absUrl("data-src") }
+
+        if (playerUrl.isNullOrEmpty()) {
+            val onclick = doc.selectFirst("ul.tabs-ul li[onclick], li.active[onclick]")?.attr("onclick")
+            if (onclick != null) {
+                val match = Regex("""'([^']+)'""").find(onclick)
+                if (match != null) {
+                    playerUrl = fixUrl(match.groupValues[1])
+                }
+            }
+        }
 
         if (!playerUrl.isNullOrEmpty()) {
             showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
