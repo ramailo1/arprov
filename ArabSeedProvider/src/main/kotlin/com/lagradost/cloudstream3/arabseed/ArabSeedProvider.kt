@@ -236,7 +236,7 @@ class ArabSeedProvider : MainAPI() {
             if (finalUrl.isNotEmpty()) {
                 if (finalUrl.contains("savefiles.com")) {
                     extractSaveFiles(finalUrl, name, callback)
-                } else if (finalUrl.startsWith("/") || finalUrl.contains("asd.pics") || finalUrl.contains("asd.homes")) {
+                } else if (finalUrl.startsWith("/") || listOf("asd.pics", "asd.homes", "arabseed.me", "seeeed.xyz", "reviewrate.net", "reviewtech.me", "arabseed.show").any { finalUrl.contains(it) }) {
                      // Internal link presumably
                      val urlToLoad = if (finalUrl.startsWith("/")) mainUrl + finalUrl else finalUrl
                      val doc = app.get(urlToLoad, headers = mapOf("Referer" to watchUrl)).document
