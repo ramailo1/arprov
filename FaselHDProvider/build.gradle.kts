@@ -1,4 +1,4 @@
-version = 10
+version = 11
 
 cloudstream {
     authors = listOf("ramailo1")
@@ -6,7 +6,7 @@ cloudstream {
     language = "ar"
     status = 3
     tvTypes = listOf("TvSeries", "Movie", "Anime")
-    iconUrl = "https://web1296x.faselhdx.bid/wp-content/themes/faselhd_2020/images/favicon.png"
+    iconUrl = "https://web31118x.faselhdx.bid/wp-content/themes/faselhd_2020/images/favicon.png"
 }
 
 android {

@@ -1,17 +1,21 @@
 package com.lagradost.cloudstream3.faselhd
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.lagradost.cloudstream3.CommonActivity.showToast
 import android.widget.Toast
 
 
 class FaselHDProvider : MainAPI() {
-    override var mainUrl = "https://web13018x.faselhdx.bid"
+    override var mainUrl = "https://web31118x.faselhdx.bid"
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
@@ -25,8 +29,11 @@ class FaselHDProvider : MainAPI() {
     )
 
     companion object {
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
+
+    private val cfKiller = CloudflareKiller()
+    private val mutex = Mutex()
 
     private val defaultHeaders = mapOf(
         "User-Agent" to USER_AGENT,
@@ -34,6 +41,55 @@ class FaselHDProvider : MainAPI() {
         "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
     )
 
+    // ---------- CLOUDFLARE BYPASS ----------
+    private fun isBlocked(doc: Document): Boolean {
+        val title = doc.select("title").text().lowercase()
+        val body = doc.body()?.text()?.lowercase() ?: ""
+        return title.contains("just a moment") ||
+               title.contains("security verification") ||
+               title.contains("access denied") ||
+               title.contains("cloudflare") ||
+               title.contains("verify you are human") ||
+               title.contains("performing security verification") ||
+               body.contains("verifying you are not a bot") ||
+               body.contains("performing security verification") ||
+               body.contains("checking your browser")
+    }
+
+    private suspend fun safeGet(url: String): Document? {
+        // First try: normal HTTP request
+        val response = runCatching {
+            val res = app.get(url, headers = defaultHeaders, timeout = 15)
+            if (res.isSuccessful && !isBlocked(res.document)) {
+                return@runCatching res
+            }
+            // Cloudflare detected — solve with CloudflareKiller
+            mutex.withLock {
+                val cfRes = app.get(url, headers = defaultHeaders, interceptor = cfKiller, timeout = 120)
+                if (cfRes.isSuccessful) {
+                    delay(2000) // Wait after WebView solve
+                }
+                cfRes
+            }
+        }.getOrNull()
+
+        if (response?.isSuccessful == true) {
+            val doc = response.document
+            if (isBlocked(doc)) return null
+            return doc
+        }
+
+        // Final retry with CloudflareKiller
+        return runCatching {
+            mutex.withLock {
+                val res = app.get(url, headers = defaultHeaders, interceptor = cfKiller, timeout = 120)
+                if (res.isSuccessful) delay(2000)
+                if (res.isSuccessful && !isBlocked(res.document)) res.document else null
+            }
+        }.getOrNull()
+    }
+
+    // ---------- MAIN PAGE ----------
     override val mainPage = mainPageOf(
         "$mainUrl/most_recent" to "المضاف حديثاَ",
         "$mainUrl/series" to "مسلسلات",
@@ -49,7 +105,7 @@ class FaselHDProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page"
-        val doc = app.get(url, headers = defaultHeaders).document
+        val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
         val list = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, list)
     }
@@ -85,12 +141,12 @@ class FaselHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=$query", headers = defaultHeaders).document
+        val doc = safeGet("$mainUrl/?s=$query") ?: return emptyList()
         return doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = defaultHeaders).document
+        val doc = safeGet(url) ?: return null
 
         val title = doc.selectFirst("div.title")?.text() ?: doc.selectFirst("title")?.text() ?: ""
         val poster = doc.selectFirst("div.posterImg img")?.attr("src")
@@ -137,7 +193,7 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data, headers = defaultHeaders).document
+        val doc = safeGet(data) ?: return false
 
         // Extract the player iframe URL
         val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
@@ -157,7 +213,6 @@ class FaselHDProvider : MainAPI() {
             showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
             try {
                 // Method 1: Use WebViewResolver to intercept m3u8 network requests
-                // The player uses obfuscated JS to generate video URLs, so we need WebView
                 val extractedUrls = mutableSetOf<String>()
                 
                 // Script to extract data-url attributes from quality buttons after JS executes
@@ -205,7 +260,7 @@ class FaselHDProvider : MainAPI() {
                                 }
                             }
                         } catch (e: Exception) {
-                            // e.printStackTrace()
+                            // ignore
                         }
                     },
                     timeout = 15000L
@@ -262,7 +317,7 @@ class FaselHDProvider : MainAPI() {
                 // Method 2: Fallback - try regex extraction from raw HTML (in case WebView fails)
                 if (extractedUrls.isEmpty()) {
                     val playerResponse = app.get(playerUrl, referer = data, headers = defaultHeaders).text
-                    val cleanedResponse = playerResponse.replace(Regex("""['\"]\s*\+\s*['"]"""), "")
+                    val cleanedResponse = playerResponse.replace(Regex("""['"]\s*\+\s*['"]"""), "")
                     val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io)[^\s"']*\.m3u8""")
                     val qualityPattern = Regex("""(\d+p)""")
                     
