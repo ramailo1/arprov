@@ -10,8 +10,6 @@ import org.jsoup.nodes.Document
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import com.lagradost.cloudstream3.CommonActivity.showToast
-import android.widget.Toast
 
 
 class FaselHDProvider : MainAPI() {
@@ -50,7 +48,6 @@ class FaselHDProvider : MainAPI() {
                title.contains("access denied") ||
                title.contains("cloudflare") ||
                title.contains("verify you are human") ||
-               title.contains("performing security verification") ||
                body.contains("verifying you are not a bot") ||
                body.contains("performing security verification") ||
                body.contains("checking your browser")
@@ -67,7 +64,7 @@ class FaselHDProvider : MainAPI() {
             mutex.withLock {
                 val cfRes = app.get(url, headers = defaultHeaders, interceptor = cfKiller, timeout = 120)
                 if (cfRes.isSuccessful) {
-                    delay(2000) // Wait after WebView solve
+                    delay(2000)
                 }
                 cfRes
             }
@@ -87,6 +84,31 @@ class FaselHDProvider : MainAPI() {
                 if (res.isSuccessful && !isBlocked(res.document)) res.document else null
             }
         }.getOrNull()
+    }
+
+    // ---------- POSTER EXTRACTION ----------
+    private fun Element.getPosterUrl(): String? {
+        val img = selectFirst("div.imgdiv-class img")
+            ?: selectFirst("div.postInner img")
+            ?: selectFirst("img")
+            ?: return null
+
+        var posterUrl = img.attr("data-src").ifEmpty {
+            img.attr("data-original").ifEmpty {
+                img.attr("data-image").ifEmpty {
+                    img.attr("data-lazy-src").ifEmpty {
+                        img.attr("data-srcset").ifEmpty {
+                            img.attr("src")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (posterUrl.isEmpty()) return null
+        if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+        // Remove resize query parameters for cleaner URLs
+        return posterUrl.substringBefore("?resize=").ifEmpty { posterUrl }
     }
 
     // ---------- MAIN PAGE ----------
@@ -113,25 +135,7 @@ class FaselHDProvider : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val title = selectFirst("div.postInner > div.h1")?.text() ?: return null
         val href = selectFirst("a")?.attr("href") ?: return null
-
-        val img = selectFirst("div.imgdiv-class img")
-            ?: selectFirst("div.postInner img")
-            ?: selectFirst("img")
-
-        var posterUrl = img?.let {
-            it.attr("data-src").ifEmpty {
-                it.attr("data-original").ifEmpty {
-                    it.attr("data-image").ifEmpty {
-                        it.attr("data-srcset").ifEmpty { it.attr("src") }
-                    }
-                }
-            }
-        }
-
-        if (!posterUrl.isNullOrEmpty() && posterUrl.startsWith("//")) {
-            posterUrl = "https:$posterUrl"
-        }
-
+        val posterUrl = getPosterUrl()
         val quality = selectFirst("span.quality")?.text()
 
         return newMovieSearchResponse(title, href, TvType.Movie) {
@@ -149,15 +153,27 @@ class FaselHDProvider : MainAPI() {
         val doc = safeGet(url) ?: return null
 
         val title = doc.selectFirst("div.title")?.text() ?: doc.selectFirst("title")?.text() ?: ""
-        val poster = doc.selectFirst("div.posterImg img")?.attr("src")
+
+        // Poster: check multiple selectors and data-src for lazy loading
+        val poster = doc.selectFirst("div.posterImg img")?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
+        } ?: doc.selectFirst("div.singlePost img")?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
+        } ?: doc.selectFirst(".single-post img, .posterBg img")?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
+        }
+
         val desc = doc.selectFirst("div.singleDesc p")?.text()
+            ?: doc.selectFirst("div.singleDesc")?.text()
 
         val tags = doc.select("div#singleList .col-xl-6").map { it.text() }
         val year = tags.find { it.contains("سنة الإنتاج") }?.substringAfter(":")?.trim()?.toIntOrNull()
         val duration = tags.find { it.contains("مدة") }?.substringAfter(":")?.trim()
         val recommendations = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
 
-        val isSeries = doc.select("div.epAll").isNotEmpty() || doc.select("div.seasonLoop").isNotEmpty()
+        // Detect series by looking for episode links or season items
+        val episodeElements = doc.select("div#epAll a, div.epAll a")
+        val isSeries = episodeElements.isNotEmpty() || doc.select("div.seasonLoop").isNotEmpty()
 
         return if (!isSeries) {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -169,7 +185,7 @@ class FaselHDProvider : MainAPI() {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            for (ep in doc.select("div#epAll a")) {
+            for (ep in episodeElements) {
                 val epTitle = ep.text()
                 val epUrl = ep.attr("href")
                 val epNumber = Regex("""الحلقة\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
@@ -195,153 +211,151 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         val doc = safeGet(data) ?: return false
 
-        // Extract the player iframe URL
-        val playerIframe = doc.selectFirst("iframe[name=\"player_iframe\"], iframe[src*=\"video_player\"]")
-        var playerUrl = playerIframe?.absUrl("src")?.ifEmpty { playerIframe.absUrl("data-src") }
+        // Step 1: Extract player URL from server tabs (ul.tabs-ul li[onclick])
+        val serverItems = doc.select("ul.tabs-ul li[onclick]")
+        var playerUrl: String? = null
 
-        if (playerUrl.isNullOrEmpty()) {
-            val onclick = doc.selectFirst("ul.tabs-ul li[onclick], li.active[onclick]")?.attr("onclick")
-            if (onclick != null) {
-                val match = Regex("""'([^']+)'""").find(onclick)
-                if (match != null) {
-                    playerUrl = fixUrl(match.groupValues[1])
-                }
+        for (server in serverItems) {
+            val onclick = server.attr("onclick")
+            // Pattern: player_iframe.location.href = 'URL'
+            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]\s*""").find(onclick)
+                ?: Regex("""['"]([^'"]+)['"]\s*$""").find(onclick)
+            if (match != null) {
+                playerUrl = fixUrl(match.groupValues[1])
+                break
             }
         }
 
-        if (!playerUrl.isNullOrEmpty()) {
-            showToast("يرجى الانتظار بضع ثوانٍ حتى يبدأ المشغل...", Toast.LENGTH_SHORT)
-            try {
-                // Method 1: Use WebViewResolver to intercept m3u8 network requests
-                val extractedUrls = mutableSetOf<String>()
-                
-                // Script to extract data-url attributes from quality buttons after JS executes
-                val extractionScript = """
-                    (function() {
-                        var urls = [];
-                        var buttons = document.querySelectorAll('.hd_btn[data-url]');
-                        for (var i = 0; i < buttons.length; i++) {
-                            var btn = buttons[i];
-                            var url = btn.getAttribute('data-url');
-                            var quality = btn.innerText.trim();
-                            if (url) urls.push(quality + '|||' + url);
-                        }
-                        // Also check for videoSrc global variable
-                        if (window.videoSrc) urls.push('Auto|||' + window.videoSrc);
-                        return JSON.stringify(urls);
-                    })()
-                """.trimIndent()
-                
-                // Create WebViewResolver that intercepts m3u8 URLs AND extracts from DOM
-                val resolver = WebViewResolver(
-                    interceptUrl = Regex("""\.m3u8"""),
-                    additionalUrls = listOf(
-                        Regex("""scdns\.io.*\.m3u8"""),
-                        Regex("""master\.m3u8"""),
-                        Regex("""playlist\.m3u8""")
-                    ),
-                    userAgent = USER_AGENT,
-                    script = extractionScript,
-                    scriptCallback = { result ->
-                        // Parse the JSON array of "quality|||url" strings
-                        try {
-                            val cleaned = result.trim('"').replace("\\\"", "\"")
-                            if (cleaned.startsWith("[")) {
-                                val urlList = cleaned.removeSurrounding("[", "]")
-                                    .split("\",\"")
-                                    .map { it.trim('"') }
-                                    .filter { it.contains("|||") }
-                                
-                                for (entry in urlList) {
-                                    val parts = entry.split("|||")
-                                    if (parts.size == 2) {
-                                        extractedUrls.add(entry)
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // ignore
-                        }
-                    },
-                    timeout = 15000L
-                )
-                
-                // Resolve using WebView
-                val (mainRequest, additionalRequests) = resolver.resolveUsingWebView(
-                    requestCreator("GET", playerUrl, headers = defaultHeaders + mapOf("Referer" to data))
-                )
-                
-                // Process intercepted m3u8 URLs from network requests
-                val allRequests = listOfNotNull(mainRequest) + additionalRequests
-                for (request in allRequests) {
-                    val videoUrl = request.url.toString()
-                    if (videoUrl.contains(".m3u8") && extractedUrls.none { it.endsWith(videoUrl) }) {
-                        val qualityText = when {
-                            videoUrl.contains("1080") -> "1080p"
-                            videoUrl.contains("720") -> "720p"
-                            videoUrl.contains("480") -> "480p"
-                            videoUrl.contains("360") -> "360p"
-                            videoUrl.contains("master") -> "Auto"
-                            else -> "Unknown"
-                        }
-                        extractedUrls.add("$qualityText|||$videoUrl")
-                    }
+        // Fallback: look for iframe directly on the page
+        if (playerUrl.isNullOrEmpty()) {
+            val iframe = doc.selectFirst("iframe[name=player_iframe], iframe[src*=video_player]")
+            playerUrl = iframe?.absUrl("src")?.ifEmpty { iframe.absUrl("data-src") }
+        }
+
+        if (playerUrl.isNullOrEmpty()) return false
+
+        // Step 2: Load the video_player page and extract m3u8 URLs
+        try {
+            // Method 1: Try WebViewResolver to intercept m3u8 requests from JWPlayer
+            val resolver = WebViewResolver(
+                interceptUrl = Regex("""\.m3u8"""),
+                additionalUrls = listOf(
+                    Regex("""scdns\.io.*\.m3u8"""),
+                    Regex("""master\.m3u8"""),
+                    Regex("""playlist\.m3u8""")
+                ),
+                userAgent = USER_AGENT
+            )
+
+            val requestHeaders = defaultHeaders + mapOf("Referer" to data)
+            val request = requestCreator("GET", playerUrl, headers = requestHeaders)
+
+            val (mainReq, additionalReqs) = resolver.resolveUsingWebView(request)
+
+            val allIntercepted = listOfNotNull(mainReq) + additionalReqs
+            val m3u8Urls = mutableSetOf<String>()
+
+            for (intercepted in allIntercepted) {
+                val videoUrl = intercepted.url.toString()
+                if (videoUrl.contains(".m3u8")) {
+                    m3u8Urls.add(videoUrl)
                 }
-                
-                // Give WebView script time to execute
-                delay(500)
-                
-                // Emit all extracted URLs as ExtractorLinks
-                for (entry in extractedUrls) {
-                    val parts = entry.split("|||")
-                    if (parts.size == 2) {
-                        val qualityText = parts[0]
-                        val videoUrl = parts[1]
-                        
-                        if (videoUrl.contains(".m3u8")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    this.name,
-                                    "$name - $qualityText",
-                                    videoUrl,
-                                    ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = playerUrl
-                                    this.quality = getQualityInt(qualityText)
-                                }
-                            )
-                        }
-                    }
-                }
-                
-                // Method 2: Fallback - try regex extraction from raw HTML (in case WebView fails)
-                if (extractedUrls.isEmpty()) {
-                    val playerResponse = app.get(playerUrl, referer = data, headers = defaultHeaders).text
-                    val cleanedResponse = playerResponse.replace(Regex("""['"]\s*\+\s*['"]"""), "")
-                    val m3u8Pattern = Regex("""https?://[^\s"']+(?:scdns\.io)[^\s"']*\.m3u8""")
-                    val qualityPattern = Regex("""(\d+p)""")
-                    
-                    for (match in m3u8Pattern.findAll(cleanedResponse)) {
-                        val videoUrl = match.value
-                        val qualityMatch = qualityPattern.find(videoUrl)
-                        val qualityText = qualityMatch?.value ?: "Auto"
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                this.name,
-                                "$name - $qualityText",
-                                videoUrl,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = playerUrl
-                                this.quality = getQualityInt(qualityText)
-                            }
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                // e.printStackTrace()
             }
+
+            // Emit all intercepted m3u8 URLs
+            for (videoUrl in m3u8Urls) {
+                val qualityText = when {
+                    videoUrl.contains("1080") -> "1080p"
+                    videoUrl.contains("720") -> "720p"
+                    videoUrl.contains("480") -> "480p"
+                    videoUrl.contains("360") -> "360p"
+                    videoUrl.contains("master") -> "Auto"
+                    else -> "Unknown"
+                }
+
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        "$name - $qualityText",
+                        videoUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = getQualityInt(qualityText)
+                    }
+                )
+            }
+
+            if (m3u8Urls.isNotEmpty()) return true
+
+            // Method 2: Fallback — Load player page via HTTP and regex for m3u8 URLs in source
+            val playerResponse = app.get(
+                playerUrl,
+                referer = data,
+                headers = defaultHeaders,
+                interceptor = cfKiller,
+                timeout = 120
+            ).text
+
+            // Look for scdns.io m3u8 URLs in the raw HTML/JS source
+            val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8[^\s"'\\]*)""")
+            for (match in m3u8Pattern.findAll(playerResponse)) {
+                val videoUrl = match.value
+                    .replace("\\u002F", "/")
+                    .replace("\\/", "/")
+
+                if (videoUrl.contains("scdns.io") || videoUrl.contains("faselhdx")) {
+                    val qualityText = when {
+                        videoUrl.contains("1080") -> "1080p"
+                        videoUrl.contains("720") -> "720p"
+                        videoUrl.contains("480") -> "480p"
+                        videoUrl.contains("360") -> "360p"
+                        videoUrl.contains("master") -> "Auto"
+                        else -> "Unknown"
+                    }
+
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            "$name - $qualityText",
+                            videoUrl,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = playerUrl
+                            this.quality = getQualityInt(qualityText)
+                        }
+                    )
+                }
+            }
+
+            // Method 3: Look for data-url attributes in quality buttons (if JS already executed)
+            val dataUrlPattern = Regex("""data-url=["'](https?://[^"']+\.m3u8[^"']*)["']""")
+            for (match in dataUrlPattern.findAll(playerResponse)) {
+                val videoUrl = match.groupValues[1]
+                val qualityText = when {
+                    videoUrl.contains("1080") -> "1080p"
+                    videoUrl.contains("720") -> "720p"
+                    videoUrl.contains("480") -> "480p"
+                    videoUrl.contains("360") -> "360p"
+                    videoUrl.contains("master") -> "Auto"
+                    else -> "Unknown"
+                }
+
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        "$name - $qualityText",
+                        videoUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = getQualityInt(qualityText)
+                    }
+                )
+            }
+
+        } catch (e: Exception) {
+            // e.printStackTrace()
         }
 
         return true
