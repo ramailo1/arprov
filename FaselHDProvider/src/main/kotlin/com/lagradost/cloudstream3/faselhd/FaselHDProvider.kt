@@ -86,7 +86,10 @@ class FaselHDProvider : MainAPI() {
         val img = selectFirst("div.imgdiv-class img")
             ?: selectFirst("div.postInner img")
             ?: selectFirst("img")
-            ?: return null
+
+        println("FaselHD Debug: Poster Image Element: " + img?.outerHtml())
+
+        if (img == null) return null
 
         var posterUrl = img.attr("data-src").ifEmpty {
             img.attr("data-original").ifEmpty {
@@ -99,6 +102,8 @@ class FaselHDProvider : MainAPI() {
                 }
             }
         }
+
+        println("FaselHD Debug: Raw Extracted Poster URL: $posterUrl")
 
         if (posterUrl.isEmpty()) return null
         if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
@@ -122,8 +127,20 @@ class FaselHDProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page"
-        val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
-        val list = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
+        println("FaselHD Debug: Requesting main page url: $url")
+        
+        val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList()).also {
+            println("FaselHD Debug: safeGet returned null for main page url: $url")
+        }
+        
+        println("FaselHD Debug: Main page title: ${doc.title()} HTML length: ${doc.html().length}")
+        
+        val elements = doc.select("div.postDiv")
+        println("FaselHD Debug: Found ${elements.size} postDiv elements on main page")
+        
+        val list = elements.mapNotNull { it.toSearchResult() }
+        println("FaselHD Debug: Mapped ${list.size} search results from ${elements.size} elements")
+        
         return newHomePageResponse(request.name, list)
     }
 
@@ -204,11 +221,18 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = safeGet(data) ?: return false
+        println("FaselHD Debug: loadLinks called for: $data")
+        val doc = safeGet(data) ?: return false.also {
+            println("FaselHD Debug: loadLinks safeGet returned null for $data")
+        }
+        
+        println("FaselHD Debug: loadLinks page title: ${doc.title()}")
 
         // Step 1: Extract player URL from server tabs (ul.tabs-ul li[onclick])
         val serverItems = doc.select("ul.tabs-ul li[onclick]")
         var playerUrl: String? = null
+        
+        println("FaselHD Debug: Found ${serverItems.size} server items in ul.tabs-ul li[onclick]")
 
         for (server in serverItems) {
             val onclick = server.attr("onclick")
@@ -225,12 +249,19 @@ class FaselHDProvider : MainAPI() {
         if (playerUrl.isNullOrEmpty()) {
             val iframe = doc.selectFirst("iframe[name=player_iframe], iframe[src*=video_player]")
             playerUrl = iframe?.absUrl("src")?.ifEmpty { iframe.absUrl("data-src") }
+            println("FaselHD Debug: Used iframe fallback, playerUrl=$playerUrl")
+        } else {
+            println("FaselHD Debug: Selected playerUrl out of loop: $playerUrl")
         }
 
-        if (playerUrl.isNullOrEmpty()) return false
+        if (playerUrl.isNullOrEmpty()) {
+            println("FaselHD Debug: playerUrl is empty, returning false")
+            return false
+        }
 
         // Step 2: Load the video_player page and extract m3u8 URLs
         try {
+            println("FaselHD Debug: Will extract from playerUrl: $playerUrl")
             // Method 1: Try WebViewResolver to intercept m3u8 requests from JWPlayer
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""\.m3u8"""),
