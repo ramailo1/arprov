@@ -14,6 +14,10 @@ import kotlinx.coroutines.sync.withLock
 
 class FaselHDProvider : MainAPI() {
     override var mainUrl = "https://web31118x.faselhdx.bid"
+    private val faselHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer" to mainUrl
+    )
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
@@ -31,7 +35,9 @@ class FaselHDProvider : MainAPI() {
 
     private val defaultHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
+        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer" to mainUrl
     )
 
     // ---------- CLOUDFLARE BYPASS ----------
@@ -153,6 +159,7 @@ class FaselHDProvider : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.quality = getQualityFromString(quality)
+            this.posterHeaders = faselHeaders
         }
     }
 
@@ -194,6 +201,7 @@ class FaselHDProvider : MainAPI() {
                 this.plot = desc
                 this.duration = duration?.filter { it.isDigit() }?.toIntOrNull()
                 this.recommendations = recommendations
+                this.posterHeaders = faselHeaders
             }
         } else {
             val episodes = ArrayList<Episode>()
@@ -211,6 +219,7 @@ class FaselHDProvider : MainAPI() {
                 this.year = year
                 this.plot = desc
                 this.recommendations = recommendations
+                this.posterHeaders = faselHeaders
             }
         }
     }
@@ -262,58 +271,8 @@ class FaselHDProvider : MainAPI() {
         // Step 2: Load the video_player page and extract m3u8 URLs
         try {
             println("FaselHD Debug: Will extract from playerUrl: $playerUrl")
-            // Method 1: Try WebViewResolver to intercept m3u8 requests from JWPlayer
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8"""),
-                additionalUrls = listOf(
-                    Regex("""scdns\.io.*\.m3u8"""),
-                    Regex("""master\.m3u8"""),
-                    Regex("""playlist\.m3u8""")
-                ),
-                userAgent = USER_AGENT
-            )
 
-            val requestHeaders = defaultHeaders + mapOf("Referer" to data)
-            val request = requestCreator("GET", playerUrl, headers = requestHeaders)
-
-            val (mainReq, additionalReqs) = resolver.resolveUsingWebView(request)
-
-            val allIntercepted = listOfNotNull(mainReq) + additionalReqs
-            val m3u8Urls = mutableSetOf<String>()
-
-            for (intercepted in allIntercepted) {
-                val videoUrl = intercepted.url.toString()
-                if (videoUrl.contains(".m3u8")) {
-                    m3u8Urls.add(videoUrl)
-                }
-            }
-
-            // Emit all intercepted m3u8 URLs
-            for (videoUrl in m3u8Urls) {
-                val qualityText = when {
-                    videoUrl.contains("1080") -> "1080p"
-                    videoUrl.contains("720") -> "720p"
-                    videoUrl.contains("480") -> "480p"
-                    videoUrl.contains("360") -> "360p"
-                    videoUrl.contains("master") -> "Auto"
-                    else -> "Unknown"
-                }
-
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        "$name - $qualityText",
-                        videoUrl,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = getQualityInt(qualityText)
-                    }
-                )
-            }
-
-            if (m3u8Urls.isNotEmpty()) return true
-
+            // Re-using cfKiller interceptor to handle any challenges on player page
             // Method 2: Fallback — Load player page via HTTP and regex for m3u8 URLs in source
             val playerResponse = app.get(
                 playerUrl,
