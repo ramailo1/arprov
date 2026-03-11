@@ -246,11 +246,13 @@ class FaselHDProvider : MainAPI() {
         for (server in serverItems) {
             val onclick = server.attr("onclick")
             // Pattern: player_iframe.location.href = 'URL'
-            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]\s*""").find(onclick)
-                ?: Regex("""['"]([^'"]+)['"]\s*$""").find(onclick)
+            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]""").find(onclick)
             if (match != null) {
-                playerUrl = fixUrl(match.groupValues[1])
-                break
+                val url = fixUrl(match.groupValues[1])
+                if (!url.contains("faselhd.life") && !onclick.contains("window.open")) {
+                    playerUrl = url
+                    break
+                }
             }
         }
 
