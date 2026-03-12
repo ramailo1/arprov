@@ -1,27 +1,24 @@
 package com.lagradost.cloudstream3.faselhd
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.nicehttp.requestCreator
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import android.webkit.CookieManager
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
+import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import kotlin.coroutines.resume
-import java.net.URI
-import okhttp3.HttpUrl
-import okhttp3.Cookie
 
 class FaselHDProvider : MainAPI() {
     override var name = "FaselHD"
@@ -45,21 +42,15 @@ class FaselHDProvider : MainAPI() {
     private val cfKiller = CloudflareKiller()
     private val mutex = Mutex()
 
-    // ────────────────────────────────────────────────
-    // Helpers
-    // ────────────────────────────────────────────────
-
-    /** Resolve the real host once — call at the TOP of each public method, store locally. */
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
-        val uri  = java.net.URL(resp.url.trimEnd('/'))
+        val uri = java.net.URL(resp.url.trimEnd('/'))
         val host = "${uri.protocol}://${uri.host}"
         println("FaselHD: Host resolved to $host")
         host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
 
-    /** Swap whatever subdomain is in [url] with [host]. */
     private fun normalizeUrl(url: String, host: String): String {
         if (!url.contains(baseDomain)) return url
         val old = runCatching { java.net.URL(url) }.getOrNull() ?: return url
@@ -67,41 +58,109 @@ class FaselHDProvider : MainAPI() {
     }
 
     private fun headers(host: String, referer: String = host) = mapOf(
-        "Accept"          to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
-        "User-Agent"      to userAgent,
-        "Referer"         to referer,
-        "Origin"          to host,
+        "User-Agent" to userAgent,
+        "Referer" to referer,
+        "Origin" to host,
         "sec-ch-ua-mobile" to "?1",
         "sec-ch-ua-platform" to "\"Android\""
     )
+
+    private fun isBlocked(doc: Document): Boolean {
+        val t = doc.select("title").text().lowercase()
+        val b = doc.body().text().lowercase()
+        return "just a moment" in t || "cloudflare" in t ||
+            "security verification" in t || "access denied" in t ||
+            "verifying you are not a bot" in b ||
+            "performing security verification" in b
+    }
+
+    private suspend fun safeGet(url: String, referer: String = url): Document? {
+        println("FaselHD: safeGet -> $url (Referer: $referer)")
+        return runCatching {
+            val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
+            if (res.isSuccessful && !isBlocked(res.document)) {
+                println("FaselHD: Plain GET successful for $url")
+                return res.document
+            }
+
+            println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
+            mutex.withLock {
+                val cfRes = app.get(
+                    url,
+                    headers = headers(mainUrl, referer),
+                    interceptor = cfKiller,
+                    timeout = 120
+                )
+                if (cfRes.isSuccessful) {
+                    println("FaselHD: CloudflareKiller successful for $url")
+                    delay(2000)
+                    if (!isBlocked(cfRes.document)) return cfRes.document
+                }
+                println("FaselHD: CloudflareKiller failed or still blocked for $url")
+                null
+            }
+        }.getOrNull()
+    }
+
+    private fun buildPosterHeaders(finalPoster: String?, fallbackReferer: String): Map<String, String>? {
+        if (finalPoster.isNullOrBlank()) return null
+        val posterReferer = runCatching {
+            java.net.URI(finalPoster).let { "${it.scheme}://${it.host}/" }
+        }.getOrNull() ?: fallbackReferer
+
+        return mapOf(
+            "Referer" to posterReferer,
+            "User-Agent" to userAgent,
+            "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+        )
+    }
 
     private fun syncCookiesToWebView(mainHost: String) {
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
 
-            // ✅ Sync ALL cookies for ALL hosts from cfKiller.savedCookies
             var count = 0
             cfKiller.savedCookies.forEach { (host, cookies) ->
-                cookies.forEach {
-                    cookieManager.setCookie("https://$host", it.toString())
+                cookies.forEach { cookie ->
+                    val cookieString = cookie.toString()
+                    cookieManager.setCookie("https://$host", cookieString)
+                    
+                    // Also mirror to mainHost if it's a domain cookie or on same base
+                    if (host.endsWith(baseDomain) && host != mainHost) {
+                        cookieManager.setCookie("https://$mainHost", cookieString)
+                    }
                     count++
                 }
             }
+
             cookieManager.flush()
             println("FaselHD: Synced $count total cookies to WebView across all hosts")
-            println("FaselHD: WebView cookies for $mainHost: ${cookieManager.getCookie("https://$mainHost")}")
+            println("FaselHD: WebView cookies for https://$mainHost: ${cookieManager.getCookie("https://$mainHost")}")
         } catch (e: Exception) {
             println("FaselHD: Cookie sync failed: ${e.message}")
         }
     }
 
-    private suspend fun extractM3u8ViaWebView(playerUrl: String, mainHost: String): String? {
+    @SuppressLint("SetJavaScriptEnabled")
+    private suspend fun extractM3u8ViaWebView(
+        playerUrl: String,
+        playerHost: String,
+        referer: String
+    ): String? {
         return suspendCancellableCoroutine { continuation ->
             val handler = Handler(Looper.getMainLooper())
             handler.post {
-                val webView = WebView(AcraApplication.context ?: return@post continuation.resume(null))
+                val context = AcraApplication.context
+                if (context == null) {
+                    continuation.resume(null)
+                    return@post
+                }
+
+                val webView = WebView(context)
+                val cookieManager = CookieManager.getInstance()
                 var resolved = false
                 var captureStarted = false
                 var captureTimeout: Runnable? = null
@@ -110,17 +169,40 @@ class FaselHDProvider : MainAPI() {
                     if (resolved) return
                     resolved = true
                     captureTimeout?.let(handler::removeCallbacks)
-                    webView.destroy()
+                    runCatching { webView.stopLoading() }
+                    runCatching { webView.destroy() }
                     continuation.resume(value)
                 }
+
+                continuation.invokeOnCancellation {
+                    handler.post {
+                        if (!resolved) {
+                            resolved = true
+                            runCatching { webView.stopLoading() }
+                            runCatching { webView.destroy() }
+                        }
+                    }
+                }
+
+                cookieManager.setAcceptCookie(true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+                }
+
+                syncCookiesToWebView(java.net.URI(playerUrl).host)
 
                 webView.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
                     mediaPlaybackRequiresUserGesture = false
+                    loadsImagesAutomatically = true
+                    allowFileAccess = true
+                    allowContentAccess = true
                     userAgentString = userAgent
                 }
+
+                webView.webChromeClient = android.webkit.WebChromeClient()
 
                 webView.webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(
@@ -128,10 +210,14 @@ class FaselHDProvider : MainAPI() {
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
-                        if (u.contains("m3u8", true) ||
+                        if (
+                            u.contains("m3u8", true) ||
                             u.contains("scdns.io", true) ||
                             u.contains(".ts", true) ||
-                            u.contains(".mp4", true)) {
+                            u.contains(".mp4", true) ||
+                            u.contains("playlist", true) ||
+                            u.contains("manifest", true)
+                        ) {
                             println("FaselHD: WebView subrequest -> $u")
                             finish(u)
                         }
@@ -140,11 +226,15 @@ class FaselHDProvider : MainAPI() {
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        println("FaselHD: WebView finished loading $url")
-
                         val currentUrl = url ?: ""
-                        if (currentUrl.contains("challenges.cloudflare.com") || currentUrl.contains("/cdn-cgi/")) return
-                        if (!currentUrl.contains("video_player")) return
+                        println("FaselHD: WebView finished loading $currentUrl")
+
+                        if (
+                            currentUrl.contains("challenges.cloudflare.com", true) ||
+                            currentUrl.contains("/cdn-cgi/", true)
+                        ) return
+
+                        if (!currentUrl.contains("video_player", true)) return
                         if (captureStarted) return
                         captureStarted = true
 
@@ -158,26 +248,45 @@ class FaselHDProvider : MainAPI() {
                         repeat(90) { i ->
                             view?.postDelayed({
                                 if (resolved) return@postDelayed
-                                view.evaluateJavascript("""
+
+                                view.evaluateJavascript(
+                                    """
                                     (function() {
                                         try {
-                                            const perf = performance.getEntriesByType('resource')
-                                                .map(x => x.name)
-                                                .filter(x => /m3u8|scdns\.io|master\.m3u8|\.ts|\.mp4/i.test(x));
-                                            if (perf.length) return perf[0];
-
                                             if (window.jwplayer) {
                                                 const p = jwplayer();
-                                                const item = p && p.getPlaylistItem ? p.getPlaylistItem() : null;
-                                                const file =
-                                                    item && item.file ? item.file :
-                                                    item && item.sources && item.sources[0] ? item.sources[0].file || "" : "";
-                                                if (file) return file;
+                                                try { p.setMute(true); } catch(e) {}
+                                                try { p.play(); } catch(e) {}
+                                                if (p) {
+                                                    const item = p.getPlaylistItem ? p.getPlaylistItem() : null;
+                                                    const file =
+                                                        item && item.file ? item.file :
+                                                        item && item.sources && item.sources[0]
+                                                            ? (item.sources[0].file || "")
+                                                            : "";
+                                                    if (file) return file;
+                                                }
                                             }
+
+                                            const perf = performance.getEntriesByType('resource')
+                                                .map(x => x.name)
+                                                .filter(x => /m3u8|scdns\.io|master\.m3u8|\.ts|\.mp4|playlist|manifest/i.test(x));
+                                            if (perf.length) return perf[0];
+
+                                            const video = document.querySelector("video");
+                                            if (video && video.src) return video.src;
+
+                                            const source = document.querySelector("video source");
+                                            if (source && source.src) return source.src;
+
+                                            const html = document.documentElement ? document.documentElement.outerHTML : "";
+                                            const match = html.match(/https?:\/\/[^\s"'\\]+(?:\.m3u8|\.mp4)[^\s"'\\]*/i);
+                                            if (match) return match[0];
                                         } catch (e) {}
                                         return "";
                                     })();
-                                """.trimIndent()) { raw ->
+                                    """.trimIndent()
+                                ) { raw ->
                                     val found = raw.trim('"')
                                     if (found.isNotBlank() && !resolved) {
                                         println("FaselHD: Found stream via JS polling -> $found")
@@ -189,9 +298,15 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
 
-                syncCookiesToWebView(mainHost)
                 println("FaselHD: WebView loading player: $playerUrl")
-                webView.loadUrl(playerUrl)
+                webView.loadUrl(
+                    playerUrl,
+                    mapOf(
+                        "Referer" to referer,
+                        "Origin" to playerHost,
+                        "User-Agent" to userAgent
+                    )
+                )
 
                 handler.postDelayed({
                     if (!resolved) {
@@ -203,94 +318,43 @@ class FaselHDProvider : MainAPI() {
         }
     }
 
-    private fun isBlocked(doc: Document): Boolean {
-        val t = doc.select("title").text().lowercase()
-        val b = doc.body().text().lowercase()
-        return "just a moment" in t || "cloudflare" in t ||
-               "security verification" in t || "access denied" in t ||
-               "verifying you are not a bot" in b ||
-               "performing security verification" in b
-    }
-
-    /** Fetch a page. Try plain first; fall back to cfKiller once per mutex. */
-    private suspend fun safeGet(url: String, referer: String = url): Document? {
-        println("FaselHD: safeGet -> $url (Referer: $referer)")
-        return runCatching {
-            val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
-            if (res.isSuccessful && !isBlocked(res.document)) {
-                println("FaselHD: Plain GET successful for $url")
-                return res.document
-            }
-            println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
-            mutex.withLock {
-                val cfRes = app.get(
-                    url,
-                    headers      = headers(mainUrl, referer),
-                    interceptor  = cfKiller,
-                    timeout      = 120
-                )
-                if (cfRes.isSuccessful) {
-                    println("FaselHD: CloudflareKiller successful for $url")
-                    delay(2000)
-                    if (!isBlocked(cfRes.document)) return cfRes.document
-                }
-                println("FaselHD: CloudflareKiller failed or still blocked for $url")
-                null
-            }
-        }.getOrNull()
-    }
-
-    // ────────────────────────────────────────────────
-    // Main page
-    // ────────────────────────────────────────────────
-
     override val mainPage = mainPageOf(
-        "/most_recent"   to "المضاف حديثاً",
-        "/series"        to "مسلسلات",
-        "/movies"        to "أفلام",
-        "/asian-series"  to "مسلسلات آسيوية",
-        "/anime"         to "الأنمي",
-        "/tvshows"       to "البرامج التلفزيونية",
+        "/most_recent" to "المضاف حديثاً",
+        "/series" to "مسلسلات",
+        "/movies" to "أفلام",
+        "/asian-series" to "مسلسلات آسيوية",
+        "/anime" to "الأنمي",
+        "/tvshows" to "البرامج التلفزيونية",
         "/dubbed-movies" to "أفلام مدبلجة",
-        "/hindi"         to "أفلام هندية",
-        "/asian-movies"  to "أفلام آسيوية",
-        "/anime-movies"  to "أفلام أنمي",
+        "/hindi" to "أفلام هندية",
+        "/asian-movies" to "أفلام آسيوية",
+        "/anime-movies" to "أفلام أنمي",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        println("FaselHD: getMainPage -> ${request.name} (Page: $page)")
         val host = resolveHost()
-        val url  = if (page == 1) "$host${request.data}"
-                   else "$host${request.data.trimEnd('/')}/page/$page"
-        val doc  = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
+        val url = if (page == 1) "$host${request.data}"
+        else "$host${request.data.trimEnd('/')}/page/$page"
+
+        val doc = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
         val results = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
-        println("FaselHD: Found ${results.size} results on main page")
         return newHomePageResponse(request.name, results)
     }
 
-    // ────────────────────────────────────────────────
-    // Search
-    // ────────────────────────────────────────────────
-
     override suspend fun search(query: String): List<SearchResponse> {
-        println("FaselHD: searching for -> $query")
         val host = resolveHost()
-        val doc  = safeGet("$host/?s=$query", host) ?: return emptyList()
-        val results = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
-        println("FaselHD: Found ${results.size} results for search query")
-        return results
+        val doc = safeGet("$host/?s=$query", host) ?: return emptyList()
+        return doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
     }
-
-    // ────────────────────────────────────────────────
-    // Card builder
-    // ────────────────────────────────────────────────
 
     private fun Element.toSearchResult(): SearchResponse? {
         val title = selectFirst("div.h1, .entry-title, h3, .title")?.text()
             ?: selectFirst("img")?.attr("alt")?.takeIf { it.isNotEmpty() }
             ?: return null
+
         val href = selectFirst("a")?.attr("abs:href")
-            ?.takeIf { it.startsWith("http") } ?: return null
+            ?.takeIf { it.startsWith("http") }
+            ?: return null
 
         val img = selectFirst("img")
         val poster = img?.let {
@@ -300,149 +364,123 @@ class FaselHDProvider : MainAPI() {
         }?.let {
             when {
                 it.startsWith("http") -> it
-                it.startsWith("//")   -> "https:$it"
-                it.startsWith("/")    -> "$mainUrl$it"
+                it.startsWith("//") -> "https:$it"
+                it.startsWith("/") -> "$mainUrl$it"
                 else -> null
             }
         }
 
         val quality = selectFirst("span.quality, span.qualitySpan")?.text()
-        val type    = if (href.contains("/episode/") || href.contains("/episodes/"))
-                          TvType.TvSeries else TvType.Movie
+        val type = if (href.contains("/episode/") || href.contains("/episodes/")) TvType.TvSeries else TvType.Movie
 
         return newMovieSearchResponse(title, href, type) {
-            val finalPoster = poster?.takeIf { it.isNotBlank() }
-            val posterReferer = finalPoster?.let {
-                runCatching { java.net.URI(it).let { u -> "${u.scheme}://${u.host}/" } }.getOrNull()
-            } ?: href
+            posterUrl = poster?.takeIf { it.isNotBlank() }
+            this.quality = getQualityFromString(quality)
 
-            posterUrl     = finalPoster?.let { normalizeUrl(it, mainUrl) }
-            this.quality  = getQualityFromString(quality)
-            // Use the poster's own host as Referer — avoids 403 on poster CDNs
-            posterHeaders = mapOf(
-                "Referer" to posterReferer,
-                "User-Agent" to userAgent,
-                "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-            )
+            buildPosterHeaders(posterUrl, href)?.let {
+                posterHeaders = it
+            }
         }
     }
 
-    // ────────────────────────────────────────────────
-    // Load
-    // ────────────────────────────────────────────────
-
     override suspend fun load(url: String): LoadResponse? {
         println("FaselHD: load -> $url")
-        val host    = resolveHost()
+        val host = resolveHost()
         val pageUrl = normalizeUrl(url, host)
         println("FaselHD: Normalized page URL -> $pageUrl")
-        val doc     = safeGet(pageUrl, pageUrl) ?: return null
+
+        val doc = safeGet(pageUrl, pageUrl) ?: return null
 
         val title = doc.selectFirst("div.title, h1.postTitle, div.h1, .entry-title, h1")
             ?.text() ?: doc.title()
-        println("FaselHD: Title -> $title")
 
-        // og:image first — CDN-hosted, no CF cookie needed
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
             ?.takeIf { it.startsWith("http") }
             ?: doc.selectFirst("meta[property='og:image:secure_url']")?.attr("content")
-            ?.takeIf { it.startsWith("http") }
+                ?.takeIf { it.startsWith("http") }
             ?: doc.selectFirst("meta[name='twitter:image']")?.attr("content")
-            ?.takeIf { it.startsWith("http") }
+                ?.takeIf { it.startsWith("http") }
             ?: doc.selectFirst("div.posterImg img, .entry-thumbnail img, img.posterImg")?.let {
                 it.attr("data-src").ifEmpty { it.attr("src") }
             }?.let { if (it.startsWith("//")) "https:$it" else it }
-        println("FaselHD: Poster -> $poster")
 
         val finalPoster = poster?.takeIf { it.isNotBlank() }
-        val posterReferer = finalPoster?.let {
-            runCatching { java.net.URI(it).let { u -> "${u.scheme}://${u.host}/" } }.getOrNull()
-        } ?: pageUrl
-
-        val ph   = mapOf(
-            "Referer" to posterReferer,
-            "User-Agent" to userAgent,
-            "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-        )
         val desc = doc.selectFirst("div.singleDesc p, div.singleDesc, .entry-content p")?.text()
         val year = doc.select("a[href*='series_year'], a[href*='movies_year']")
             .firstOrNull()?.text()?.toIntOrNull()
-        val recs = doc.select("div.postDiv, article, .entry-box")
-            .mapNotNull { it.toSearchResult() }
+        val recs = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
 
         val isEpisodePage = "/episodes/" in pageUrl
-        val isSeries      = "/series/" in pageUrl || "/tvshow" in pageUrl ||
+        val isSeries =
+            "/series/" in pageUrl || "/tvshow" in pageUrl ||
                 "/anime/" in pageUrl || "/asian-series/" in pageUrl ||
                 doc.select("#seasonList, div.seasonLoop, #epAll, div.epAll, #DivEpisodesList").isNotEmpty() ||
                 doc.select("a[href*='/episodes/']").isNotEmpty()
-        println("FaselHD: isSeries=$isSeries, isEpisodePage=$isEpisodePage")
 
         return when {
             isEpisodePage -> {
-                println("FaselHD: Treatment as Single Episode")
-                newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
+                newTvSeriesLoadResponse(
+                    title,
+                    pageUrl,
+                    TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
-                    this.year           = year
-                    plot                = desc
-                    posterHeaders       = ph
+                    posterUrl = finalPoster
+                    backgroundPosterUrl = finalPoster
+                    this.year = year
+                    plot = desc
+                    buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
                 }
             }
 
             isSeries -> {
-                println("FaselHD: Treatment as Series")
                 val rawLinks = doc.select(
                     "#epAll a, div.epAll a, #DivEpisodesList a, .episodes-list a, a[href*='/episodes/']"
                 )
+
                 val episodes = if (rawLinks.isNotEmpty()) {
-                    println("FaselHD: Found ${rawLinks.size} episode links")
                     rawLinks.mapIndexed { idx, el ->
-                        val epUrl   = normalizeUrl(el.attr("abs:href"), host)
+                        val epUrl = normalizeUrl(el.attr("abs:href"), host)
                         val epTitle = el.text().trim()
                         val epNum = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull() ?: (idx + 1)
-                        newEpisode(epUrl) { name = epTitle; episode = epNum }
+                        newEpisode(epUrl) {
+                            name = epTitle
+                            episode = epNum
+                        }
                     }.distinctBy { it.data }
                 } else {
-                    println("FaselHD: No episode links found, checking for seasons")
                     doc.select("#seasonList a, div.seasonLoop a").mapIndexed { idx, el ->
-                        val seasonUrl   = normalizeUrl(el.attr("abs:href"), host)
+                        val seasonUrl = normalizeUrl(el.attr("abs:href"), host)
                         val seasonTitle = el.text().trim()
                         newEpisode(seasonUrl) {
-                            name   = seasonTitle
+                            name = seasonTitle
                             season = Regex("""\d+""").find(seasonTitle)?.value?.toIntOrNull() ?: (idx + 1)
                         }
                     }
                 }
-                println("FaselHD: Total episodes collected -> ${episodes.size}")
+
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
-                    this.year           = year
-                    plot                = desc
-                    recommendations     = recs
-                    posterHeaders       = ph
+                    posterUrl = finalPoster
+                    backgroundPosterUrl = finalPoster
+                    this.year = year
+                    plot = desc
+                    recommendations = recs
+                    buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
                 }
             }
 
             else -> {
-                println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
-                    this.year           = year
-                    plot                = desc
-                    recommendations     = recs
-                    posterHeaders       = ph
+                    posterUrl = finalPoster
+                    backgroundPosterUrl = finalPoster
+                    this.year = year
+                    plot = desc
+                    recommendations = recs
+                    buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
                 }
             }
         }
     }
-
-    // ────────────────────────────────────────────────
-    // loadLinks — single clean path
-    // ────────────────────────────────────────────────
 
     override suspend fun loadLinks(
         data: String,
@@ -451,15 +489,13 @@ class FaselHDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         println("FaselHD: loadLinks for data -> $data")
-        val host    = resolveHost()
+        val host = resolveHost()
         val pageUrl = normalizeUrl(data, host)
         println("FaselHD: Normalized loadLinks URL -> $pageUrl")
 
-        // Step 1: get the episode/movie page (CF cleared)
-        val doc  = safeGet(pageUrl, pageUrl) ?: return false
+        val doc = safeGet(pageUrl, pageUrl) ?: return false
         val html = doc.html()
 
-        // Step 2: find the player token URL directly in page HTML
         val playerUrl = doc.selectFirst(
             "iframe[src*=video_player], iframe[data-src*=video_player]"
         )?.let {
@@ -471,27 +507,25 @@ class FaselHDProvider : MainAPI() {
                 .find(html)?.value?.let {
                     if (it.startsWith("http")) it else "$host/$it"
                 }
-        
+
         val rawPlayerUrl = playerUrl ?: return rawScan(html, pageUrl, callback)
         val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
-        
+
         println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
-        // Step 3: Option B - Extract directly from Player Page HTML (Fastest)
-        println("FaselHD: Fetching player page HTML via safeGet...")
         val playerDoc = safeGet(rawPlayerUrl, pageUrl)
         if (playerDoc != null) {
             val playerHtml = playerDoc.html()
-            println("FaselHD: PlayerHTML preview -> ${playerHtml.take(2000).replace("\n", " ")}")
             val links = extractFromPlayerHtml(playerHtml)
             println("FaselHD: extractFromPlayerHtml found ${links.size} links")
             if (links.isNotEmpty()) {
                 links.forEach { url ->
                     callback(
                         newExtractorLink(
-                            name, name, url,
-                            if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8
-                            else ExtractorLinkType.VIDEO
+                            name,
+                            name,
+                            url,
+                            if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             referer = rawPlayerUrl
                             quality = getVideoQuality(url)
@@ -502,33 +536,32 @@ class FaselHDProvider : MainAPI() {
             }
         }
 
-        // Step 4: Fallback - use custom WebView extraction (Handles XHR/Turnstile)
         println("FaselHD: Direct extraction failed, attempting custom WebView extraction...")
-        val resolved = extractM3u8ViaWebView(rawPlayerUrl, playerHost)
+        val resolved = extractM3u8ViaWebView(
+            playerUrl = rawPlayerUrl,
+            playerHost = playerHost,
+            referer = pageUrl
+        )
         println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
         if (resolved != null) {
             callback(
                 newExtractorLink(
-                    name, name, resolved,
-                    if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8
-                    else ExtractorLinkType.VIDEO
+                    name,
+                    name,
+                    resolved,
+                    if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    referer = playerUrl
+                    referer = rawPlayerUrl
                     quality = getVideoQuality(resolved)
                 }
             )
             return true
         }
 
-        // Step 5: Everything failed, final rawScan of original page
         println("FaselHD: Everything failed, final rawScan of original page")
         return rawScan(html, pageUrl, callback)
     }
-
-    // ────────────────────────────────────────────────
-    // Link Extraction Helpers
-    // ────────────────────────────────────────────────
 
     private fun extractFromPlayerHtml(html: String): List<String> {
         val patterns = listOf(
@@ -541,11 +574,11 @@ class FaselHDProvider : MainAPI() {
         return patterns.flatMap { it.findAll(html).map { m -> m.groupValues[1] } }.distinct()
     }
 
-    // ────────────────────────────────────────────────
-    // Raw HTML scanner (final fallback only)
-    // ────────────────────────────────────────────────
-
-    private suspend fun rawScan(html: String, referer: String, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun rawScan(
+        html: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         println("FaselHD: Starting rawScan for $referer")
         val urls = Regex("""(https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*)""")
             .findAll(html)
@@ -556,31 +589,29 @@ class FaselHDProvider : MainAPI() {
 
         println("FaselHD: rawScan found ${urls.size} potential links")
         if (urls.isEmpty()) return false
+
         urls.forEach { url ->
             val isM3u8 = url.contains(".m3u8", true)
-            println("FaselHD: rawScan found -> $url")
             callback(
                 newExtractorLink(
-                    name, name, url,
+                    name,
+                    name,
+                    url,
                     if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
                     this.referer = referer
-                    quality      = getVideoQuality(url)
+                    quality = getVideoQuality(url)
                 }
             )
         }
         return true
     }
 
-    // ────────────────────────────────────────────────
-    // Quality helper
-    // ────────────────────────────────────────────────
-
     private fun getVideoQuality(url: String) = when {
         "1080" in url -> Qualities.P1080.value
-        "720"  in url -> Qualities.P720.value
-        "480"  in url -> Qualities.P480.value
-        "360"  in url -> Qualities.P360.value
-        else          -> Qualities.Unknown.value
+        "720" in url -> Qualities.P720.value
+        "480" in url -> Qualities.P480.value
+        "360" in url -> Qualities.P360.value
+        else -> Qualities.Unknown.value
     }
 }
