@@ -13,11 +13,7 @@ import kotlinx.coroutines.sync.withLock
 
 
 class FaselHDProvider : MainAPI() {
-    override var mainUrl = "https://web31118x.faselhdx.bid"
-    private val faselHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Referer" to mainUrl
-    )
+    override var mainUrl = "https://web3126x.faselhdx.bid"
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
@@ -39,6 +35,18 @@ class FaselHDProvider : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Referer" to mainUrl
     )
+
+    // Derive poster headers from a given page URL so the Referer always matches the content domain
+    private fun posterHeadersFor(pageUrl: String): Map<String, String> {
+        val origin = runCatching {
+            val uri = java.net.URI(pageUrl)
+            "${uri.scheme}://${uri.host}"
+        }.getOrElse { mainUrl }
+        return mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer" to origin
+        )
+    }
 
     // ---------- CLOUDFLARE BYPASS ----------
     private fun isBlocked(doc: Document): Boolean {
@@ -93,8 +101,6 @@ class FaselHDProvider : MainAPI() {
             ?: selectFirst("div.postInner img")
             ?: selectFirst("img")
 
-        println("FaselHD Debug: Poster Image Element: " + img?.outerHtml())
-
         if (img == null) return null
 
         var posterUrl = img.attr("data-src").ifEmpty {
@@ -108,8 +114,6 @@ class FaselHDProvider : MainAPI() {
                 }
             }
         }
-
-        println("FaselHD Debug: Raw Extracted Poster URL: $posterUrl")
 
         if (posterUrl.isEmpty()) return null
         if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
@@ -139,18 +143,13 @@ class FaselHDProvider : MainAPI() {
             println("FaselHD Debug: safeGet returned null for main page url: $url")
         }
         
-        println("FaselHD Debug: Main page title: ${doc.title()} HTML length: ${doc.html().length}")
-        
         val elements = doc.select("div.postDiv")
-        println("FaselHD Debug: Found ${elements.size} postDiv elements on main page")
-        
-        val list = elements.mapNotNull { it.toSearchResult() }
-        println("FaselHD Debug: Mapped ${list.size} search results from ${elements.size} elements")
+        val list = elements.mapNotNull { it.toSearchResult(url) }
         
         return newHomePageResponse(request.name, list)
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun Element.toSearchResult(pageUrl: String = mainUrl): SearchResponse? {
         val title = selectFirst("div.postInner > div.h1")?.text() ?: return null
         val href = selectFirst("a")?.attr("href") ?: return null
         val posterUrl = getPosterUrl()
@@ -159,7 +158,7 @@ class FaselHDProvider : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             this.quality = getQualityFromString(quality)
-            this.posterHeaders = faselHeaders
+            this.posterHeaders = posterHeadersFor(href)
         }
     }
 
@@ -188,7 +187,9 @@ class FaselHDProvider : MainAPI() {
         val tags = doc.select("div#singleList .col-xl-6").map { it.text() }
         val year = tags.find { it.contains("سنة الإنتاج") }?.substringAfter(":")?.trim()?.toIntOrNull()
         val duration = tags.find { it.contains("مدة") }?.substringAfter(":")?.trim()
-        val recommendations = doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
+        val recommendations = doc.select("div.postDiv").mapNotNull { it.toSearchResult(url) }
+
+        val ph = posterHeadersFor(url)
 
         // Detect series by looking for episode links or season items
         val episodeElements = doc.select("div#epAll a, div.epAll a")
@@ -201,7 +202,7 @@ class FaselHDProvider : MainAPI() {
                 this.plot = desc
                 this.duration = duration?.filter { it.isDigit() }?.toIntOrNull()
                 this.recommendations = recommendations
-                this.posterHeaders = faselHeaders
+                this.posterHeaders = ph
             }
         } else {
             val episodes = ArrayList<Episode>()
@@ -219,7 +220,7 @@ class FaselHDProvider : MainAPI() {
                 this.year = year
                 this.plot = desc
                 this.recommendations = recommendations
-                this.posterHeaders = faselHeaders
+                this.posterHeaders = ph
             }
         }
     }
@@ -230,130 +231,266 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("FaselHD Debug: loadLinks called for: $data")
+        println("FaselHD Debug: ══════════════════════════════════════")
+        println("FaselHD Debug: loadLinks START for: $data")
+        println("FaselHD Debug: ══════════════════════════════════════")
+
         val doc = safeGet(data) ?: return false.also {
-            println("FaselHD Debug: loadLinks safeGet returned null for $data")
+            println("FaselHD Debug: [STEP 0 FAIL] safeGet returned null – page could not be fetched")
         }
-        
-        println("FaselHD Debug: loadLinks page title: ${doc.title()}")
 
-        // Step 1: Extract player URL from server tabs (ul.tabs-ul li[onclick])
+        println("FaselHD Debug: [STEP 0 OK] Page fetched. Title: '${doc.title()}' | HTML length: ${doc.html().length}")
+
+        // ── STEP 1: Collect ALL onclick server items for diagnosis ──────────────
         val serverItems = doc.select("ul.tabs-ul li[onclick]")
-        var playerUrl: String? = null
-        
-        println("FaselHD Debug: Found ${serverItems.size} server items in ul.tabs-ul li[onclick]")
+        println("FaselHD Debug: [STEP 1] Found ${serverItems.size} server tab(s) in ul.tabs-ul li[onclick]")
+        serverItems.forEachIndexed { i, el ->
+            println("FaselHD Debug: [STEP 1]   tab[$i] text='${el.text()}' onclick='${el.attr("onclick")}'")
+        }
 
-        for (server in serverItems) {
-            val onclick = server.attr("onclick")
-            // Pattern: player_iframe.location.href = 'URL'
-            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]""").find(onclick)
-            if (match != null) {
-                val url = fixUrl(match.groupValues[1])
-                if (!url.contains("faselhd.life") && !onclick.contains("window.open")) {
-                    playerUrl = url
-                    break
-                }
+        // Also log ANY li with onclick in case selector is too narrow
+        val allOnclick = doc.select("li[onclick]")
+        println("FaselHD Debug: [STEP 1] Total li[onclick] anywhere on page: ${allOnclick.size}")
+        if (allOnclick.size != serverItems.size) {
+            allOnclick.forEachIndexed { i, el ->
+                println("FaselHD Debug: [STEP 1]   li[onclick][$i] text='${el.text().take(60)}' onclick='${el.attr("onclick").take(120)}'")
             }
         }
 
-        // Fallback: look for iframe directly on the page
+        // ── STEP 1b: Try to match video_player URL from onclick ──────────────────
+        var playerUrl: String? = null
+        for (server in serverItems) {
+            val onclick = server.attr("onclick")
+            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]""").find(onclick)
+                ?: Regex("""['"]([^'"]*https?://[^'"]+)['"]""").find(onclick) // broader fallback
+            if (match != null) {
+                val raw = match.groupValues[1]
+                val url = fixUrl(raw)
+                println("FaselHD Debug: [STEP 1b] Regex matched raw='$raw' → fixed='$url'")
+                val skip = url.contains("faselhd.life") || onclick.contains("window.open")
+                println("FaselHD Debug: [STEP 1b] Skip=$skip (faselhd.life=${url.contains("faselhd.life")}, window.open=${onclick.contains("window.open")})")
+                if (!skip) {
+                    playerUrl = url
+                    break
+                }
+            } else {
+                println("FaselHD Debug: [STEP 1b] No URL regex match in onclick='${onclick.take(120)}'")
+            }
+        }
+
+        // ── STEP 1c: iframe fallback ─────────────────────────────────────────────
         if (playerUrl.isNullOrEmpty()) {
+            println("FaselHD Debug: [STEP 1c] No playerUrl from tabs — trying iframe fallback")
+            val allIframes = doc.select("iframe")
+            println("FaselHD Debug: [STEP 1c] Total iframes on episode page: ${allIframes.size}")
+            allIframes.forEachIndexed { i, f ->
+                println("FaselHD Debug: [STEP 1c]   iframe[$i] src='${f.attr("src")}' data-src='${f.attr("data-src")}' name='${f.attr("name")}'")
+            }
             val iframe = doc.selectFirst("iframe[name=player_iframe], iframe[src*=video_player]")
             playerUrl = iframe?.absUrl("src")?.ifEmpty { iframe.absUrl("data-src") }
-            println("FaselHD Debug: Used iframe fallback, playerUrl=$playerUrl")
+            println("FaselHD Debug: [STEP 1c] iframe-fallback playerUrl=$playerUrl")
         } else {
-            println("FaselHD Debug: Selected playerUrl out of loop: $playerUrl")
+            println("FaselHD Debug: [STEP 1b] playerUrl resolved: $playerUrl")
         }
 
         if (playerUrl.isNullOrEmpty()) {
-            println("FaselHD Debug: playerUrl is empty, returning false")
+            println("FaselHD Debug: [STEP 1 FAIL] playerUrl is null/empty — dumping page HTML snippet:")
+            println(doc.html().take(3000))
             return false
         }
 
-        // Step 2: Load the video_player page and extract m3u8 URLs
+        println("FaselHD Debug: [STEP 1 OK] playerUrl = $playerUrl")
+
+        var foundLinks = false
+
+        // ── STEP 2: loadExtractor on playerUrl directly ──────────────────────────
+        println("FaselHD Debug: [STEP 2] Trying loadExtractor(playerUrl)…")
         try {
-            println("FaselHD Debug: Will extract from playerUrl: $playerUrl")
+            val extracted = loadExtractor(playerUrl!!, data, subtitleCallback, callback)
+            println("FaselHD Debug: [STEP 2] loadExtractor returned $extracted")
+            if (extracted) foundLinks = true
+        } catch (e: Exception) {
+            println("FaselHD Debug: [STEP 2 EXCEPTION] ${e::class.simpleName}: ${e.message}")
+        }
 
-            // Re-using cfKiller interceptor to handle any challenges on player page
-            // Method 2: Fallback — Load player page via HTTP and regex for m3u8 URLs in source
-            val playerResponse = app.get(
-                playerUrl,
-                referer = data,
-                headers = defaultHeaders,
-                interceptor = cfKiller,
-                timeout = 120
-            ).text
+        // ── STEP 3: WebViewResolver with broad pattern ───────────────────────────
+        if (!foundLinks) {
+            println("FaselHD Debug: [STEP 3] Starting WebViewResolver on: $playerUrl")
+            try {
+                val pattern = Regex("""(\.m3u8|\.mp4|googlevideo\.com/videoplayback|/playlist\.m3u8|/index\.m3u8)""")
+                println("FaselHD Debug: [STEP 3] Pattern: ${pattern.pattern}")
+                val result = WebViewResolver(pattern).resolveUsingWebView(playerUrl!!)
+                val resolvedRequest = result.first
+                println("FaselHD Debug: [STEP 3] WebViewResolver result: $resolvedRequest")
 
-            // Look for scdns.io m3u8 URLs in the raw HTML/JS source
-            val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8[^\s"'\\]*)""")
-            for (match in m3u8Pattern.findAll(playerResponse)) {
-                val videoUrl = match.value
-                    .replace("\\u002F", "/")
-                    .replace("\\/", "/")
+                if (resolvedRequest != null) {
+                    val videoUrl = resolvedRequest.url.toString()
+                    val headers = resolvedRequest.headers.toMap()
+                    println("FaselHD Debug: [STEP 3 OK] Intercepted URL: $videoUrl")
+                    println("FaselHD Debug: [STEP 3] Request headers: $headers")
 
-                if (videoUrl.contains("scdns.io") || videoUrl.contains("faselhdx")) {
+                    val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
                     val qualityText = when {
                         videoUrl.contains("1080") -> "1080p"
-                        videoUrl.contains("720") -> "720p"
-                        videoUrl.contains("480") -> "480p"
-                        videoUrl.contains("360") -> "360p"
-                        videoUrl.contains("master") -> "Auto"
-                        else -> "Unknown"
+                        videoUrl.contains("720")  -> "720p"
+                        videoUrl.contains("480")  -> "480p"
+                        videoUrl.contains("360")  -> "360p"
+                        else                      -> "Auto"
                     }
-
                     callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            "$name - $qualityText",
-                            videoUrl,
-                            ExtractorLinkType.M3U8
+                        newExtractorLink(this.name, "$name - $qualityText", videoUrl,
+                            if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             this.referer = playerUrl
                             this.quality = getQualityInt(qualityText)
                         }
                     )
+                    foundLinks = true
+                } else {
+                    println("FaselHD Debug: [STEP 3 NULL] WebViewResolver returned null — pattern not matched in page network requests")
                 }
+            } catch (e: Exception) {
+                println("FaselHD Debug: [STEP 3 EXCEPTION] ${e::class.simpleName}: ${e.message}")
             }
-
-            // Method 3: Look for data-url attributes in quality buttons (if JS already executed)
-            val dataUrlPattern = Regex("""data-url=["'](https?://[^"']+\.m3u8[^"']*)["']""")
-            for (match in dataUrlPattern.findAll(playerResponse)) {
-                val videoUrl = match.groupValues[1]
-                val qualityText = when {
-                    videoUrl.contains("1080") -> "1080p"
-                    videoUrl.contains("720") -> "720p"
-                    videoUrl.contains("480") -> "480p"
-                    videoUrl.contains("360") -> "360p"
-                    videoUrl.contains("master") -> "Auto"
-                    else -> "Unknown"
-                }
-
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        "$name - $qualityText",
-                        videoUrl,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = getQualityInt(qualityText)
-                    }
-                )
-            }
-
-        } catch (e: Exception) {
-            // e.printStackTrace()
         }
 
-        return true
+        // ── STEP 4: Raw-fetch player page → iframes + inline video ───────────────
+        if (!foundLinks) {
+            println("FaselHD Debug: [STEP 4] Raw-fetching player page: $playerUrl")
+            try {
+                val playerResp = app.get(
+                    playerUrl, referer = data, headers = defaultHeaders,
+                    interceptor = cfKiller, timeout = 30
+                )
+                val playerBody = playerResp.text
+                println("FaselHD Debug: [STEP 4] HTTP status: ${playerResp.code} | Content-Type: ${playerResp.headers["content-type"]} | Body length: ${playerBody.length}")
+
+                val playerDoc = playerResp.document
+                println("FaselHD Debug: [STEP 4] Player page title: '${playerDoc.title()}'")
+
+                // Dump first 2000 chars of player page HTML
+                println("FaselHD Debug: [STEP 4] Player page HTML (first 2000 chars):")
+                println(playerDoc.html().take(2000))
+
+                // All inline script tags — look for JS variable patterns
+                val scripts = playerDoc.select("script:not([src])")
+                println("FaselHD Debug: [STEP 4] Inline script blocks: ${scripts.size}")
+                scripts.forEachIndexed { i, s ->
+                    val txt = s.data().trim()
+                    if (txt.isNotEmpty()) println("FaselHD Debug: [STEP 4]   script[$i] (${txt.length} chars): ${txt.take(300)}")
+                }
+
+                // All iframes
+                val iframes = playerDoc.select("iframe")
+                println("FaselHD Debug: [STEP 4] Iframes in player page: ${iframes.size}")
+                iframes.forEachIndexed { i, f ->
+                    println("FaselHD Debug: [STEP 4]   iframe[$i] src='${f.attr("src")}' data-src='${f.attr("data-src")}'")
+                }
+
+                for (iframe in iframes) {
+                    val iframeSrc = iframe.absUrl("src").ifEmpty { iframe.absUrl("data-src") }
+                    if (iframeSrc.isNotEmpty()) {
+                        println("FaselHD Debug: [STEP 4] → loadExtractor on iframe: $iframeSrc")
+                        try {
+                            val extracted = loadExtractor(iframeSrc, playerUrl, subtitleCallback, callback)
+                            println("FaselHD Debug: [STEP 4] loadExtractor(iframe) returned $extracted")
+                            if (extracted) foundLinks = true
+                        } catch (e: Exception) {
+                            println("FaselHD Debug: [STEP 4 EXCEPTION] iframe loadExtractor: ${e::class.simpleName}: ${e.message}")
+                        }
+                    }
+                }
+
+                // Inline video/m3u8 regex on player page
+                if (!foundLinks) {
+                    val videoPattern = Regex("""(https?://[^\s"'\\]+\.(m3u8|mp4)[^\s"'\\]*)""")
+                    val allMatches = videoPattern.findAll(playerDoc.html()).toList()
+                    println("FaselHD Debug: [STEP 4] Inline video URL regex matches: ${allMatches.size}")
+                    allMatches.forEachIndexed { i, m ->
+                        println("FaselHD Debug: [STEP 4]   match[$i]: '${m.value.take(200)}'")
+                    }
+                    for (match in allMatches) {
+                        val videoUrl = match.groupValues[1].replace("\\u002F", "/").replace("\\/", "/")
+                        val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
+                        val qualityText = when {
+                            videoUrl.contains("1080") -> "1080p"
+                            videoUrl.contains("720")  -> "720p"
+                            videoUrl.contains("480")  -> "480p"
+                            videoUrl.contains("360")  -> "360p"
+                            videoUrl.contains("master") -> "Auto"
+                            else -> "Unknown"
+                        }
+                        println("FaselHD Debug: [STEP 4 HIT] Inline video found: $videoUrl")
+                        callback.invoke(
+                            newExtractorLink(this.name, "$name - $qualityText", videoUrl,
+                                if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) { this.referer = playerUrl; this.quality = getQualityInt(qualityText) }
+                        )
+                        foundLinks = true
+                    }
+                }
+            } catch (e: Exception) {
+                println("FaselHD Debug: [STEP 4 EXCEPTION] ${e::class.simpleName}: ${e.message}")
+            }
+        }
+
+        // ── STEP 5: Last resort — raw-text regex on player URL ────────────────────
+        if (!foundLinks) {
+            println("FaselHD Debug: [STEP 5] Raw-text regex fallback on playerUrl (timeout=120s)")
+            try {
+                val resp = app.get(
+                    playerUrl, referer = data, headers = defaultHeaders,
+                    interceptor = cfKiller, timeout = 120
+                )
+                val body = resp.text
+                println("FaselHD Debug: [STEP 5] HTTP status: ${resp.code} | body length: ${body.length}")
+                val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8[^\s"'\\]*)""")
+                val m3u8Matches = m3u8Pattern.findAll(body).toList()
+                println("FaselHD Debug: [STEP 5] m3u8 regex matches in raw text: ${m3u8Matches.size}")
+                m3u8Matches.forEachIndexed { i, m ->
+                    println("FaselHD Debug: [STEP 5]   m3u8[$i]: '${m.value.take(200)}'")
+                }
+                for (match in m3u8Matches) {
+                    val videoUrl = match.value.replace("\\u002F", "/").replace("\\/", "/")
+                    val qualityText = when {
+                        videoUrl.contains("1080") -> "1080p"
+                        videoUrl.contains("720")  -> "720p"
+                        videoUrl.contains("480")  -> "480p"
+                        videoUrl.contains("360")  -> "360p"
+                        videoUrl.contains("master") -> "Auto"
+                        else -> "Unknown"
+                    }
+                    println("FaselHD Debug: [STEP 5 HIT] m3u8 found: $videoUrl")
+                    callback.invoke(
+                        newExtractorLink(this.name, "$name - $qualityText", videoUrl, ExtractorLinkType.M3U8) {
+                            this.referer = playerUrl; this.quality = getQualityInt(qualityText)
+                        }
+                    )
+                    foundLinks = true
+                }
+
+                // If still nothing, dump first 3000 chars of raw response for inspection
+                if (!foundLinks) {
+                    println("FaselHD Debug: [STEP 5 EMPTY] No m3u8 found. Raw body (first 3000 chars):")
+                    println(body.take(3000))
+                }
+            } catch (e: Exception) {
+                println("FaselHD Debug: [STEP 5 EXCEPTION] ${e::class.simpleName}: ${e.message}")
+            }
+        }
+
+        println("FaselHD Debug: ══════════════════════════════════════")
+        println("FaselHD Debug: loadLinks END — foundLinks=$foundLinks")
+        println("FaselHD Debug: ══════════════════════════════════════")
+        return foundLinks
     }
 
     private fun getQualityInt(quality: String): Int {
         return when {
             quality.contains("1080", ignoreCase = true) -> Qualities.P1080.value
-            quality.contains("720", ignoreCase = true) -> Qualities.P720.value
-            quality.contains("480", ignoreCase = true) -> Qualities.P480.value
-            quality.contains("360", ignoreCase = true) -> Qualities.P360.value
+            quality.contains("720", ignoreCase = true)  -> Qualities.P720.value
+            quality.contains("480", ignoreCase = true)  -> Qualities.P480.value
+            quality.contains("360", ignoreCase = true)  -> Qualities.P360.value
             else -> Qualities.Unknown.value
         }
     }
