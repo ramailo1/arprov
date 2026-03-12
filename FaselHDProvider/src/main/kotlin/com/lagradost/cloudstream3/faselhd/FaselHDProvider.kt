@@ -11,6 +11,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.os.Handler
+import android.os.Looper
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.net.URI
 import okhttp3.HttpUrl
 import okhttp3.Cookie
@@ -68,34 +76,78 @@ class FaselHDProvider : MainAPI() {
         "sec-ch-ua-platform" to "\"Android\""
     )
 
-    private fun syncCookiesToWebView(url: String) {
+    private fun syncCookiesToWebView(mainHost: String) {
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
-            val hostName = URI(url).host ?: return
 
-            // ✅ Use cfKiller.savedCookies directly — this is where cf_clearance lives
+            // ✅ Sync ALL cookies for ALL hosts from cfKiller.savedCookies
             var count = 0
-            cfKiller.savedCookies[hostName]?.forEach {
-                cookieManager.setCookie("https://$hostName", it.toString())
-                count++
-                println("FaselHD: Synced cookie: ${it.toString().take(20)}...")
-            }
-
-            // Also try OkHttp jar as secondary
-            runCatching {
-                val httpUrl = HttpUrl.Builder().scheme("https").host(hostName).build()
-                app.baseClient.cookieJar.loadForRequest(httpUrl).forEach { cookie ->
-                    cookieManager.setCookie("https://$hostName", cookie.toString())
+            cfKiller.savedCookies.forEach { (host, cookies) ->
+                cookies.forEach {
+                    cookieManager.setCookie("https://$host", it.toString())
                     count++
                 }
             }
-
             cookieManager.flush()
-            val verified = cookieManager.getCookie("https://$hostName")
-            println("FaselHD: WebView cookies after sync ($count total): $verified")
+            println("FaselHD: Synced $count total cookies to WebView across all hosts")
+            println("FaselHD: WebView cookies for $mainHost: ${cookieManager.getCookie("https://$mainHost")}")
         } catch (e: Exception) {
-            println("FaselHD: syncCookiesToWebView failed: ${e.message}")
+            println("FaselHD: Cookie sync failed: ${e.message}")
+        }
+    }
+
+    private suspend fun extractM3u8ViaWebView(playerUrl: String, mainHost: String): String? {
+        return suspendCancellableCoroutine { continuation ->
+            val handler = Handler(Looper.getMainLooper())
+            handler.post {
+                val webView = WebView(AcraApplication.context ?: return@post continuation.resume(null))
+                var resolved = false
+
+                webView.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    userAgentString = userAgent
+                }
+
+                webView.webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val url = request.url.toString()
+                        if (url.contains("m3u8") && (url.contains("master.m3u8") || url.contains("scdns.io"))) {
+                            if (!resolved) {
+                                resolved = true
+                                println("FaselHD: Found M3U8 via intercept: $url")
+                                view.post { view.destroy() }
+                                continuation.resume(url)
+                            }
+                        }
+                        return null
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        println("FaselHD: WebView finished loading $url")
+                    }
+                }
+
+                syncCookiesToWebView(mainHost)
+                println("FaselHD: WebView loading player: $playerUrl")
+                webView.loadUrl(playerUrl)
+
+                // Timeout after 45s (Cloudflare Turnstile can take time)
+                handler.postDelayed({
+                    if (!resolved) {
+                        resolved = true
+                        println("FaselHD: WebView extraction timed out after 45s")
+                        webView.destroy()
+                        continuation.resume(null)
+                    }
+                }, 45_000)
+            }
         }
     }
 
@@ -207,7 +259,7 @@ class FaselHDProvider : MainAPI() {
                           TvType.TvSeries else TvType.Movie
 
         return newMovieSearchResponse(title, href, type) {
-            posterUrl     = poster?.let { normalizeUrl(it, mainUrl) }
+            posterUrl     = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, mainUrl) }
             this.quality  = getQualityFromString(quality)
             // Use the card's own page URL as Referer — avoids 403 on poster CDNs
             posterHeaders = mapOf("Referer" to href, "User-Agent" to userAgent)
@@ -261,7 +313,7 @@ class FaselHDProvider : MainAPI() {
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl     = poster?.let { normalizeUrl(it, host) }
+                    posterUrl     = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
                     this.year     = year
                     plot          = desc
                     posterHeaders = ph
@@ -294,7 +346,7 @@ class FaselHDProvider : MainAPI() {
                 }
                 println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl        = poster?.let { normalizeUrl(it, host) }
+                    posterUrl        = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
                     this.year        = year
                     plot             = desc
                     recommendations  = recs
@@ -305,7 +357,7 @@ class FaselHDProvider : MainAPI() {
             else -> {
                 println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl       = poster?.let { normalizeUrl(it, host) }
+                    posterUrl       = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
                     this.year       = year
                     plot            = desc
                     recommendations = recs
@@ -354,8 +406,7 @@ class FaselHDProvider : MainAPI() {
             return rawScan(html, pageUrl, callback)
         }
 
-        // Step 3: Option B - Extract directly from Player Page HTML (Bypasses WebView Turnstile loop)
-        // safeGet uses CloudflareKiller which we know works for fetching the page content
+        // Step 3: Option B - Extract directly from Player Page HTML (Fastest)
         println("FaselHD: Fetching player page HTML via safeGet...")
         val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
         if (playerDoc != null) {
@@ -380,23 +431,10 @@ class FaselHDProvider : MainAPI() {
             }
         }
 
-        // Step 4: Fallback - use WebViewResolver if direct extraction failed
-        println("FaselHD: Direct extraction failed, attempting WebViewResolver fallback...")
-        val resolved = runCatching {
-            // Sync CF cookies to WebView BEFORE launching
-            syncCookiesToWebView(normalizeUrl(playerUrl, host))
-            delay(3000)
-            WebViewResolver(Regex("""\.m3u8|\.mp4"""))
-            .resolveUsingWebView(requestCreator(
-                    "GET",
-                    normalizeUrl(playerUrl, host),
-                    referer  = pageUrl,
-                    headers  = headers(host, pageUrl)
-                )
-            ).first?.url?.toString()
-        }.getOrNull()
-        
-        println("FaselHD: WebViewResolver returned -> $resolved")
+        // Step 4: Fallback - use custom WebView extraction (Handles XHR/Turnstile)
+        println("FaselHD: Direct extraction failed, attempting custom WebView extraction...")
+        val resolved = extractM3u8ViaWebView(normalizeUrl(playerUrl, host), host)
+        println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
         if (resolved != null) {
             callback(
