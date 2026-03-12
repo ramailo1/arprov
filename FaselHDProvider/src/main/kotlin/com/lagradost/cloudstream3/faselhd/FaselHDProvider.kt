@@ -39,8 +39,7 @@ class FaselHDProvider : MainAPI() {
     // Derive poster headers from a given page URL so the Referer always matches the content domain
     private fun posterHeadersFor(pageUrl: String): Map<String, String> {
         return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer" to "$mainUrl/"
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
     }
 
@@ -313,10 +312,35 @@ class FaselHDProvider : MainAPI() {
         if (!foundLinks) {
             println("FaselHD Debug: [STEP 3] Starting WebViewResolver on: $playerUrl")
             try {
-                val pattern = Regex("""(\.m3u8|\.mp4|googlevideo\.com/videoplayback|/playlist\.m3u8|/index\.m3u8)""")
+                val pattern = Regex("""(\.m3u8|\.mp4|googlevideo\.com/videoplayback|/playlist\.m3u8|/index\.m3u8|resolve=\.m3u8)""")
                 println("FaselHD Debug: [STEP 3] Pattern: ${pattern.pattern}")
                 
-                val scrollScript = "window.scrollTo(0, document.body.scrollHeight); setInterval(function(){window.scrollTo(0, document.body.scrollHeight);}, 1000);"
+                val scrollScript = """
+                    window.scrollTo(0, document.body.scrollHeight);
+                    var faselWait = 0;
+                    var faselInterval = setInterval(function() {
+                        try {
+                            var file = null;
+                            if (typeof jwplayer === 'function') {
+                                file = jwplayer().getConfig().file;
+                            } else {
+                                var v = document.querySelector('video');
+                                if (v) file = v.src || v.querySelector('source').src;
+                            }
+                            if (file) {
+                                clearInterval(faselInterval);
+                                var url = file;
+                                if (!url.includes('.m3u8') && !url.includes('.mp4')) {
+                                    url += (url.includes('?') ? '&' : '?') + 'resolve=.m3u8';
+                                }
+                                fetch(url);
+                            }
+                        } catch(e) {}
+                        faselWait += 1000;
+                        // Stop checking after 15s
+                        if (faselWait > 15000) clearInterval(faselInterval);
+                    }, 1000);
+                """.trimIndent()
                 
                 val result = WebViewResolver(
                     interceptUrl = pattern,
@@ -327,7 +351,7 @@ class FaselHDProvider : MainAPI() {
                 println("FaselHD Debug: [STEP 3] WebViewResolver result: $resolvedRequest")
 
                 if (resolvedRequest != null) {
-                    val videoUrl = resolvedRequest.url.toString()
+                    val videoUrl = resolvedRequest.url.toString().replace("resolve=.m3u8", "").trimEnd('?', '&')
                     val headers = resolvedRequest.headers.toMap()
                     println("FaselHD Debug: [STEP 3 OK] Intercepted URL: $videoUrl")
                     println("FaselHD Debug: [STEP 3] Request headers: $headers")
