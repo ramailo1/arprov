@@ -103,11 +103,22 @@ class FaselHDProvider : MainAPI() {
             handler.post {
                 val webView = WebView(AcraApplication.context ?: return@post continuation.resume(null))
                 var resolved = false
+                var captureStarted = false
+                var captureTimeout: Runnable? = null
+
+                fun finish(value: String?) {
+                    if (resolved) return
+                    resolved = true
+                    captureTimeout?.let(handler::removeCallbacks)
+                    webView.destroy()
+                    continuation.resume(value)
+                }
 
                 webView.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
                     userAgentString = userAgent
                 }
 
@@ -117,25 +128,34 @@ class FaselHDProvider : MainAPI() {
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
-                        if (u.contains("m3u8", true) || u.contains("scdns.io", true) ||
-                            u.contains("jwpcdn", true) || u.contains(".ts", true)) {
+                        if (u.contains("m3u8", true) ||
+                            u.contains("scdns.io", true) ||
+                            u.contains(".ts", true) ||
+                            u.contains(".mp4", true)) {
                             println("FaselHD: WebView subrequest -> $u")
-                            if (!resolved) {
-                                resolved = true
-                                println("FaselHD: Found M3U8 via intercept: $u")
-                                // Use handler to destroy on main thread
-                                handler.post { webView.destroy() }
-                                continuation.resume(u)
-                            }
+                            finish(u)
                         }
-                        return null
+                        return super.shouldInterceptRequest(view, request)
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         println("FaselHD: WebView finished loading $url")
-                        
-                        repeat(60) { i ->
+
+                        val currentUrl = url ?: ""
+                        if (currentUrl.contains("challenges.cloudflare.com") || currentUrl.contains("/cdn-cgi/")) return
+                        if (!currentUrl.contains("video_player")) return
+                        if (captureStarted) return
+                        captureStarted = true
+
+                        println("FaselHD: Player page landed. Starting 45s capture window.")
+                        captureTimeout = Runnable {
+                            println("FaselHD: Player capture timed out after final page load")
+                            finish(null)
+                        }
+                        handler.postDelayed(captureTimeout!!, 45_000)
+
+                        repeat(90) { i ->
                             view?.postDelayed({
                                 if (resolved) return@postDelayed
                                 view.evaluateJavascript("""
@@ -143,16 +163,15 @@ class FaselHDProvider : MainAPI() {
                                         try {
                                             const perf = performance.getEntriesByType('resource')
                                                 .map(x => x.name)
-                                                .filter(x => /m3u8|scdns\.io|master\.m3u8/i.test(x));
+                                                .filter(x => /m3u8|scdns\.io|master\.m3u8|\.ts|\.mp4/i.test(x));
                                             if (perf.length) return perf[0];
 
                                             if (window.jwplayer) {
                                                 const p = jwplayer();
                                                 const item = p && p.getPlaylistItem ? p.getPlaylistItem() : null;
                                                 const file =
-                                                    item?.file ||
-                                                    (item?.sources && item.sources[0] && item.sources[0].file) ||
-                                                    "";
+                                                    item && item.file ? item.file :
+                                                    item && item.sources && item.sources[0] ? item.sources[0].file || "" : "";
                                                 if (file) return file;
                                             }
                                         } catch (e) {}
@@ -161,13 +180,11 @@ class FaselHDProvider : MainAPI() {
                                 """.trimIndent()) { raw ->
                                     val found = raw.trim('"')
                                     if (found.isNotBlank() && !resolved) {
-                                        resolved = true
-                                        println("FaselHD: Found M3U8 via JS polling: $found")
-                                        webView.destroy()
-                                        continuation.resume(found)
+                                        println("FaselHD: Found stream via JS polling -> $found")
+                                        finish(found)
                                     }
                                 }
-                            }, i * 750L)
+                            }, i * 1000L)
                         }
                     }
                 }
@@ -176,15 +193,12 @@ class FaselHDProvider : MainAPI() {
                 println("FaselHD: WebView loading player: $playerUrl")
                 webView.loadUrl(playerUrl)
 
-                // Timeout after 45s (Cloudflare Turnstile can take time)
                 handler.postDelayed({
                     if (!resolved) {
-                        resolved = true
-                        println("FaselHD: WebView extraction timed out after 45s")
-                        webView.destroy()
-                        continuation.resume(null)
+                        println("FaselHD: Global WebView timeout after 120s")
+                        finish(null)
                     }
-                }, 45_000)
+                }, 120_000)
             }
         }
     }
@@ -297,11 +311,16 @@ class FaselHDProvider : MainAPI() {
                           TvType.TvSeries else TvType.Movie
 
         return newMovieSearchResponse(title, href, type) {
-            posterUrl     = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, mainUrl) }
+            val finalPoster = poster?.takeIf { it.isNotBlank() }
+            val posterReferer = finalPoster?.let {
+                runCatching { java.net.URI(it).let { u -> "${u.scheme}://${u.host}/" } }.getOrNull()
+            } ?: href
+
+            posterUrl     = finalPoster?.let { normalizeUrl(it, mainUrl) }
             this.quality  = getQualityFromString(quality)
-            // Use the card's own page URL as Referer — avoids 403 on poster CDNs
+            // Use the poster's own host as Referer — avoids 403 on poster CDNs
             posterHeaders = mapOf(
-                "Referer" to href,
+                "Referer" to posterReferer,
                 "User-Agent" to userAgent,
                 "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
             )
@@ -335,8 +354,13 @@ class FaselHDProvider : MainAPI() {
             }?.let { if (it.startsWith("//")) "https:$it" else it }
         println("FaselHD: Poster -> $poster")
 
+        val finalPoster = poster?.takeIf { it.isNotBlank() }
+        val posterReferer = finalPoster?.let {
+            runCatching { java.net.URI(it).let { u -> "${u.scheme}://${u.host}/" } }.getOrNull()
+        } ?: pageUrl
+
         val ph   = mapOf(
-            "Referer" to pageUrl,
+            "Referer" to posterReferer,
             "User-Agent" to userAgent,
             "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
         )
@@ -359,8 +383,8 @@ class FaselHDProvider : MainAPI() {
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
                     this.year           = year
                     plot                = desc
                     posterHeaders       = ph
@@ -393,8 +417,8 @@ class FaselHDProvider : MainAPI() {
                 }
                 println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
                     this.year           = year
                     plot                = desc
                     recommendations     = recs
@@ -405,8 +429,8 @@ class FaselHDProvider : MainAPI() {
             else -> {
                 println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    posterUrl           = finalPoster?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = finalPoster?.let { normalizeUrl(it, host) }
                     this.year           = year
                     plot                = desc
                     recommendations     = recs
@@ -448,16 +472,14 @@ class FaselHDProvider : MainAPI() {
                     if (it.startsWith("http")) it else "$host/$it"
                 }
         
-        println("FaselHD: Extracted playerUrl -> $playerUrl")
-
-        if (playerUrl == null) {
-            println("FaselHD: No player token in page, falling back to rawScan")
-            return rawScan(html, pageUrl, callback)
-        }
+        val rawPlayerUrl = playerUrl ?: return rawScan(html, pageUrl, callback)
+        val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
+        
+        println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
         // Step 3: Option B - Extract directly from Player Page HTML (Fastest)
         println("FaselHD: Fetching player page HTML via safeGet...")
-        val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
+        val playerDoc = safeGet(rawPlayerUrl, pageUrl)
         if (playerDoc != null) {
             val playerHtml = playerDoc.html()
             println("FaselHD: PlayerHTML preview -> ${playerHtml.take(2000).replace("\n", " ")}")
@@ -471,7 +493,7 @@ class FaselHDProvider : MainAPI() {
                             if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8
                             else ExtractorLinkType.VIDEO
                         ) {
-                            referer = playerUrl
+                            referer = rawPlayerUrl
                             quality = getVideoQuality(url)
                         }
                     )
@@ -482,7 +504,7 @@ class FaselHDProvider : MainAPI() {
 
         // Step 4: Fallback - use custom WebView extraction (Handles XHR/Turnstile)
         println("FaselHD: Direct extraction failed, attempting custom WebView extraction...")
-        val resolved = extractM3u8ViaWebView(normalizeUrl(playerUrl, host), host)
+        val resolved = extractM3u8ViaWebView(rawPlayerUrl, playerHost)
         println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
         if (resolved != null) {
