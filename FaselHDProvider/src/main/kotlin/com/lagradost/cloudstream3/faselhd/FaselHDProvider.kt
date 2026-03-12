@@ -11,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import okhttp3.Cookie
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -118,25 +119,47 @@ class FaselHDProvider : MainAPI() {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
 
+            val skipNames = setOf("cf_clearance", "__cf_bm", "cfchlrcni5", "__cflb", "__cfruid")
             var count = 0
             cfKiller.savedCookies.forEach { (host, cookies) ->
-                cookies.forEach { cookie ->
-                    val cookieString = cookie.toString()
-                    cookieManager.setCookie("https://$host", cookieString)
-                    
-                    // Also mirror to mainHost if it's a domain cookie or on same base
-                    if (host.endsWith(baseDomain) && host != mainHost) {
-                        cookieManager.setCookie("https://$mainHost", cookieString)
+                cookies.forEach { (name, value) ->
+                    if (name !in skipNames) {
+                        val cookieString = "$name=$value"
+                        cookieManager.setCookie("https://$host", cookieString)
+                        
+                        // Also mirror to mainHost if it's a domain cookie or on same base
+                        if (host.endsWith(baseDomain) && host != mainHost) {
+                            cookieManager.setCookie("https://$mainHost", cookieString)
+                        }
+                        count++
                     }
-                    count++
                 }
             }
 
             cookieManager.flush()
-            println("FaselHD: Synced $count total cookies to WebView across all hosts")
+            println("FaselHD: Synced $count non-CF cookies to WebView across all hosts")
             println("FaselHD: WebView cookies for https://$mainHost: ${cookieManager.getCookie("https://$mainHost")}")
         } catch (e: Exception) {
             println("FaselHD: Cookie sync failed: ${e.message}")
+        }
+    }
+
+    private fun harvestWebViewCookies(host: String) {
+        try {
+            val raw = CookieManager.getInstance().getCookie("https://$host") ?: return
+            raw.split(";").forEach { part ->
+                val kv = part.trim()
+                if (kv.startsWith("cf_clearance=")) {
+                    val value = kv.removePrefix("cf_clearance=")
+                    println("FaselHD: Harvested WebView cf_clearance -> ${value.take(30)}...")
+                    
+                    val cookies = cfKiller.savedCookies[host]?.toMutableMap() ?: mutableMapOf<String, String>()
+                    cookies["cf_clearance"] = value
+                    cfKiller.savedCookies[host] = cookies
+                }
+            }
+        } catch (e: Exception) {
+            println("FaselHD: Cookie harvest failed: ${e.message}")
         }
     }
 
@@ -240,6 +263,7 @@ class FaselHDProvider : MainAPI() {
                     if (resolved) return
                     resolved = true
                     captureTimeout?.let(handler::removeCallbacks)
+                    runCatching { harvestWebViewCookies(java.net.URI(playerUrl).host) }
                     runCatching { webView.stopLoading() }
                     runCatching { webView.destroy() }
                     continuation.resume(value)
@@ -294,6 +318,13 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
 
+                handler.postDelayed({
+                    if (!resolved) {
+                        println("FaselHD: Global WebView timeout after 180s")
+                        finish(null)
+                    }
+                }, 180_000)
+
                 cookieManager.setAcceptCookie(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -315,6 +346,9 @@ class FaselHDProvider : MainAPI() {
                 webView.webChromeClient = android.webkit.WebChromeClient()
 
                 webView.webViewClient = object : WebViewClient() {
+                    var lastChallengeMs = 0L
+                    var captureCheckScheduled = false
+
                     override fun onPageStarted(
                         view: WebView?,
                         url: String?,
@@ -325,11 +359,17 @@ class FaselHDProvider : MainAPI() {
                             view?.evaluateJavascript(hookScript, null)
                         }
                     }
+
                     override fun shouldInterceptRequest(
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
+
+                        if (u.contains("cdn-cgi/challenge", true) || u.contains("cdn-cgi/challenge-platform", true)) {
+                            lastChallengeMs = System.currentTimeMillis()
+                            println("FaselHD: CF challenge request detected, resetting capture delay")
+                        }
 
                         // Broad domain logging to find segment CDN
                         if (u.contains("faselhdx", true) || u.contains("scdns", true) ||
@@ -372,16 +412,35 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (!currentUrl.contains("video_player", true)) return
-                        if (captureStarted) return
-                        captureStarted = true
+                        if (captureCheckScheduled) return
+                        captureCheckScheduled = true
 
-                        println("FaselHD: Player page landed. Starting 45s capture window.")
-                        captureTimeout = Runnable {
-                            println("FaselHD: Player capture timed out after final page load")
-                            finish(null)
+                        // Poll for a CF-quiet window
+                        val checkInterval = 2_000L
+                        val maxChecks = 75
+
+                        repeat(maxChecks) { i ->
+                            handler.postDelayed({
+                                if (resolved) return@postDelayed
+                                val quiet = System.currentTimeMillis() - lastChallengeMs > 3_000
+                                println("FaselHD: CF quiet check #$i -> quiet=$quiet (lastChallengeAge=${System.currentTimeMillis() - lastChallengeMs}ms)")
+
+                                if (quiet && !captureStarted) {
+                                    captureStarted = true
+                                    println("FaselHD: CF cleared! Starting 45s capture window.")
+                                    captureTimeout = Runnable {
+                                        println("FaselHD: Player capture timed out after final page load")
+                                        finish(null)
+                                    }
+                                    handler.postDelayed(captureTimeout!!, 45_000)
+
+                                    startPolling(view)
+                                }
+                            }, i * checkInterval)
                         }
-                        handler.postDelayed(captureTimeout!!, 45_000)
+                    }
 
+                    fun startPolling(view: WebView?) {
                         repeat(90) { i ->
                             view?.postDelayed({
                                 if (resolved) return@postDelayed
