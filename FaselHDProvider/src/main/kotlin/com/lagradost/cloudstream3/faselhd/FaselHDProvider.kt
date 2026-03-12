@@ -39,7 +39,8 @@ class FaselHDProvider : MainAPI() {
     // Derive poster headers from a given page URL so the Referer always matches the content domain
     private fun posterHeadersFor(pageUrl: String): Map<String, String> {
         return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer" to pageUrl
         )
     }
 
@@ -316,35 +317,48 @@ class FaselHDProvider : MainAPI() {
                 println("FaselHD Debug: [STEP 3] Pattern: ${pattern.pattern}")
                 
                 val scrollScript = """
-                    window.scrollTo(0, document.body.scrollHeight);
-                    var faselWait = 0;
-                    var faselInterval = setInterval(function() {
-                        try {
-                            var file = null;
-                            if (typeof jwplayer === 'function') {
-                                file = jwplayer().getConfig().file;
-                            } else {
-                                var v = document.querySelector('video');
-                                if (v) file = v.src || v.querySelector('source').src;
-                            }
-                            if (file) {
-                                clearInterval(faselInterval);
-                                var url = file;
-                                if (!url.includes('.m3u8') && !url.includes('.mp4')) {
-                                    url += (url.includes('?') ? '&' : '?') + 'resolve=.m3u8';
+                    (function() {
+                        var player = document.querySelector('iframe[name=player_iframe], iframe[src*=video_player], .player-container, #player, .video-player');
+                        if (player) {
+                            player.scrollIntoView();
+                        } else {
+                            window.scrollTo(0, document.body.scrollHeight / 2);
+                        }
+                        
+                        var faselWait = 0;
+                        var faselInterval = setInterval(function() {
+                            try {
+                                var file = null;
+                                if (typeof jwplayer === 'function') {
+                                    file = jwplayer().getConfig().file;
+                                } else {
+                                    var v = document.querySelector('video');
+                                    if (v) {
+                                        file = v.src || (v.querySelector('source') ? v.querySelector('source').src : null);
+                                    }
                                 }
-                                fetch(url);
-                            }
-                        } catch(e) {}
-                        faselWait += 1000;
-                        // Stop checking after 15s
-                        if (faselWait > 15000) clearInterval(faselInterval);
-                    }, 1000);
+                                
+                                if (file && file.length > 5) {
+                                    clearInterval(faselInterval);
+                                    var url = file;
+                                    if (!url.includes('.m3u8') && !url.includes('.mp4')) {
+                                        url += (url.includes('?') ? '&' : '?') + 'resolve=.m3u8';
+                                    }
+                                    // Trigger interception
+                                    fetch(url);
+                                }
+                            } catch(e) {}
+                            
+                            faselWait += 1000;
+                            if (faselWait > 20000) clearInterval(faselInterval);
+                        }, 1000);
+                    })();
                 """.trimIndent()
                 
                 val result = WebViewResolver(
                     interceptUrl = pattern,
-                    script = scrollScript
+                    script = scrollScript,
+                    useOkhttp = false
                 ).resolveUsingWebView(playerUrl!!)
                 
                 val resolvedRequest = result.first
