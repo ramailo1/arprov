@@ -1,36 +1,55 @@
-package com.lagradost
+package com.lagradost.cloudstream3.faselhd
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.requestCreator
 import org.jsoup.nodes.Element
-import okhttp3.Interceptor
-import okhttp3.Response
+import org.jsoup.nodes.Document
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class FaselHDProvider : MainAPI() {
-    override var lang = "ar"
     override var name = "FaselHD"
     override val usesWebView = true
     override val hasMainPage = true
-    override val hasChromecastSupport = true
+    override var lang = "ar"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
-        TvType.TvSeries,
         TvType.Movie,
-        TvType.AsianDrama,
+        TvType.TvSeries,
         TvType.Anime,
+        TvType.AsianDrama
     )
 
-    // Base domain — will be resolved dynamically on first use
     private val baseDomain = "faselhdx.bid"
     override var mainUrl = "https://web3126x.$baseDomain"
+
+    private val userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
+
+    private val defaultHeaders = mapOf(
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
+        "User-Agent" to userAgent,
+        "Referer" to mainUrl
+    )
+
+    companion object {
+        private val M3U8_REGEX = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""")
+        private val SOURCES_REGEX = Regex("""sources\s*:\s*\[\s*\{[^}]*file\s*:\s*["']([^"']+)["']""")
+        private val PLAYER_TOKEN_REGEX = Regex("""video_player\?player_token=[^"'\s]+""")
+    }
+
+    private val cfKiller = CloudflareKiller()
+    private val mutex = Mutex()
 
     // Resolve the real (post-redirect) mainUrl
     private suspend fun getRealMainUrl(): String {
         return try {
-            val resp = app.get(mainUrl, allowRedirects = true)
+            val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
             val finalUrl = resp.url.trimEnd('/')
-            // Extract scheme + host only
             val uri = java.net.URL(finalUrl)
             "${uri.protocol}://${uri.host}"
         } catch (e: Exception) {
@@ -38,146 +57,137 @@ class FaselHDProvider : MainAPI() {
         }
     }
 
-    // OkHttp interceptor to add Referer for poster images
-    private val refererInterceptor = object : Interceptor {
-        override fun intercept(chain: Interceptor.Chain): Response {
-            val request = chain.request()
-            val url = request.url.toString()
-            return if (url.contains(baseDomain)) {
-                val newRequest = request.newBuilder()
-                    .header("Referer", mainUrl)
-                    .header("User-Agent", USER_AGENT)
-                    .build()
-                chain.proceed(newRequest)
-            } else {
-                chain.proceed(request)
-            }
-        }
+    // ---------- CLOUDFLARE BYPASS ----------
+    private fun isBlocked(doc: Document): Boolean {
+        val title = doc.select("title").text().lowercase()
+        val body = doc.body().text().lowercase()
+        return title.contains("just a moment") ||
+               title.contains("security verification") ||
+               title.contains("access denied") ||
+               title.contains("cloudflare") ||
+               title.contains("verify you are human") ||
+               body.contains("verifying you are not a bot") ||
+               body.contains("performing security verification") ||
+               body.contains("checking your browser")
     }
 
-    companion object {
-        const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
+    private suspend fun safeGet(url: String): Document? {
+        return runCatching {
+            val res = app.get(url, headers = defaultHeaders, timeout = 15)
+            if (res.isSuccessful && !isBlocked(res.document)) return res.document
+            
+            mutex.withLock {
+                val cfRes = app.get(url, headers = defaultHeaders, interceptor = cfKiller, timeout = 120)
+                if (cfRes.isSuccessful) {
+                    delay(2000)
+                    if (!isBlocked(cfRes.document)) return cfRes.document
+                }
+                null
+            }
+        }.getOrNull()
+    }
 
-        // Regex patterns for m3u8 extraction from player page JS
-        val M3U8_REGEX = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""")
-        val SOURCES_REGEX = Regex("""sources\s*:\s*\[\s*\{[^}]*file\s*:\s*["']([^"']+)["']""")
-        val PLAYER_TOKEN_REGEX = Regex("""video_player\?player_token=[^"'\s]+""")
+    // ---------- MAIN PAGE ----------
+    override val mainPage = mainPageOf(
+        "$mainUrl/most_recent" to "المضاف حديثاَ",
+        "$mainUrl/series" to "مسلسلات",
+        "$mainUrl/movies" to "أفلام",
+        "$mainUrl/asian-series" to "مسلسلات آسيوية",
+        "$mainUrl/anime" to "الأنمي",
+        "$mainUrl/tvshows" to "البرامج التلفزيونية",
+        "$mainUrl/dubbed-movies" to "أفلام مدبلجة",
+        "$mainUrl/hindi" to "أفلام هندية",
+        "$mainUrl/asian-movies" to "أفلام آسيوية",
+        "$mainUrl/anime-movies" to "أفلام أنمي",
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        mainUrl = getRealMainUrl()
+        val url = if (page == 1) request.data else "${request.data.trimEnd('/')}/page/$page"
+        val doc = safeGet(url) ?: return newHomePageResponse(request.name, emptyList())
+        val elements = doc.select("div.postDiv, article, .entry-box")
+        return newHomePageResponse(request.name, elements.mapNotNull { it.toSearchResult() })
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val url = this.attr("href").takeIf { it.isNotEmpty() } ?: return null
-        val title = this.select("img").attr("alt").ifEmpty {
-            this.select(".entry-title, h3, .title").text()
+        val title = selectFirst("div.postInner > div.h1, div.h1, .entry-title, h3, .title")?.text() 
+            ?: selectFirst("img")?.attr("alt")?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val href = selectFirst("a")?.attr("abs:href") ?: return null
+        
+        val img = selectFirst("div.imgdiv-class img, div.postInner img, img")
+        val posterUrl = img?.let {
+            (it.attr("data-src").ifEmpty { it.attr("data-original") }.ifEmpty { it.attr("src") })
+                .let { url -> if (url.startsWith("//")) "https:$url" else url }
         }
-        // Poster: use data-src first (lazy-loaded), fallback to src
-        val poster = this.select("img").let {
-            it.attr("data-src").ifEmpty { it.attr("src") }
-        }.takeIf { it.isNotEmpty() }
+        val quality = selectFirst("span.quality, span.qualitySpan")?.text()
 
-        val type = if (url.contains("/episode")) TvType.TvSeries else TvType.Movie
-        return newAnimeSearchResponse(title, url, type) {
-            this.posterUrl = poster
-            this.posterHeaders = mapOf("Referer" to mainUrl)
+        val type = if (href.contains("/episode/")) TvType.TvSeries else TvType.Movie
+
+        return newMovieSearchResponse(title, href, type) {
+            this.posterUrl = posterUrl
+            this.quality = getQualityFromString(quality)
+            this.posterHeaders = mapOf("Referer" to mainUrl, "User-Agent" to userAgent)
         }
-    }
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Resolve real domain first
-        mainUrl = getRealMainUrl()
-
-        val document = app.get(
-            mainUrl,
-            headers = mapOf("Referer" to mainUrl, "User-Agent" to USER_AGENT)
-        ).document
-
-        val sections = document.select(".home-section, .widget, section").mapNotNull { section ->
-            val title = section.select(".section-title, h2, h3").firstOrNull()?.text()
-                ?: return@mapNotNull null
-            val items = section.select("article a, .entry-box a, .thumb a").mapNotNull {
-                it.toSearchResult()
-            }
-            if (items.isEmpty()) null else HomePageList(title, items)
-        }
-
-        return newHomePageResponse(sections, hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = getRealMainUrl()
-        val url = "$mainUrl/?s=${query.replace(" ", "+")}"
-        val document = app.get(
-            url,
-            headers = mapOf("Referer" to mainUrl, "User-Agent" to USER_AGENT)
-        ).document
-        return document.select("article a, .entry-box a").mapNotNull { it.toSearchResult() }
+        val url = "$mainUrl/?s=$query"
+        val doc = safeGet(url) ?: return emptyList()
+        return doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // Ensure we use the real redirected domain for all requests
         mainUrl = getRealMainUrl()
+        val doc = safeGet(url) ?: return null
+        val title = doc.selectFirst("div.title, h1.postTitle, div.postInner div.h1, .entry-title, h1")
+            ?.text() ?: doc.title()
 
-        val fixedUrl = if (url.contains(baseDomain)) url
-        else url.replace(Regex("https?://[^/]+"), mainUrl)
-
-        val document = app.get(
-            fixedUrl,
-            headers = mapOf("Referer" to mainUrl, "User-Agent" to USER_AGENT)
-        ).document
-
-        val title = document.select(".entry-title, h1.title, h1").firstOrNull()?.text()
-            ?: document.title()
-
-        // Poster: og:image is most reliable for FaselHD
-        val poster = document.select("meta[property=og:image]").attr("content").ifEmpty {
-            document.select(".entry-thumbnail img, .poster img").let {
+        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf { it.isNotEmpty() }
+            ?: doc.selectFirst("div.posterImg img, .single-post img, img.posterImg, .entry-thumbnail img")?.let {
                 it.attr("data-src").ifEmpty { it.attr("src") }
-            }
-        }
+            }?.let { if (it.startsWith("//")) "https:$it" else it }
 
-        val plot = document.select(".entry-content p, .story, .description").firstOrNull()?.text()
+        val desc = doc.selectFirst("div.singleDesc p, div.singleDesc, .entry-content p, .story, .description")?.text()
+        val year = doc.selectFirst("a[href*='series_year'], a[href*='movies_year']")
+            ?.text()?.toIntOrNull()
+            ?: doc.select("#singleList .col-xl-6, .single_info").find { it.text().contains("الصدور") || it.text().contains("سنة") }
+                ?.text()?.substringAfter(":")?.trim()?.toIntOrNull()
 
-        val isEpisode = fixedUrl.contains("/episode")
-        val isSeries = fixedUrl.contains("/series") || fixedUrl.contains("/tvshow")
+        val recommendations = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        val ph = mapOf("Referer" to mainUrl, "User-Agent" to userAgent)
 
-        if (isEpisode || isSeries) {
-            // Get season/episodes list
-            val episodes = mutableListOf<Episode>()
+        val episodeLinks = doc.select("#vihtml a[href*='/episodes/'], #epAll a, div.epAll a")
+        val isSeries = episodeLinks.isNotEmpty() 
+            || doc.select("#seasonList, div.seasonLoop, a[href*='/episodes/']").isNotEmpty()
+            || url.contains("/episodes/") || url.contains("/series/")
 
-            // Episodes links on page
-            val episodeLinks = document.select("#DivEpisodesList a, .episodes-list a, .ep-list a")
-            if (episodeLinks.isNotEmpty()) {
-                episodeLinks.forEachIndexed { idx, el ->
-                    val epUrl = el.attr("href")
-                    val epTitle = el.text().trim()
-                    val epNum = epTitle.filter { it.isDigit() }.toIntOrNull() ?: (idx + 1)
-                    episodes.add(
-                        newEpisode(epUrl) {
-                            this.name = epTitle
-                            this.episode = epNum
-                        }
-                    )
-                }
-            } else if (isEpisode) {
-                // Single episode page
-                episodes.add(
-                    newEpisode(fixedUrl) {
-                        this.name = title
-                    }
-                )
-            }
-
-            return newTvSeriesLoadResponse(title, fixedUrl, TvType.TvSeries, episodes) {
+        return if (!isSeries) {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
-                this.posterHeaders = mapOf("Referer" to mainUrl)
-                this.plot = plot
+                this.year = year
+                this.plot = desc
+                this.recommendations = recommendations
+                this.posterHeaders = ph
             }
         } else {
-            // Movie
-            return newMovieLoadResponse(title, fixedUrl, TvType.Movie, fixedUrl) {
+            val episodes = episodeLinks.mapIndexed { idx, ep ->
+                val epTitle = ep.text().trim()
+                val epUrl = ep.attr("abs:href")
+                val epNum = Regex("""(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull() ?: (idx + 1)
+                newEpisode(epUrl) {
+                    name = epTitle
+                    episode = epNum
+                }
+            }.distinctBy { it.data }
+
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.posterHeaders = mapOf("Referer" to mainUrl)
-                this.plot = plot
+                this.year = year
+                this.plot = desc
+                this.recommendations = recommendations
+                this.posterHeaders = ph
             }
         }
     }
@@ -189,125 +199,92 @@ class FaselHDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         mainUrl = getRealMainUrl()
+        val fixedData = if (data.contains(baseDomain)) {
+            val uri = java.net.URL(data)
+            data.replace("${uri.protocol}://${uri.host}", mainUrl)
+        } else data
 
-        val fixedData = if (data.contains(baseDomain)) data
-        else data.replace(Regex("https?://[^/]+"), mainUrl)
-
-        // Step 1: Load the movie/episode page and find the player_token URL
-        // The page uses JS to inject an iframe into #vihtml with /video_player?player_token=XXX
-        // We use WebViewResolver to let JS run, then intercept the player_token request
-
-        val playerTokenUrl = try {
-            // Use WebViewResolver on the page URL to intercept the video_player token URL
-            WebViewResolver(
-                Regex("""video_player\?player_token=""")
-            ).resolveUsingWebView(
-                requestCreator(
-                    "GET", fixedData,
-                    referer = mainUrl,
-                    headers = mapOf("User-Agent" to USER_AGENT)
-                )
-            ).first?.url
-        } catch (e: Exception) {
-            null
-        }
+        val playerTokenUrl = runCatching {
+            WebViewResolver(PLAYER_TOKEN_REGEX).resolveUsingWebView(
+                requestCreator("GET", fixedData, referer = mainUrl, headers = defaultHeaders)
+            ).first?.url?.toString()
+        }.getOrNull()
 
         if (playerTokenUrl != null) {
-            // Step 2: Now WebView-resolve the player_token page to get the m3u8
-            val m3u8Url = try {
+            val m3u8Url = runCatching {
                 WebViewResolver(
                     Regex("""\.m3u8"""),
-                    // Also try catching direct mp4
                     additionalUrls = listOf(Regex("""\.mp4"""))
                 ).resolveUsingWebView(
-                    requestCreator(
-                        "GET",
-                        playerTokenUrl,
-                        referer = fixedData,
-                        headers = mapOf("User-Agent" to USER_AGENT)
-                    )
-                ).first?.url
-            } catch (e: Exception) {
-                null
-            }
+                    requestCreator("GET", playerTokenUrl, referer = fixedData, headers = defaultHeaders)
+                ).first?.url?.toString()
+            }.getOrNull()
 
             if (m3u8Url != null) {
                 callback.invoke(
-                    ExtractorLink(
-                        source = name,
-                        name = name,
-                        url = m3u8Url,
-                        referer = playerTokenUrl,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = m3u8Url.contains(".m3u8"),
-                    )
+                    newExtractorLink(name, name, m3u8Url,
+                        if (m3u8Url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = playerTokenUrl
+                    }
                 )
                 return true
             }
         }
 
-        // Fallback: Try to extract player_token from page HTML directly
-        // (some servers pre-render the iframe src)
-        val doc = app.get(
-            fixedData,
-            headers = mapOf("Referer" to mainUrl, "User-Agent" to USER_AGENT)
-        ).document
+        return inlineM3u8Fallback(fixedData, callback)
+    }
 
-        // Look for iframe with player_token
-        val iframeSrc = doc.select("iframe[src*=video_player]").attr("src").ifEmpty {
-            doc.select("iframe[data-src*=video_player]").attr("data-src")
+    private suspend fun inlineM3u8Fallback(url: String, callback: (ExtractorLink) -> Unit): Boolean {
+        val doc = safeGet(url) ?: return false
+        val html = doc.html()
+
+        val iframeSrc = doc.select("iframe[src*=video_player]").attr("abs:src").ifEmpty {
+            doc.select("iframe[data-src*=video_player]").attr("abs:data-src")
         }
 
         if (iframeSrc.isNotEmpty()) {
-            val fullIframeUrl = if (iframeSrc.startsWith("http")) iframeSrc
-            else "$mainUrl$iframeSrc"
-
-            // Get the player page HTML (may need WebView for CF)
-            val m3u8 = try {
+            val m3u8 = runCatching {
                 WebViewResolver(Regex("""\.m3u8""")).resolveUsingWebView(
-                    requestCreator(
-                        "GET", fullIframeUrl,
-                        referer = fixedData,
-                        headers = mapOf("User-Agent" to USER_AGENT)
-                    )
-                ).first?.url
-            } catch (e: Exception) {
-                null
-            }
+                    requestCreator("GET", iframeSrc, referer = url, headers = defaultHeaders)
+                ).first?.url?.toString()
+            }.getOrNull()
 
             if (m3u8 != null) {
-                callback.invoke(
-                    ExtractorLink(
-                        source = name,
-                        name = name,
-                        url = m3u8,
-                        referer = fullIframeUrl,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true,
-                    )
-                )
+                callback.invoke(newExtractorLink(name, name, m3u8, ExtractorLinkType.M3U8) { this.referer = iframeSrc })
                 return true
             }
         }
-
-        // Last fallback: search raw HTML for m3u8
-        val rawHtml = doc.html()
-        val m3u8Match = M3U8_REGEX.find(rawHtml) ?: SOURCES_REGEX.find(rawHtml)
-        if (m3u8Match != null) {
-            val m3u8Url = m3u8Match.groupValues[1]
+        
+        val matches = (M3U8_REGEX.findAll(html) + SOURCES_REGEX.findAll(html) + 
+                       Regex("""(https?://[^"'\s\\]+\.(?:m3u8|mp4)[^"'\s\\]*)""").findAll(html))
+            .map { it.groupValues.getOrNull(1) ?: it.value }
+            .filterNotNull().distinct().toList()
+        
+        if (matches.isEmpty()) return false
+        
+        matches.forEach { videoUrl ->
+            val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
             callback.invoke(
-                ExtractorLink(
-                    source = name,
-                    name = name,
-                    url = m3u8Url,
-                    referer = fixedData,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true,
-                )
+                newExtractorLink(name, name, videoUrl,
+                    if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = url
+                    this.quality = getVideoQuality(videoUrl)
+                }
             )
-            return true
         }
+        return true
+    }
 
-        return false
+    private fun getVideoQuality(quality: String?): Int {
+        if (quality == null) return Qualities.Unknown.value
+        return when {
+            quality.contains("1080") -> Qualities.P1080.value
+            quality.contains("720") -> Qualities.P720.value
+            quality.contains("480") -> Qualities.P480.value
+            quality.contains("360") -> Qualities.P360.value
+            else -> Qualities.Unknown.value
+        }
     }
 }
