@@ -116,13 +116,16 @@ class FaselHDProvider : MainAPI() {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
-                        val url = request.url.toString()
-                        if (url.contains("m3u8") && (url.contains("master.m3u8") || url.contains("scdns.io"))) {
+                        val u = request.url.toString()
+                        if (u.contains("m3u8", true) || u.contains("scdns.io", true) ||
+                            u.contains("jwpcdn", true) || u.contains(".ts", true)) {
+                            println("FaselHD: WebView subrequest -> $u")
                             if (!resolved) {
                                 resolved = true
-                                println("FaselHD: Found M3U8 via intercept: $url")
-                                view.post { view.destroy() }
-                                continuation.resume(url)
+                                println("FaselHD: Found M3U8 via intercept: $u")
+                                // Use handler to destroy on main thread
+                                handler.post { webView.destroy() }
+                                continuation.resume(u)
                             }
                         }
                         return null
@@ -131,6 +134,41 @@ class FaselHDProvider : MainAPI() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         println("FaselHD: WebView finished loading $url")
+                        
+                        repeat(60) { i ->
+                            view?.postDelayed({
+                                if (resolved) return@postDelayed
+                                view.evaluateJavascript("""
+                                    (function() {
+                                        try {
+                                            const perf = performance.getEntriesByType('resource')
+                                                .map(x => x.name)
+                                                .filter(x => /m3u8|scdns\.io|master\.m3u8/i.test(x));
+                                            if (perf.length) return perf[0];
+
+                                            if (window.jwplayer) {
+                                                const p = jwplayer();
+                                                const item = p && p.getPlaylistItem ? p.getPlaylistItem() : null;
+                                                const file =
+                                                    item?.file ||
+                                                    (item?.sources && item.sources[0] && item.sources[0].file) ||
+                                                    "";
+                                                if (file) return file;
+                                            }
+                                        } catch (e) {}
+                                        return "";
+                                    })();
+                                """.trimIndent()) { raw ->
+                                    val found = raw.trim('"')
+                                    if (found.isNotBlank() && !resolved) {
+                                        resolved = true
+                                        println("FaselHD: Found M3U8 via JS polling: $found")
+                                        webView.destroy()
+                                        continuation.resume(found)
+                                    }
+                                }
+                            }, i * 750L)
+                        }
                     }
                 }
 
@@ -262,7 +300,11 @@ class FaselHDProvider : MainAPI() {
             posterUrl     = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, mainUrl) }
             this.quality  = getQualityFromString(quality)
             // Use the card's own page URL as Referer — avoids 403 on poster CDNs
-            posterHeaders = mapOf("Referer" to href, "User-Agent" to userAgent)
+            posterHeaders = mapOf(
+                "Referer" to href,
+                "User-Agent" to userAgent,
+                "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+            )
         }
     }
 
@@ -293,7 +335,11 @@ class FaselHDProvider : MainAPI() {
             }?.let { if (it.startsWith("//")) "https:$it" else it }
         println("FaselHD: Poster -> $poster")
 
-        val ph   = mapOf("Referer" to pageUrl, "User-Agent" to userAgent)
+        val ph   = mapOf(
+            "Referer" to pageUrl,
+            "User-Agent" to userAgent,
+            "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+        )
         val desc = doc.selectFirst("div.singleDesc p, div.singleDesc, .entry-content p")?.text()
         val year = doc.select("a[href*='series_year'], a[href*='movies_year']")
             .firstOrNull()?.text()?.toIntOrNull()
@@ -313,10 +359,11 @@ class FaselHDProvider : MainAPI() {
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl     = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    this.year     = year
-                    plot          = desc
-                    posterHeaders = ph
+                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    this.year           = year
+                    plot                = desc
+                    posterHeaders       = ph
                 }
             }
 
@@ -346,22 +393,24 @@ class FaselHDProvider : MainAPI() {
                 }
                 println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl        = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    this.year        = year
-                    plot             = desc
-                    recommendations  = recs
-                    posterHeaders    = ph
+                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    this.year           = year
+                    plot                = desc
+                    recommendations     = recs
+                    posterHeaders       = ph
                 }
             }
 
             else -> {
                 println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl       = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
-                    this.year       = year
-                    plot            = desc
-                    recommendations = recs
-                    posterHeaders   = ph
+                    posterUrl           = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    backgroundPosterUrl = poster?.takeIf { it.isNotBlank() }?.let { normalizeUrl(it, host) }
+                    this.year           = year
+                    plot                = desc
+                    recommendations     = recs
+                    posterHeaders       = ph
                 }
             }
         }
