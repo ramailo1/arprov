@@ -104,14 +104,10 @@ class FaselHDProvider : MainAPI() {
         }.getOrNull()
     }
 
-    private fun buildPosterHeaders(finalPoster: String?, fallbackReferer: String): Map<String, String>? {
+    private fun buildPosterHeaders(finalPoster: String?, pageUrl: String): Map<String, String>? {
         if (finalPoster.isNullOrBlank()) return null
-        val posterReferer = runCatching {
-            java.net.URI(finalPoster).let { "${it.scheme}://${it.host}/" }
-        }.getOrNull() ?: fallbackReferer
-
         return mapOf(
-            "Referer" to posterReferer,
+            "Referer" to pageUrl,
             "User-Agent" to userAgent,
             "Accept" to "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
         )
@@ -173,6 +169,21 @@ class FaselHDProvider : MainAPI() {
                     runCatching { webView.destroy() }
                     continuation.resume(value)
                 }
+
+                webView.addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun report(value: String?) {
+                        if (value.isNullOrBlank()) return
+                        println("FaselHD: JSBridge -> $value")
+
+                        val media = Regex("""https?://[^\s"'\\]+(?:\.m3u8|\.mp4)[^\s"'\\]*""", RegexOption.IGNORE_CASE)
+                            .find(value)?.value
+
+                        if (media != null) {
+                            handler.post { finish(media) }
+                        }
+                    }
+                }, "CSBridge")
 
                 continuation.invokeOnCancellation {
                     handler.post {
@@ -244,6 +255,74 @@ class FaselHDProvider : MainAPI() {
                             finish(null)
                         }
                         handler.postDelayed(captureTimeout!!, 45_000)
+
+                        view?.evaluateJavascript(
+                            """
+                            (function() {
+                                if (window.__csHooked) return "hooked";
+                                window.__csHooked = true;
+                        
+                                try {
+                                    const oldFetch = window.fetch;
+                                    window.fetch = async function(...args) {
+                                        const res = await oldFetch.apply(this, args);
+                                        try {
+                                            const url = (args && args[0]) ? String(args[0]) : "";
+                                            CSBridge.report("fetch_url=" + url);
+                                            const clone = res.clone();
+                                            clone.text().then(t => {
+                                                const shortText = String(t).slice(0, 4000);
+                                                CSBridge.report("fetch_body=" + shortText);
+                                            }).catch(() => {});
+                                        } catch(e) {}
+                                        return res;
+                                    };
+                                } catch(e) {}
+                        
+                                try {
+                                    const oldOpen = XMLHttpRequest.prototype.open;
+                                    XMLHttpRequest.prototype.open = function(method, url) {
+                                        this.__cs_url = url;
+                                        return oldOpen.apply(this, arguments);
+                                    };
+                        
+                                    const oldSend = XMLHttpRequest.prototype.send;
+                                    XMLHttpRequest.prototype.send = function() {
+                                        this.addEventListener("load", function() {
+                                            try {
+                                                CSBridge.report("xhr_url=" + (this.__cs_url || ""));
+                                                const txt = typeof this.responseText === "string" ? this.responseText.slice(0, 4000) : "";
+                                                if (txt) CSBridge.report("xhr_body=" + txt);
+                                            } catch(e) {}
+                                        });
+                                        return oldSend.apply(this, arguments);
+                                    };
+                                } catch(e) {}
+                        
+                                try {
+                                    const oldCreate = URL.createObjectURL;
+                                    URL.createObjectURL = function(obj) {
+                                        const out = oldCreate.apply(this, arguments);
+                                        try { CSBridge.report("blob_url=" + out); } catch(e) {}
+                                        return out;
+                                    };
+                                } catch(e) {}
+                        
+                                try {
+                                    if (window.jwplayer) {
+                                        const p = jwplayer();
+                                        try { p.on("ready", () => CSBridge.report("jw_ready")); } catch(e) {}
+                                        try { p.on("play", () => CSBridge.report("jw_play")); } catch(e) {}
+                                        try { p.on("error", e => CSBridge.report("jw_error=" + JSON.stringify(e))); } catch(e) {}
+                                        try { p.on("setupError", e => CSBridge.report("jw_setup_error=" + JSON.stringify(e))); } catch(e) {}
+                                    }
+                                } catch(e) {}
+                        
+                                return "ok";
+                            })();
+                            """.trimIndent(),
+                            null
+                        )
 
                         repeat(90) { i ->
                             view?.postDelayed({
