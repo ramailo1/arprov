@@ -317,8 +317,36 @@ class FaselHDProvider : MainAPI() {
             return rawScan(html, pageUrl, callback)
         }
 
-        println("FaselHD: Initiating WebViewResolver for playerUrl")
+        // Step 3: Option B - Extract directly from Player Page HTML (Bypasses WebView Turnstile loop)
+        // safeGet uses CloudflareKiller which we know works for fetching the page content
+        println("FaselHD: Fetching player page HTML via safeGet...")
+        val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
+        if (playerDoc != null) {
+            val playerHtml = playerDoc.html()
+            val links = extractFromPlayerHtml(playerHtml)
+            println("FaselHD: extractFromPlayerHtml found ${links.size} links")
+            if (links.isNotEmpty()) {
+                links.forEach { url ->
+                    callback(
+                        newExtractorLink(
+                            name, name, url,
+                            if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8
+                            else ExtractorLinkType.VIDEO
+                        ) {
+                            referer = playerUrl
+                            quality = getVideoQuality(url)
+                        }
+                    )
+                }
+                return true
+            }
+        }
+
+        // Step 4: Fallback - use WebViewResolver if direct extraction failed
+        println("FaselHD: Direct extraction failed, attempting WebViewResolver fallback...")
         val resolved = runCatching {
+            // Give CF cookies time to settle before launching WebView
+            delay(3000)
             WebViewResolver(Regex("""\.m3u8|\.mp4"""))
             .resolveUsingWebView(requestCreator(
                     "GET",
@@ -345,14 +373,24 @@ class FaselHDProvider : MainAPI() {
             return true
         }
 
-        // Step 4: try scanning player page HTML directly
-        println("FaselHD: WebView failed, scanning player page HTML directly")
-        val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
-        if (playerDoc != null && rawScan(playerDoc.html(), playerUrl, callback)) return true
-
-        // Step 5: fallback — scan original page HTML
+        // Step 5: Everything failed, final rawScan of original page
         println("FaselHD: Everything failed, final rawScan of original page")
         return rawScan(html, pageUrl, callback)
+    }
+
+    // ────────────────────────────────────────────────
+    // Link Extraction Helpers
+    // ────────────────────────────────────────────────
+
+    private fun extractFromPlayerHtml(html: String): List<String> {
+        val patterns = listOf(
+            Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""<source[^>]+src=["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""(?:src|source|url|file)\s*[=:]\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""(https?://[^\s"'\\]+/(?:hls|playlist|index)[^\s"'\\]*\.m3u8[^\s"'\\]*)"""),
+            Regex("""["'](https?://[^\s"'\\]+\.mp4[^\s"'\\]*)["']""")
+        )
+        return patterns.flatMap { it.findAll(html).map { m -> m.groupValues[1] } }.distinct()
     }
 
     // ────────────────────────────────────────────────
