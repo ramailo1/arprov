@@ -39,9 +39,12 @@ class FaselHDProvider : MainAPI() {
 
     /** Resolve the real host once — call at the TOP of each public method, store locally. */
     private suspend fun resolveHost(): String = runCatching {
+        println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
         val uri  = java.net.URL(resp.url.trimEnd('/'))
-        "${uri.protocol}://${uri.host}".also { mainUrl = it }
+        val host = "${uri.protocol}://${uri.host}"
+        println("FaselHD: Host resolved to $host")
+        host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
 
     /** Swap whatever subdomain is in [url] with [host]. */
@@ -70,9 +73,14 @@ class FaselHDProvider : MainAPI() {
 
     /** Fetch a page. Try plain first; fall back to cfKiller once per mutex. */
     private suspend fun safeGet(url: String, referer: String = url): Document? {
+        println("FaselHD: safeGet -> $url (Referer: $referer)")
         return runCatching {
             val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
-            if (res.isSuccessful && !isBlocked(res.document)) return res.document
+            if (res.isSuccessful && !isBlocked(res.document)) {
+                println("FaselHD: Plain GET successful for $url")
+                return res.document
+            }
+            println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
             mutex.withLock {
                 val cfRes = app.get(
                     url,
@@ -81,9 +89,11 @@ class FaselHDProvider : MainAPI() {
                     timeout      = 120
                 )
                 if (cfRes.isSuccessful) {
+                    println("FaselHD: CloudflareKiller successful for $url")
                     delay(2000)
                     if (!isBlocked(cfRes.document)) return cfRes.document
                 }
+                println("FaselHD: CloudflareKiller failed or still blocked for $url")
                 null
             }
         }.getOrNull()
@@ -107,14 +117,14 @@ class FaselHDProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        println("FaselHD: getMainPage -> ${request.name} (Page: $page)")
         val host = resolveHost()
         val url  = if (page == 1) "$host${request.data}"
                    else "$host${request.data.trimEnd('/')}/page/$page"
         val doc  = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
-        return newHomePageResponse(
-            request.name,
-            doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
-        )
+        val results = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        println("FaselHD: Found ${results.size} results on main page")
+        return newHomePageResponse(request.name, results)
     }
 
     // ────────────────────────────────────────────────
@@ -122,9 +132,12 @@ class FaselHDProvider : MainAPI() {
     // ────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
+        println("FaselHD: searching for -> $query")
         val host = resolveHost()
         val doc  = safeGet("$host/?s=$query", host) ?: return emptyList()
-        return doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        val results = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        println("FaselHD: Found ${results.size} results for search query")
+        return results
     }
 
     // ────────────────────────────────────────────────
@@ -160,12 +173,15 @@ class FaselHDProvider : MainAPI() {
     // ────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse? {
+        println("FaselHD: load -> $url")
         val host    = resolveHost()
         val pageUrl = normalizeUrl(url, host)
+        println("FaselHD: Normalized page URL -> $pageUrl")
         val doc     = safeGet(pageUrl, pageUrl) ?: return null
 
         val title = doc.selectFirst("div.title, h1.postTitle, div.h1, .entry-title, h1")
             ?.text() ?: doc.title()
+        println("FaselHD: Title -> $title")
 
         // og:image first — CDN-hosted, no CF cookie needed
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
@@ -177,6 +193,7 @@ class FaselHDProvider : MainAPI() {
             ?: doc.selectFirst("div.posterImg img, .entry-thumbnail img, img.posterImg")?.let {
                 it.attr("data-src").ifEmpty { it.attr("src") }
             }?.let { if (it.startsWith("//")) "https:$it" else it }
+        println("FaselHD: Poster -> $poster")
 
         val ph   = mapOf("Referer" to pageUrl, "User-Agent" to userAgent)
         val desc = doc.selectFirst("div.singleDesc p, div.singleDesc, .entry-content p")?.text()
@@ -190,29 +207,36 @@ class FaselHDProvider : MainAPI() {
                 "/anime/" in pageUrl || "/asian-series/" in pageUrl ||
                 doc.select("#seasonList, div.seasonLoop, #epAll, div.epAll, #DivEpisodesList").isNotEmpty() ||
                 doc.select("a[href*='/episodes/']").isNotEmpty()
+        println("FaselHD: isSeries=$isSeries, isEpisodePage=$isEpisodePage")
 
         return when {
-            isEpisodePage -> newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
-                listOf(newEpisode(pageUrl) { name = title })
-            ) {
-                posterUrl     = poster
-                this.year     = year
-                plot          = desc
-                posterHeaders = ph
+            isEpisodePage -> {
+                println("FaselHD: Treatment as Single Episode")
+                newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
+                    listOf(newEpisode(pageUrl) { name = title })
+                ) {
+                    posterUrl     = poster
+                    this.year     = year
+                    plot          = desc
+                    posterHeaders = ph
+                }
             }
 
             isSeries -> {
+                println("FaselHD: Treatment as Series")
                 val rawLinks = doc.select(
                     "#epAll a, div.epAll a, #DivEpisodesList a, .episodes-list a, a[href*='/episodes/']"
                 )
                 val episodes = if (rawLinks.isNotEmpty()) {
+                    println("FaselHD: Found ${rawLinks.size} episode links")
                     rawLinks.mapIndexed { idx, el ->
                         val epUrl   = normalizeUrl(el.attr("abs:href"), host)
                         val epTitle = el.text().trim()
-                        val epNum   = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull() ?: (idx + 1)
+                        val epNum = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull() ?: (idx + 1)
                         newEpisode(epUrl) { name = epTitle; episode = epNum }
                     }.distinctBy { it.data }
                 } else {
+                    println("FaselHD: No episode links found, checking for seasons")
                     doc.select("#seasonList a, div.seasonLoop a").mapIndexed { idx, el ->
                         val seasonUrl   = normalizeUrl(el.attr("abs:href"), host)
                         val seasonTitle = el.text().trim()
@@ -222,6 +246,7 @@ class FaselHDProvider : MainAPI() {
                         }
                     }
                 }
+                println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
                     posterUrl        = poster
                     this.year        = year
@@ -231,12 +256,15 @@ class FaselHDProvider : MainAPI() {
                 }
             }
 
-            else -> newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                posterUrl       = poster
-                this.year       = year
-                plot            = desc
-                recommendations = recs
-                posterHeaders   = ph
+            else -> {
+                println("FaselHD: Treatment as Movie")
+                newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
+                    posterUrl       = poster
+                    this.year       = year
+                    plot            = desc
+                    recommendations = recs
+                    posterHeaders   = ph
+                }
             }
         }
     }
@@ -251,15 +279,16 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        println("FaselHD: loadLinks for data -> $data")
         val host    = resolveHost()
         val pageUrl = normalizeUrl(data, host)
+        println("FaselHD: Normalized loadLinks URL -> $pageUrl")
 
         // Step 1: get the episode/movie page (CF cleared)
         val doc  = safeGet(pageUrl, pageUrl) ?: return false
         val html = doc.html()
 
         // Step 2: find the player token URL directly in page HTML
-        // It may sit in an iframe src, a data attribute, or a JS variable
         val playerUrl = doc.selectFirst(
             "iframe[src*=video_player], iframe[data-src*=video_player]"
         )?.let {
@@ -271,14 +300,16 @@ class FaselHDProvider : MainAPI() {
                 .find(html)?.value?.let {
                     if (it.startsWith("http")) it else "$host/$it"
                 }
+        
+        println("FaselHD: Extracted playerUrl -> $playerUrl")
 
         if (playerUrl == null) {
-            // No player token in page — scan raw HTML as last resort
+            println("FaselHD: No player token in page, falling back to rawScan")
             return rawScan(html, pageUrl, callback)
         }
 
-        // Step 3: use WebViewResolver to intercept the m3u8/mp4 from the player page
-        // This handles Cloudflare on the player page natively — no cfKiller loop needed
+        // Step 3: use WebViewResolver
+        println("FaselHD: Initiating WebViewResolver for playerUrl")
         val resolved = runCatching {
             WebViewResolver(
                 Regex("""\.m3u8|\.mp4""")
@@ -291,6 +322,8 @@ class FaselHDProvider : MainAPI() {
                 )
             ).first?.url?.toString()
         }.getOrNull()
+        
+        println("FaselHD: WebViewResolver returned -> $resolved")
 
         if (resolved != null) {
             callback(
@@ -307,10 +340,12 @@ class FaselHDProvider : MainAPI() {
         }
 
         // Step 4: try scanning player page HTML directly
+        println("FaselHD: WebView failed, scanning player page HTML directly")
         val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
         if (playerDoc != null && rawScan(playerDoc.html(), playerUrl, callback)) return true
 
         // Step 5: fallback — scan original page HTML
+        println("FaselHD: Everything failed, final rawScan of original page")
         return rawScan(html, pageUrl, callback)
     }
 
@@ -319,6 +354,7 @@ class FaselHDProvider : MainAPI() {
     // ────────────────────────────────────────────────
 
     private suspend fun rawScan(html: String, referer: String, callback: (ExtractorLink) -> Unit): Boolean {
+        println("FaselHD: Starting rawScan for $referer")
         val urls = Regex("""(https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*)""")
             .findAll(html)
             .map { it.groupValues[1] }
@@ -326,9 +362,11 @@ class FaselHDProvider : MainAPI() {
             .distinct()
             .toList()
 
+        println("FaselHD: rawScan found ${urls.size} potential links")
         if (urls.isEmpty()) return false
         urls.forEach { url ->
             val isM3u8 = url.contains(".m3u8", true)
+            println("FaselHD: rawScan found -> $url")
             callback(
                 newExtractorLink(
                     name, name, url,
