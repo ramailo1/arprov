@@ -32,14 +32,14 @@ class FaselHDProvider : MainAPI() {
     private val defaultHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent" to app.userAgent,
         "Referer" to mainUrl
     )
 
     // Derive poster headers from a given page URL so the Referer always matches the content domain
     private fun posterHeadersFor(pageUrl: String): Map<String, String> {
         return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "User-Agent" to app.userAgent,
             "Referer" to pageUrl
         )
     }
@@ -48,7 +48,7 @@ class FaselHDProvider : MainAPI() {
     private fun isBlocked(doc: Document): Boolean {
         val title = doc.select("title").text().lowercase()
         val body = doc.body()?.text()?.lowercase() ?: ""
-        return title.contains("just a moment") ||
+        val blocked = title.contains("just a moment") ||
                title.contains("security verification") ||
                title.contains("access denied") ||
                title.contains("cloudflare") ||
@@ -56,6 +56,11 @@ class FaselHDProvider : MainAPI() {
                body.contains("verifying you are not a bot") ||
                body.contains("performing security verification") ||
                body.contains("checking your browser")
+        
+        if (blocked) {
+            println("FaselHD Debug: Blocked by Cloudflare? Title: '$title' | Body snippet: ${body.take(100)}")
+        }
+        return blocked
     }
 
     private suspend fun safeGet(url: String): Document? {
@@ -66,6 +71,7 @@ class FaselHDProvider : MainAPI() {
                 return@runCatching res
             }
             // Cloudflare detected — solve with CloudflareKiller
+            println("FaselHD Debug: [safeGet] Initial request to $url was successful, but blocked by CF. Attempting CFKiller.")
             mutex.withLock {
                 val cfRes = app.get(url, headers = defaultHeaders, interceptor = cfKiller, timeout = 120)
                 if (cfRes.isSuccessful) {
@@ -140,6 +146,7 @@ class FaselHDProvider : MainAPI() {
         }
         
         val elements = doc.select("div.postDiv")
+        println("FaselHD Debug: Found ${elements.size} elements in main page")
         val list = elements.mapNotNull { it.toSearchResult(url) }
         
         return newHomePageResponse(request.name, list)
@@ -159,8 +166,12 @@ class FaselHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = safeGet("$mainUrl/?s=$query") ?: return emptyList()
-        return doc.select("div.postDiv").mapNotNull { it.toSearchResult() }
+        val url = "$mainUrl/?s=$query"
+        println("FaselHD Debug: Searching url: $url")
+        val doc = safeGet(url) ?: return emptyList()
+        val elements = doc.select("div.postDiv")
+        println("FaselHD Debug: Search found ${elements.size} elements")
+        return elements.mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -257,7 +268,8 @@ class FaselHDProvider : MainAPI() {
         var playerUrl: String? = null
         for (server in serverItems) {
             val onclick = server.attr("onclick")
-            val match = Regex("""['"]([^'"]*video_player[^'"]*)['"]""").find(onclick)
+            val match = Regex("""player_iframe\s*\(\s*['"]([^'"]+)['"]""").find(onclick)
+                ?: Regex("""['"]([^'"]*video_player[^'"]*)['"]""").find(onclick)
                 ?: Regex("""['"]([^'"]*https?://[^'"]+)['"]""").find(onclick) // broader fallback
             if (match != null) {
                 val raw = match.groupValues[1]
