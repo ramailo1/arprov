@@ -10,6 +10,9 @@ import org.jsoup.nodes.Element
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import android.webkit.CookieManager
+import java.net.URI
+import okhttp3.HttpUrl
 
 class FaselHDProvider : MainAPI() {
     override var name = "FaselHD"
@@ -59,8 +62,32 @@ class FaselHDProvider : MainAPI() {
         "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8",
         "User-Agent"      to userAgent,
         "Referer"         to referer,
-        "Origin"          to host
+        "Origin"          to host,
+        "sec-ch-ua-mobile" to "?1",
+        "sec-ch-ua-platform" to "\"Android\""
     )
+
+    private fun syncCookiesToWebView(url: String) {
+        try {
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            val uri = URI(url)
+            val hostName = uri.host ?: return
+            
+            val httpUrl = HttpUrl.Builder()
+                .scheme("https")
+                .host(hostName)
+                .build()
+
+            app.baseClient.cookieJar.loadForRequest(httpUrl).forEach { cookie ->
+                cookieManager.setCookie("https://$hostName", cookie.toString())
+            }
+            cookieManager.flush()
+            println("FaselHD: Synced CF cookies to WebView for $hostName")
+        } catch (e: Exception) {
+            println("FaselHD: Failed to sync cookies: ${e.message}")
+        }
+    }
 
     private fun isBlocked(doc: Document): Boolean {
         val t = doc.select("title").text().lowercase()
@@ -170,7 +197,7 @@ class FaselHDProvider : MainAPI() {
                           TvType.TvSeries else TvType.Movie
 
         return newMovieSearchResponse(title, href, type) {
-            posterUrl     = poster
+            posterUrl     = normalizeUrl(poster ?: "", mainUrl)
             this.quality  = getQualityFromString(quality)
             // Use the card's own page URL as Referer — avoids 403 on poster CDNs
             posterHeaders = mapOf("Referer" to href, "User-Agent" to userAgent)
@@ -224,7 +251,7 @@ class FaselHDProvider : MainAPI() {
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl     = poster
+                    posterUrl     = normalizeUrl(poster ?: "", host)
                     this.year     = year
                     plot          = desc
                     posterHeaders = ph
@@ -257,7 +284,7 @@ class FaselHDProvider : MainAPI() {
                 }
                 println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl        = poster
+                    posterUrl        = normalizeUrl(poster ?: "", host)
                     this.year        = year
                     plot             = desc
                     recommendations  = recs
@@ -268,7 +295,7 @@ class FaselHDProvider : MainAPI() {
             else -> {
                 println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl       = poster
+                    posterUrl       = normalizeUrl(poster ?: "", host)
                     this.year       = year
                     plot            = desc
                     recommendations = recs
@@ -323,6 +350,7 @@ class FaselHDProvider : MainAPI() {
         val playerDoc = safeGet(normalizeUrl(playerUrl, host), pageUrl)
         if (playerDoc != null) {
             val playerHtml = playerDoc.html()
+            println("FaselHD: PlayerHTML preview -> ${playerHtml.take(2000).replace("\n", " ")}")
             val links = extractFromPlayerHtml(playerHtml)
             println("FaselHD: extractFromPlayerHtml found ${links.size} links")
             if (links.isNotEmpty()) {
@@ -345,7 +373,8 @@ class FaselHDProvider : MainAPI() {
         // Step 4: Fallback - use WebViewResolver if direct extraction failed
         println("FaselHD: Direct extraction failed, attempting WebViewResolver fallback...")
         val resolved = runCatching {
-            // Give CF cookies time to settle before launching WebView
+            // Sync CF cookies to WebView BEFORE launching
+            syncCookiesToWebView(normalizeUrl(playerUrl, host))
             delay(3000)
             WebViewResolver(Regex("""\.m3u8|\.mp4"""))
             .resolveUsingWebView(requestCreator(
@@ -384,8 +413,8 @@ class FaselHDProvider : MainAPI() {
 
     private fun extractFromPlayerHtml(html: String): List<String> {
         val patterns = listOf(
-            Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
-            Regex("""<source[^>]+src=["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""\bfile\b\s*[:=]\s*["'](https?://[^"']+)["']"""),
+            Regex("""<source[^>]+src=["'](https?://[^"']+)["']"""),
             Regex("""(?:src|source|url|file)\s*[=:]\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
             Regex("""(https?://[^\s"'\\]+/(?:hls|playlist|index)[^\s"'\\]*\.m3u8[^\s"'\\]*)"""),
             Regex("""["'](https?://[^\s"'\\]+\.mp4[^\s"'\\]*)["']""")
