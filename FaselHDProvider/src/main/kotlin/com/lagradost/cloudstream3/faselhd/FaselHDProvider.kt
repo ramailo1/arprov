@@ -143,8 +143,9 @@ class FaselHDProvider : MainAPI() {
         val title = doc.selectFirst("div.title, h1.postTitle, div.h1, .entry-title, h1")
             ?.text() ?: doc.title()
 
+        // FIX #23: Only use og:image to avoid 403 Referer issues
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
-            ?.takeIf { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() && it.startsWith("http") }
             ?: doc.selectFirst("div.posterImg img, .entry-thumbnail img, img.posterImg")?.let {
                 it.attr("data-src").ifEmpty { it.attr("src") }
             }?.let { if (it.startsWith("//")) "https:$it" else it }
@@ -239,51 +240,70 @@ class FaselHDProvider : MainAPI() {
             data.replace("${uri.protocol}://${uri.host}", mainUrl)
         } else data
 
-        // FIX #2 & #3: Two-phase WebView strategy
-        // Phase 1: Load movie/episode page in WebView and intercept the
-        //          iframe src injection into #vihtml (video_player?player_token=...)
-        //          The site uses WordPress AJAX to generate the token, then injects
-        //          an iframe. We intercept that iframe's URL as a sub-resource request.
-        val playerTokenUrl = runCatching {
-            WebViewResolver(
-                PLAYER_TOKEN_REGEX,
-                // interceptSubRequests = true ensures iframe src requests are caught
-                // not just top-level navigation
-                additionalUrls = listOf(Regex("""player_token"""))
-            ).resolveUsingWebView(
-                requestCreator(
-                    "GET", fixedData,
-                    referer = mainUrl,
-                    headers = defaultHeaders()
-                )
-            ).first?.url?.toString()
-        }.getOrNull()
+        mainUrl = getRealMainUrl()
 
-        if (playerTokenUrl != null) {
-            // Phase 2: Now WebView-resolve the player page itself to intercept m3u8
-            // This page is also CF-protected, so we need WebView again
-            val m3u8Url = runCatching {
-                WebViewResolver(
-                    Regex("""\.m3u8"""),
-                    additionalUrls = listOf(Regex("""\.mp4"""))
-                ).resolveUsingWebView(
-                    requestCreator(
-                        "GET", playerTokenUrl,
-                        referer = fixedData,
-                        headers = defaultHeaders()
-                    )
-                ).first?.url?.toString()
-            }.getOrNull()
+        // Phase 1: Get CF clearance cookies and extract postId
+        val doc = safeGet(fixedData) ?: return false
+        val html = doc.html()
 
-            if (m3u8Url != null) {
+        // Extract WP postId needed for AJAX
+        val postId = Regex("""[?&]p=(\d+)""").find(html)?.groupValues?.get(1)
+            ?: Regex("""\"postid\":\s*\"?(\d+)""").find(html)?.groupValues?.get(1)
+            ?: Regex("""post_id[\"']?\s*:\s*[\"']?(\d+)""").find(html)?.groupValues?.get(1)
+            ?: doc.select("#liskSh").text().let { Regex("""p=(\d+)""").find(it)?.groupValues?.get(1) }
+            ?: run {
+                println("FaselHD DEBUG: Could not find postId in $fixedData")
+                null
+            }
+
+        // Phase 2: Call AJAX to get player token
+        var playerTokenUrl: String? = null
+        if (postId != null) {
+            val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
+            runCatching {
+                // Different possible action names: "get_player_token", "faselhd_player", "doo_player_ajax"
+                val ajaxResponse = app.post(
+                    ajaxUrl,
+                    data = mapOf(
+                        "action" to "get_player_token",
+                        "post_id" to postId,
+                        "server" to "1"
+                    ),
+                    headers = defaultHeaders(),
+                    referer = fixedData
+                ).text
+                
+                println("FaselHD AJAX Response: $ajaxResponse")
+
+                playerTokenUrl = Regex("""video_player\?player_token=[^"'\s]+""").find(ajaxResponse)?.value?.let {
+                    if (it.startsWith("http")) it else "$mainUrl/$it"
+                } ?: Regex(""""(?:url|src|player)"\s*:\s*"([^"]+video_player[^"]+)"""")
+                    .find(ajaxResponse)?.groupValues?.get(1)
+            }
+        }
+
+        // Phase 3: Extract m3u8 from player page
+        val safePlayerTokenUrl = playerTokenUrl
+        if (safePlayerTokenUrl != null) {
+            val playerDoc = safeGet(safePlayerTokenUrl)
+            val playerHtml = playerDoc?.html() ?: ""
+            
+            val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(playerHtml)
+                ?.groupValues?.get(1)
+                ?: Regex("""sources\s*:\s*\[.*?file\s*:\s*["']([^"']+)["']""", RegexOption.DOT_MATCHES_ALL)
+                    .find(playerHtml)?.groupValues?.get(1)
+                ?: Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(playerHtml)
+                    ?.groupValues?.get(1)
+
+            if (m3u8 != null) {
                 callback.invoke(
                     newExtractorLink(
                         name,
                         name,
-                        m3u8Url,
-                        if (m3u8Url.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        m3u8,
+                        if (m3u8.contains(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = playerTokenUrl
+                        this.referer = safePlayerTokenUrl
                         this.quality = Qualities.Unknown.value
                     }
                 )
