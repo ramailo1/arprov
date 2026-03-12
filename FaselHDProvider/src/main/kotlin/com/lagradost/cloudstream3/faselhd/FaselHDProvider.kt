@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import android.webkit.CookieManager
 import java.net.URI
 import okhttp3.HttpUrl
+import okhttp3.Cookie
 
 class FaselHDProvider : MainAPI() {
     override var name = "FaselHD"
@@ -71,21 +72,30 @@ class FaselHDProvider : MainAPI() {
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
-            val uri = URI(url)
-            val hostName = uri.host ?: return
-            
-            val httpUrl = HttpUrl.Builder()
-                .scheme("https")
-                .host(hostName)
-                .build()
+            val hostName = URI(url).host ?: return
 
-            app.baseClient.cookieJar.loadForRequest(httpUrl).forEach { cookie ->
-                cookieManager.setCookie("https://$hostName", cookie.toString())
+            // ✅ Use cfKiller.savedCookies directly — this is where cf_clearance lives
+            var count = 0
+            cfKiller.savedCookies[hostName]?.forEach {
+                cookieManager.setCookie("https://$hostName", it.toString())
+                count++
+                println("FaselHD: Synced cookie: ${it.toString().take(20)}...")
             }
+
+            // Also try OkHttp jar as secondary
+            runCatching {
+                val httpUrl = HttpUrl.Builder().scheme("https").host(hostName).build()
+                app.baseClient.cookieJar.loadForRequest(httpUrl).forEach { cookie ->
+                    cookieManager.setCookie("https://$hostName", cookie.toString())
+                    count++
+                }
+            }
+
             cookieManager.flush()
-            println("FaselHD: Synced CF cookies to WebView for $hostName")
+            val verified = cookieManager.getCookie("https://$hostName")
+            println("FaselHD: WebView cookies after sync ($count total): $verified")
         } catch (e: Exception) {
-            println("FaselHD: Failed to sync cookies: ${e.message}")
+            println("FaselHD: syncCookiesToWebView failed: ${e.message}")
         }
     }
 
@@ -197,7 +207,7 @@ class FaselHDProvider : MainAPI() {
                           TvType.TvSeries else TvType.Movie
 
         return newMovieSearchResponse(title, href, type) {
-            posterUrl     = normalizeUrl(poster ?: "", mainUrl)
+            posterUrl     = poster?.let { normalizeUrl(it, mainUrl) }
             this.quality  = getQualityFromString(quality)
             // Use the card's own page URL as Referer — avoids 403 on poster CDNs
             posterHeaders = mapOf("Referer" to href, "User-Agent" to userAgent)
@@ -251,7 +261,7 @@ class FaselHDProvider : MainAPI() {
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries,
                     listOf(newEpisode(pageUrl) { name = title })
                 ) {
-                    posterUrl     = normalizeUrl(poster ?: "", host)
+                    posterUrl     = poster?.let { normalizeUrl(it, host) }
                     this.year     = year
                     plot          = desc
                     posterHeaders = ph
@@ -284,7 +294,7 @@ class FaselHDProvider : MainAPI() {
                 }
                 println("FaselHD: Total episodes collected -> ${episodes.size}")
                 newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl        = normalizeUrl(poster ?: "", host)
+                    posterUrl        = poster?.let { normalizeUrl(it, host) }
                     this.year        = year
                     plot             = desc
                     recommendations  = recs
@@ -295,7 +305,7 @@ class FaselHDProvider : MainAPI() {
             else -> {
                 println("FaselHD: Treatment as Movie")
                 newMovieLoadResponse(title, pageUrl, TvType.Movie, pageUrl) {
-                    posterUrl       = normalizeUrl(poster ?: "", host)
+                    posterUrl       = poster?.let { normalizeUrl(it, host) }
                     this.year       = year
                     plot            = desc
                     recommendations = recs
