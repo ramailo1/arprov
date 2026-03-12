@@ -145,17 +145,26 @@ class FaselHDProvider : MainAPI() {
     // ────────────────────────────────────────────────
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title   = selectFirst("div.h1, .entry-title, h3, .title")?.text()
+        val title = selectFirst("div.h1, .entry-title, h3, .title")?.text()
             ?: selectFirst("img")?.attr("alt")?.takeIf { it.isNotEmpty() }
             ?: return null
-        val href    = selectFirst("a")?.attr("abs:href") ?: return null
-        val img     = selectFirst("img")
-        val poster  = img?.let {
-            it.attr("data-src")
-                .ifEmpty { it.attr("data-original") }
-                .ifEmpty { it.attr("src") }
-        }?.let { if (it.startsWith("//")) "https:$it" else it }
-            ?.takeIf { it.startsWith("http") }
+        val href = selectFirst("a")?.attr("abs:href")
+            ?.takeIf { it.startsWith("http") } ?: return null
+
+        val img = selectFirst("img")
+        val poster = img?.let {
+            listOf("data-src", "data-original", "data-lazy-src", "src")
+                .map { attr -> it.attr(attr) }
+                .firstOrNull { it.isNotEmpty() }
+        }?.let {
+            when {
+                it.startsWith("http") -> it
+                it.startsWith("//")   -> "https:$it"
+                it.startsWith("/")    -> "$mainUrl$it"
+                else -> null
+            }
+        }
+
         val quality = selectFirst("span.quality, span.qualitySpan")?.text()
         val type    = if (href.contains("/episode/") || href.contains("/episodes/"))
                           TvType.TvSeries else TvType.Movie
@@ -308,13 +317,10 @@ class FaselHDProvider : MainAPI() {
             return rawScan(html, pageUrl, callback)
         }
 
-        // Step 3: use WebViewResolver
         println("FaselHD: Initiating WebViewResolver for playerUrl")
         val resolved = runCatching {
-            WebViewResolver(
-                Regex("""\.m3u8|\.mp4""")
-            ).resolveUsingWebView(
-                requestCreator(
+            WebViewResolver(Regex("""\.m3u8|\.mp4"""))
+            .resolveUsingWebView(requestCreator(
                     "GET",
                     normalizeUrl(playerUrl, host),
                     referer  = pageUrl,
