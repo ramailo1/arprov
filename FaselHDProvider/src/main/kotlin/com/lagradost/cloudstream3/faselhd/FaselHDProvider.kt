@@ -38,13 +38,9 @@ class FaselHDProvider : MainAPI() {
 
     // Derive poster headers from a given page URL so the Referer always matches the content domain
     private fun posterHeadersFor(pageUrl: String): Map<String, String> {
-        val origin = runCatching {
-            val uri = java.net.URI(pageUrl)
-            "${uri.scheme}://${uri.host}"
-        }.getOrElse { mainUrl }
         return mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer" to origin
+            "Referer" to "$mainUrl/"
         )
     }
 
@@ -319,7 +315,14 @@ class FaselHDProvider : MainAPI() {
             try {
                 val pattern = Regex("""(\.m3u8|\.mp4|googlevideo\.com/videoplayback|/playlist\.m3u8|/index\.m3u8)""")
                 println("FaselHD Debug: [STEP 3] Pattern: ${pattern.pattern}")
-                val result = WebViewResolver(pattern).resolveUsingWebView(playerUrl!!)
+                
+                val scrollScript = "window.scrollTo(0, document.body.scrollHeight); setInterval(function(){window.scrollTo(0, document.body.scrollHeight);}, 1000);"
+                
+                val result = WebViewResolver(
+                    interceptUrl = pattern,
+                    script = scrollScript
+                ).resolveUsingWebView(playerUrl!!)
+                
                 val resolvedRequest = result.first
                 println("FaselHD Debug: [STEP 3] WebViewResolver result: $resolvedRequest")
 
