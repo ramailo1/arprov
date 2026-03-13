@@ -398,7 +398,8 @@ class FaselHDProvider : MainAPI() {
                 webView.webChromeClient = android.webkit.WebChromeClient()
 
                 webView.webViewClient = object : WebViewClient() {
-                    var lastChallengeMs = 0L
+                    private var lastChallengeMs = 0L
+                    private var lastOnPageFinishedMs = 0L
                     var captureCheckScheduled = false
 
                     override fun onPageStarted(
@@ -476,7 +477,8 @@ class FaselHDProvider : MainAPI() {
                         val myGen = loadGeneration
                         captureCheckScheduled = false
                         captureStarted = false
-                        lastChallengeMs = System.currentTimeMillis() // Bug 7 Fix: Start check 0 as 'active challenge'
+                        lastChallengeMs = System.currentTimeMillis()
+                        lastOnPageFinishedMs = System.currentTimeMillis() // Bug 9 Fix
                         captureTimeout?.let(handler::removeCallbacks)
                         
                         setupGlobalTimeout(myGen)
@@ -484,31 +486,53 @@ class FaselHDProvider : MainAPI() {
                         if (captureCheckScheduled) return
                         captureCheckScheduled = true
 
-                        // Poll for a CF-quiet window
-                        val checkInterval = 2_000L
-                        val maxChecks = 75
+                        // Bug 9 Fix: Delay start to see if a challenge request follows immediately
+                        handler.postDelayed({
+                            if (resolved || loadGeneration != myGen) return@postDelayed
+                            if (lastChallengeMs > lastOnPageFinishedMs) {
+                                println("FaselHD: Challenge request detected after onPageFinished. Likely interstitial. Skipping capture start for gen $myGen.")
+                                captureCheckScheduled = false
+                                return@postDelayed
+                            }
 
-                        repeat(maxChecks) { i ->
-                            handler.postDelayed({
-                                if (resolved || loadGeneration != myGen) return@postDelayed
-                                val quiet = System.currentTimeMillis() - lastChallengeMs > 3_000
-                                println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet (lastChallengeAge=${System.currentTimeMillis() - lastChallengeMs}ms)")
+                            println("FaselHD: Starting quiet-check loop for gen $myGen (Passed interstitial gate)")
+                            
+                            // Poll for a CF-quiet window
+                            val checkInterval = 2_000L
+                            val maxChecks = 75
 
-                                if (quiet && !captureStarted) {
-                                    captureStarted = true
-                                    println("FaselHD: CF cleared! Starting 45s capture window for gen $myGen.")
-                                    captureTimeout = Runnable {
-                                        if (loadGeneration == myGen) {
-                                            println("FaselHD: Player capture timed out after final page load (gen $myGen)")
-                                            finish(null)
+                            repeat(maxChecks) { i ->
+                                handler.postDelayed({
+                                    if (resolved || loadGeneration != myGen) return@postDelayed
+                                    
+                                    val now = System.currentTimeMillis()
+                                    val quiet = now - lastChallengeMs > 3_000
+                                    
+                                    // Bug 10 Fix: Check for actual clearance cookie
+                                    val cookieStr = CookieManager.getInstance().getCookie(playerUrl) ?: ""
+                                    val hasClearance = cookieStr.contains("cf_clearance=", true)
+                                    
+                                    println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet, hasClearance=$hasClearance (age=${now - lastChallengeMs}ms)")
+
+                                    if (quiet && hasClearance && !captureStarted) {
+                                        captureStarted = true
+                                        println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
+                                        captureTimeout = Runnable {
+                                            if (loadGeneration == myGen) {
+                                                println("FaselHD: Player capture timed out after final page load (gen $myGen)")
+                                                finish(null)
+                                            }
                                         }
-                                    }
-                                    handler.postDelayed(captureTimeout!!, 45_000)
+                                        handler.postDelayed(captureTimeout!!, 45_000)
 
-                                    startPolling(view, myGen)
-                                }
-                            }, i * checkInterval)
-                        }
+                                        startPolling(view, myGen)
+                                    } else if (quiet && !hasClearance) {
+                                        // log only every few checks to avoid spam
+                                        if (i % 5 == 0) println("FaselHD: Window is quiet but cf_clearance is missing for $playerHost. Waiting...")
+                                    }
+                                }, i * checkInterval)
+                            }
+                        }, 1000)
                     }
 
                     fun startPolling(view: WebView?, myGen: Int) {
