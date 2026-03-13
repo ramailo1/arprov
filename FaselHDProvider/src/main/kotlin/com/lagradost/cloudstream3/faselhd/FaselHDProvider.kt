@@ -44,6 +44,28 @@ class FaselHDProvider : MainAPI() {
     private val mutex = Mutex()
     private val extractionMutex = Mutex()
 
+    private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
+    private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
+
+    private fun isVideoMediaUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        // Hard reject images first
+        if (IMAGE_EXTENSIONS.any { lower.endsWith(it) || lower.contains("$it?") }) {
+            println("FaselHD-Filter: Rejected image/thumbnail -> $url")
+            return false
+        }
+        // Accept only known video patterns
+        val isVideo = VIDEO_EXTENSIONS.any { lower.contains(it) }
+                || lower.contains("manifest")
+                || lower.contains("playlist")
+                || lower.contains("stream")
+        
+        if (!isVideo) {
+            // println("FaselHD-Filter: URL did not match video patterns -> $url")
+        }
+        return isVideo
+    }
+
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
@@ -314,10 +336,7 @@ class FaselHDProvider : MainAPI() {
                         if (value.isNullOrBlank()) return
                         println("FaselHD: JSBridge -> $value")
 
-                        val media = Regex(
-                            """https?://[^\s"'\\]+(?:\.m3u8|\.mp4|/hls/|/stream/|/media/|/playlist|/manifest)[^\s"'\\]*""",
-                            RegexOption.IGNORE_CASE
-                        ).find(value)?.value
+                        val media = if (isVideoMediaUrl(value)) value else null
 
                         if (media != null && 
                             !media.contains("cdn-cgi", true) && 
@@ -333,7 +352,7 @@ class FaselHDProvider : MainAPI() {
                                     """
                                     (function() {
                                         const all = performance.getEntriesByType('resource').map(x => x.name);
-                                        const found = all.find(x => /m3u8|\.ts\b|\/hls\/|\/stream\/|manifest/i.test(x) && !x.includes('cdn-cgi'));
+                                        const found = all.find(x => /m3u8|\.ts\b|\/hls\/|\/stream\/|manifest/i.test(x) && !x.includes('cdn-cgi') && !/\.(jpg|jpeg|png|webp|gif|svg)/i.test(x));
                                         return found || "";
                                     })();
                                     """.trimIndent()
@@ -456,15 +475,7 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (
-                            (u.contains("m3u8", true) ||
-                            u.contains("scdns.io", true) ||
-                            u.contains(".ts", true) ||
-                            u.contains(".mp4", true) ||
-                            u.contains("playlist", true) ||
-                            u.contains("manifest", true) ||
-                            u.contains("/hls/", true) ||
-                            u.contains("/stream/", true) ||
-                            u.contains("/media/", true)) &&
+                            isVideoMediaUrl(u) &&
                             !u.contains("challenges.cloudflare.com", true) &&
                             !u.contains("cdn-cgi", true)
                         ) {
