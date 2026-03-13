@@ -176,6 +176,19 @@ class FaselHDProvider : MainAPI() {
         }
     }
 
+    private fun syncCfClearanceToWebView(host: String) {
+        try {
+            val clearance = cfKiller.savedCookies[host]?.get("cf_clearance") ?: return
+            CookieManager.getInstance().apply {
+                setCookie("https://$host", "cf_clearance=$clearance")
+                flush()
+            }
+            println("FaselHD: Synced fresh cf_clearance to WebView for $host")
+        } catch (e: Exception) {
+            println("FaselHD: CF clearance sync failed: ${e.message}")
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun extractM3u8ViaWebView(
         playerUrl: String,
@@ -331,20 +344,17 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
 
-                handler.postDelayed({
-                    if (!resolved) {
-                        println("FaselHD: Global WebView timeout after 180s")
-                        finish(null)
-                    }
-                }, 180_000)
+                // Deleted redundant 180s global timeout
 
                 cookieManager.setAcceptCookie(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
                 }
 
-                syncCookiesToWebView(java.net.URI(playerUrl).host)
-                clearCfCookiesFromWebView(java.net.URI(playerUrl).host)
+                val host = java.net.URI(playerUrl).host
+                clearCfCookiesFromWebView(host)
+                syncCookiesToWebView(host)
+                syncCfClearanceToWebView(host)
 
                 webView.settings.apply {
                     javaScriptEnabled = true
@@ -426,6 +436,12 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (!currentUrl.contains("video_player", true)) return
+                        
+                        // Bug 2 Fix: Reset on every player page load
+                        captureCheckScheduled = false
+                        captureStarted = false
+                        captureTimeout?.let(handler::removeCallbacks)
+
                         if (captureCheckScheduled) return
                         captureCheckScheduled = true
 
@@ -509,7 +525,7 @@ class FaselHDProvider : MainAPI() {
                 }
 
                 println("FaselHD: WebView loading player: $playerUrl")
-                clearCfCookiesFromWebView(java.net.URI(playerUrl).host)
+                // sync logic handled above
                 webView.loadUrl(
                     playerUrl,
                     mapOf(
