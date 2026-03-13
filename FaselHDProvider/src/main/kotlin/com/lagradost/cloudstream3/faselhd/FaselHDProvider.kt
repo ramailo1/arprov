@@ -37,11 +37,12 @@ class FaselHDProvider : MainAPI() {
     private val baseDomain = "faselhdx.bid"
     override var mainUrl = "https://web3126x.$baseDomain"
 
-    private val userAgent =
+    private var userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
 
     private val cfKiller = CloudflareKiller()
     private val mutex = Mutex()
+    private val extractionMutex = Mutex()
 
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
@@ -194,7 +195,7 @@ class FaselHDProvider : MainAPI() {
         playerUrl: String,
         playerHost: String,
         referer: String
-    ): String? {
+    ): String? = extractionMutex.withLock {
         val hookScript = """
             (function() {
                 if (window.__cs_hooked) return;
@@ -384,6 +385,22 @@ class FaselHDProvider : MainAPI() {
                     println("FaselHD:   $name=${value.take(15)}...")
                 }
 
+                // Bug 12 Fix: Use WebView default UA as source of truth
+                val defaultUA = android.webkit.WebSettings.getDefaultUserAgent(context)
+                println("FaselHD: WebView default UA: $defaultUA")
+                
+                // Update provider-wide UA so headers() use it too
+                userAgent = defaultUA
+                
+                // Try to push it to cfKiller if it has the property
+                runCatching {
+                    val field = cfKiller.javaClass.getDeclaredField("userAgent")
+                    field.isAccessible = true
+                    field.set(cfKiller, defaultUA)
+                }.onFailure { e ->
+                    println("FaselHD: Could not set userAgent on cfKiller via reflection: ${e.message}")
+                }
+
                 webView.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
@@ -393,16 +410,8 @@ class FaselHDProvider : MainAPI() {
                     allowFileAccess = true
                     allowContentAccess = true
                     
-                    // Bug 11 Fix: Force User-Agent parity
-                    // Some versions of CloudflareKiller might have a getter or we just use ours
-                    val targetUA = runCatching { 
-                        val field = cfKiller.javaClass.getDeclaredField("savedUserAgent")
-                        field.isAccessible = true
-                        field.get(cfKiller) as? String 
-                    }.getOrNull() ?: userAgent
-                    
-                    userAgentString = targetUA
-                    println("FaselHD: WebView User-Agent set to -> $targetUA")
+                    userAgentString = defaultUA
+                    println("FaselHD: WebView UA confirmed: $userAgentString")
                 }
 
                 webView.webChromeClient = android.webkit.WebChromeClient()
