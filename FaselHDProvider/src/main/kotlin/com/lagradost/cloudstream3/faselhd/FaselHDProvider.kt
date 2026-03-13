@@ -287,13 +287,22 @@ class FaselHDProvider : MainAPI() {
                 var loadGeneration = 0
 
                 fun finish(value: String?) {
-                    if (resolved) return
-                    resolved = true
-                    captureTimeout?.let(handler::removeCallbacks)
-                    runCatching { harvestWebViewCookies(java.net.URI(playerUrl).host) }
-                    runCatching { webView.stopLoading() }
-                    runCatching { webView.destroy() }
-                    continuation.resume(value)
+                    // Bug 6 Fix: Ensure all WebView/continuation calls happen on main thread
+                    handler.post {
+                        if (resolved) return@post
+                        resolved = true
+                        loadGeneration++
+                        captureTimeout?.let(handler::removeCallbacks)
+                        println("FaselHD: Finished extraction (gen $loadGeneration) -> ${value?.take(50)}${if ((value?.length ?: 0) > 50) "..." else ""}")
+                        
+                        runCatching { harvestWebViewCookies(java.net.URI(playerUrl).host) }
+                        runCatching { webView.stopLoading() }
+                        runCatching { webView.destroy() }
+                        
+                        if (continuation.isActive) {
+                            continuation.resume(value)
+                        }
+                    }
                 }
 
                 val wv = webView
@@ -308,8 +317,11 @@ class FaselHDProvider : MainAPI() {
                             RegexOption.IGNORE_CASE
                         ).find(value)?.value
 
-                        if (media != null && !media.contains("cdn-cgi") && !media.contains("challenge")) {
-                            handler.post { finish(media) }
+                        if (media != null && 
+                            !media.contains("cdn-cgi", true) && 
+                            !media.contains("challenge", true) &&
+                            !media.contains("challenges.cloudflare.com", true)) {
+                            finish(media)
                             return
                         }
 
@@ -419,7 +431,7 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (
-                            u.contains("m3u8", true) ||
+                            (u.contains("m3u8", true) ||
                             u.contains("scdns.io", true) ||
                             u.contains(".ts", true) ||
                             u.contains(".mp4", true) ||
@@ -427,9 +439,11 @@ class FaselHDProvider : MainAPI() {
                             u.contains("manifest", true) ||
                             u.contains("/hls/", true) ||
                             u.contains("/stream/", true) ||
-                            u.contains("/media/", true)
+                            u.contains("/media/", true)) &&
+                            !u.contains("challenges.cloudflare.com", true) &&
+                            !u.contains("cdn-cgi", true)
                         ) {
-                            println("FaselHD: WebView media subrequest -> $u")
+                            println("FaselHD: WebView media subrequest (filtered) -> $u")
                             finish(u)
                         }
                         return super.shouldInterceptRequest(view, request)
