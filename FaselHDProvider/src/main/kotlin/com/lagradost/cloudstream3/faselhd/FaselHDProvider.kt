@@ -13,7 +13,10 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import okhttp3.Cookie
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -260,13 +263,16 @@ class FaselHDProvider : MainAPI() {
                     console.log("FaselHD-JS: " + msg);
                 }
 
-                // --- Fetch Hook ---
+                // --- Fetch Hook (Layer 1) ---
                 const origFetch = window.fetch;
                 window.fetch = function() {
-                    const url = arguments[0];
+                    const url = (typeof arguments[0] === 'string') ? arguments[0] : (arguments[0] && arguments[0].url ? arguments[0].url : String(arguments[0]));
                     log("fetch_req: " + url);
                     return origFetch.apply(this, arguments).then(res => {
-                        log("fetch_res: [" + res.status + "] " + url);
+                        const clone = res.clone();
+                        clone.text().then(body => {
+                            log("fetch_res: [" + res.status + "] " + url + " | body: " + body.substring(0, 2000));
+                        }).catch(e => log("fetch_body_err: " + e));
                         return res;
                     }).catch(err => {
                         log("fetch_err: " + url + " (" + err + ")");
@@ -292,11 +298,21 @@ class FaselHDProvider : MainAPI() {
                     return origSend.apply(this, arguments);
                 };
 
-                // --- Blob Hook ---
+                // --- Blob Hook (Layer 2) ---
                 const origCreateURL = URL.createObjectURL;
                 URL.createObjectURL = function(obj) {
                     const url = origCreateURL.apply(this, arguments);
                     log("blob_url: " + url);
+                    if (obj instanceof Blob) {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const content = e.target.result;
+                            if (content && content.indexOf('#EXTM3U') !== -1) {
+                                log("blob_m3u8: detected manifest in " + url);
+                            }
+                        };
+                        reader.readAsText(obj);
+                    }
                     return url;
                 };
 
@@ -367,6 +383,32 @@ class FaselHDProvider : MainAPI() {
                     fun report(value: String?) {
                         if (value.isNullOrBlank()) return
                         println("FaselHD: JSBridge -> $value")
+
+                        // Layer 3: Direct JWPlayer CDN call via mediaId detection
+                        val mediaIdRegex = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9]+)\.json""")
+                        mediaIdRegex.find(value)?.groupValues?.get(1)?.let { mediaId ->
+                            println("FaselHD: MediaId detected -> $mediaId. Attempting direct CDN fetch.")
+                            val scope = CoroutineScope(Dispatchers.IO)
+                            scope.launch {
+                                try {
+                                    val apiRes = app.get("https://cdn.jwplayer.com/v2/media/$mediaId", referer = playerUrl)
+                                    if (apiRes.isSuccessful) {
+                                        val json = apiRes.text
+                                        // Parse for m3u8 in sources
+                                        // {"playlist": [{"sources": [{"file": "..."}]}]}
+                                        val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(json)?.groupValues?.get(1)
+                                            ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
+                                        
+                                        if (streamUrl != null) {
+                                            println("FaselHD: Direct CDN fetch success -> $streamUrl")
+                                            finish(streamUrl)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    println("FaselHD: Direct CDN fetch failed -> ${e.message}")
+                                }
+                            }
+                        }
 
                         val media = if (isVideoMediaUrl(value)) value else null
 
