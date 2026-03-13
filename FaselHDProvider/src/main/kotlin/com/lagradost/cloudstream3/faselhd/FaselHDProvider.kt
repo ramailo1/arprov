@@ -284,6 +284,7 @@ class FaselHDProvider : MainAPI() {
                 var resolved = false
                 var captureStarted = false
                 var captureTimeout: Runnable? = null
+                var loadGeneration = 0
 
                 fun finish(value: String?) {
                     if (resolved) return
@@ -338,13 +339,22 @@ class FaselHDProvider : MainAPI() {
                     handler.post {
                         if (!resolved) {
                             resolved = true
+                            loadGeneration++ // invalidate all pending callbacks
                             runCatching { webView.stopLoading() }
                             runCatching { webView.destroy() }
                         }
                     }
                 }
 
-                // Deleted redundant 180s global timeout
+                fun setupGlobalTimeout(gen: Int) {
+                    handler.postDelayed({
+                        if (!resolved && loadGeneration == gen) {
+                            println("FaselHD: Global WebView timeout after 120s (gen $gen)")
+                            finish(null)
+                        }
+                    }, 120_000)
+                }
+                setupGlobalTimeout(loadGeneration)
 
                 cookieManager.setAcceptCookie(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -355,6 +365,11 @@ class FaselHDProvider : MainAPI() {
                 clearCfCookiesFromWebView(host)
                 syncCookiesToWebView(host)
                 syncCfClearanceToWebView(host)
+                
+                println("FaselHD: Cookies in cfKiller for $host (before load):")
+                cfKiller.savedCookies[host]?.forEach { (name, value) ->
+                    println("FaselHD:   $name=${value.take(15)}...")
+                }
 
                 webView.settings.apply {
                     javaScriptEnabled = true
@@ -379,7 +394,7 @@ class FaselHDProvider : MainAPI() {
                         favicon: android.graphics.Bitmap?
                     ) {
                         super.onPageStarted(view, url, favicon)
-                        if (url?.contains("video_player") == true) {
+                        if (url?.contains("video_player", true) == true) {
                             view?.evaluateJavascript(hookScript, null)
                         }
                     }
@@ -437,10 +452,15 @@ class FaselHDProvider : MainAPI() {
 
                         if (!currentUrl.contains("video_player", true)) return
                         
-                        // Bug 2 Fix: Reset on every player page load
+                        // Bug 2 & 4 Fix: Reset state and increment generation
+                        loadGeneration++
+                        val myGen = loadGeneration
                         captureCheckScheduled = false
                         captureStarted = false
+                        lastChallengeMs = 0L // Reset challenge age for new generation
                         captureTimeout?.let(handler::removeCallbacks)
+                        
+                        setupGlobalTimeout(myGen)
 
                         if (captureCheckScheduled) return
                         captureCheckScheduled = true
@@ -451,29 +471,31 @@ class FaselHDProvider : MainAPI() {
 
                         repeat(maxChecks) { i ->
                             handler.postDelayed({
-                                if (resolved) return@postDelayed
+                                if (resolved || loadGeneration != myGen) return@postDelayed
                                 val quiet = System.currentTimeMillis() - lastChallengeMs > 3_000
-                                println("FaselHD: CF quiet check #$i -> quiet=$quiet (lastChallengeAge=${System.currentTimeMillis() - lastChallengeMs}ms)")
+                                println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet (lastChallengeAge=${System.currentTimeMillis() - lastChallengeMs}ms)")
 
                                 if (quiet && !captureStarted) {
                                     captureStarted = true
-                                    println("FaselHD: CF cleared! Starting 45s capture window.")
+                                    println("FaselHD: CF cleared! Starting 45s capture window for gen $myGen.")
                                     captureTimeout = Runnable {
-                                        println("FaselHD: Player capture timed out after final page load")
-                                        finish(null)
+                                        if (loadGeneration == myGen) {
+                                            println("FaselHD: Player capture timed out after final page load (gen $myGen)")
+                                            finish(null)
+                                        }
                                     }
                                     handler.postDelayed(captureTimeout!!, 45_000)
 
-                                    startPolling(view)
+                                    startPolling(view, myGen)
                                 }
                             }, i * checkInterval)
                         }
                     }
 
-                    fun startPolling(view: WebView?) {
+                    fun startPolling(view: WebView?, myGen: Int) {
                         repeat(90) { i ->
                             view?.postDelayed({
-                                if (resolved) return@postDelayed
+                                if (resolved || loadGeneration != myGen) return@postDelayed
 
                                 view.evaluateJavascript(
                                     """
@@ -514,8 +536,8 @@ class FaselHDProvider : MainAPI() {
                                     """.trimIndent()
                                 ) { raw ->
                                     val found = raw.trim('"')
-                                    if (found.isNotBlank() && !resolved) {
-                                        println("FaselHD: Found stream via JS polling -> $found")
+                                    if (found.isNotBlank() && !resolved && loadGeneration == myGen) {
+                                        println("FaselHD: Found stream via JS polling (gen $myGen) -> $found")
                                         finish(found)
                                     }
                                 }
@@ -535,12 +557,7 @@ class FaselHDProvider : MainAPI() {
                     )
                 )
 
-                handler.postDelayed({
-                    if (!resolved) {
-                        println("FaselHD: Global WebView timeout after 120s")
-                        finish(null)
-                    }
-                }, 120_000)
+                // Global timeout is now managed via setupGlobalTimeout(gen) inside onPageFinished and at start
             }
         }
     }
