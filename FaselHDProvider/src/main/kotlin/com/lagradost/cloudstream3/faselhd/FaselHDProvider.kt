@@ -162,6 +162,19 @@ class FaselHDProvider : MainAPI() {
             println("FaselHD: Cookie harvest failed: ${e.message}")
         }
     }
+    
+    private fun clearCfCookiesFromWebView(host: String) {
+        try {
+            val cookieManager = CookieManager.getInstance()
+            listOf("cf_clearance", "__cf_bm", "cfchlrcni5", "__cflb", "__cfruid", "cf_ob_info").forEach { name ->
+                cookieManager.setCookie("https://$host", "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+            }
+            cookieManager.flush()
+            println("FaselHD: Purged stale CF cookies for $host")
+        } catch (e: Exception) {
+            println("FaselHD: Cookie purge failed: ${e.message}")
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun extractM3u8ViaWebView(
@@ -331,6 +344,7 @@ class FaselHDProvider : MainAPI() {
                 }
 
                 syncCookiesToWebView(java.net.URI(playerUrl).host)
+                clearCfCookiesFromWebView(java.net.URI(playerUrl).host)
 
                 webView.settings.apply {
                     javaScriptEnabled = true
@@ -495,6 +509,7 @@ class FaselHDProvider : MainAPI() {
                 }
 
                 println("FaselHD: WebView loading player: $playerUrl")
+                clearCfCookiesFromWebView(java.net.URI(playerUrl).host)
                 webView.loadUrl(
                     playerUrl,
                     mapOf(
