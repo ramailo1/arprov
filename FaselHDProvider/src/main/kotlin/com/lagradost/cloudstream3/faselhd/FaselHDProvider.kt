@@ -197,76 +197,77 @@ class FaselHDProvider : MainAPI() {
     ): String? {
         val hookScript = """
             (function() {
-                if (window.__csHooked) return "hooked";
-                window.__csHooked = true;
-        
-                try {
-                    const oldFetch = window.fetch;
-                    window.fetch = async function(...args) {
-                        const res = await oldFetch.apply(this, args);
-                        try {
-                            const url = (args && args[0]) ? String(args[0]) : "";
-                            CSBridge.report("fetch_url=" + url);
-                            const clone = res.clone();
-                            clone.text().then(t => {
-                                const shortText = String(t).slice(0, 4000);
-                                CSBridge.report("fetch_body=" + shortText);
-                            }).catch(() => {});
-                        } catch(e) {}
+                if (window.__cs_hooked) return;
+                window.__cs_hooked = true;
+
+                function log(msg) {
+                    if (window.CSBridge) CSBridge.report(msg);
+                    console.log("FaselHD-JS: " + msg);
+                }
+
+                // --- Fetch Hook ---
+                const origFetch = window.fetch;
+                window.fetch = function() {
+                    const url = arguments[0];
+                    log("fetch_req: " + url);
+                    return origFetch.apply(this, arguments).then(res => {
+                        log("fetch_res: [" + res.status + "] " + url);
                         return res;
+                    }).catch(err => {
+                        log("fetch_err: " + url + " (" + err + ")");
+                        throw err;
+                    });
+                };
+
+                // --- XHR Hook ---
+                const origOpen = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    this.__url = url;
+                    log("xhr_req: " + url);
+                    return origOpen.apply(this, arguments);
+                };
+                const origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.send = function() {
+                    this.addEventListener('load', function() {
+                        log("xhr_res: [" + this.status + "] " + this.__url);
+                    });
+                    this.addEventListener('error', function() {
+                        log("xhr_err: " + this.__url);
+                    });
+                    return origSend.apply(this, arguments);
+                };
+
+                // --- Blob Hook ---
+                const origCreateURL = URL.createObjectURL;
+                URL.createObjectURL = function(obj) {
+                    const url = origCreateURL.apply(this, arguments);
+                    log("blob_url: " + url);
+                    return url;
+                };
+
+                // --- MSE Hook ---
+                const OrigMS = window.MediaSource || window.WebKitMediaSource;
+                if (OrigMS) {
+                    const origASB = OrigMS.prototype.addSourceBuffer;
+                    OrigMS.prototype.addSourceBuffer = function(mime) {
+                        log("mse_mime: " + mime);
+                        return origASB.apply(this, arguments);
                     };
-                } catch(e) {}
-        
-                try {
-                    const oldOpen = XMLHttpRequest.prototype.open;
-                    XMLHttpRequest.prototype.open = function(method, url) {
-                        this.__cs_url = url;
-                        return oldOpen.apply(this, arguments);
-                    };
-        
-                    const oldSend = XMLHttpRequest.prototype.send;
-                    XMLHttpRequest.prototype.send = function() {
-                        this.addEventListener("load", function() {
-                            try {
-                                CSBridge.report("xhr_url=" + (this.__cs_url || ""));
-                                const txt = typeof this.responseText === "string" ? this.responseText.slice(0, 4000) : "";
-                                if (txt) CSBridge.report("xhr_body=" + txt);
-                            } catch(e) {}
-                        });
-                        return oldSend.apply(this, arguments);
-                    };
-                } catch(e) {}
-        
-                try {
-                    const oldCreate = URL.createObjectURL;
-                    URL.createObjectURL = function(obj) {
-                        const out = oldCreate.apply(this, arguments);
-                        try { CSBridge.report("blob_url=" + out); } catch(e) {}
-                        return out;
-                    };
-                } catch(e) {}
-                        
-                try {
-                    const OrigMS = window.MediaSource || window.WebKitMediaSource;
-                    if (OrigMS) {
-                        const origASB = OrigMS.prototype.addSourceBuffer;
-                        OrigMS.prototype.addSourceBuffer = function(mimeType) {
-                            try { CSBridge.report("mse_mime=" + mimeType); } catch(e) {}
-                            const sb = origASB.call(this, mimeType);
-                            try {
-                                const origAppend = sb.appendBuffer.bind(sb);
-                                sb.appendBuffer = function(data) {
-                                    sb.appendBuffer = origAppend;
-                                    try { CSBridge.report("mse_first_segment_bytes=" + data.byteLength); } catch(e) {}
-                                    return origAppend(data);
-                                };
-                            } catch(e) {}
-                            return sb;
-                        };
+                }
+
+                // --- DOM Mutation Hook ---
+                const observer = new MutationObserver((mutations) => {
+                    for (const m of mutations) {
+                        for (const n of m.addedNodes) {
+                            if (n.tagName === 'VIDEO' && n.src) log("video_src: " + n.src);
+                            if (n.tagName === 'SOURCE' && n.src) log("source_src: " + n.src);
+                            if (n.tagName === 'IFRAME' && n.src) log("iframe_src: " + n.src);
+                        }
                     }
-                } catch(e) {}
-        
-                return "ok";
+                });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
+                
+                log("Hooks installed");
             })();
         """.trimIndent()
 
@@ -417,17 +418,21 @@ class FaselHDProvider : MainAPI() {
                     ): WebResourceResponse? {
                         val u = request.url.toString()
 
+                        val mainFrame = request.isForMainFrame
+                        val method = request.method
+                        
                         if (u.contains("cdn-cgi/challenge", true) || u.contains("cdn-cgi/challenge-platform", true)) {
                             lastChallengeMs = System.currentTimeMillis()
-                            println("FaselHD: CF challenge request detected, resetting capture delay")
+                            println("FaselHD: CF challenge request detected (MF:$mainFrame $method), resetting capture delay -> $u")
                         }
 
-                        // Broad domain logging to find segment CDN
+                        // Broad domain logging to find segment CDN or APIs
                         if (u.contains("faselhdx", true) || u.contains("scdns", true) ||
+                            u.contains("api", true) || u.contains("v1/", true) ||
                             (!u.contains("cloudflare") && !u.contains("cdn-cgi") &&
                                 !u.contains("challenge") && u.contains(playerHost, true))
                         ) {
-                            println("FaselHD: WebView ALL domain request -> $u")
+                            println("FaselHD: WebView request (MF:$mainFrame $method) -> $u")
                         }
 
                         if (
@@ -466,12 +471,12 @@ class FaselHDProvider : MainAPI() {
 
                         if (!currentUrl.contains("video_player", true)) return
                         
-                        // Bug 2 & 4 Fix: Reset state and increment generation
+                        // Bug 2, 4 & 7 Fix: Reset state and increment generation
                         loadGeneration++
                         val myGen = loadGeneration
                         captureCheckScheduled = false
                         captureStarted = false
-                        lastChallengeMs = 0L // Reset challenge age for new generation
+                        lastChallengeMs = System.currentTimeMillis() // Bug 7 Fix: Start check 0 as 'active challenge'
                         captureTimeout?.let(handler::removeCallbacks)
                         
                         setupGlobalTimeout(myGen)
