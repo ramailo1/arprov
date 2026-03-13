@@ -22,6 +22,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.json.JSONObject
+import android.graphics.Bitmap
 import kotlin.coroutines.resume
 
 class FaselHDProvider : MainAPI() {
@@ -109,6 +111,43 @@ class FaselHDProvider : MainAPI() {
         println("FaselHD: Host resolved to $host")
         host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
+
+    private fun parseJwPlayerCdnResponse(json: String): String? {
+        return try {
+            val playlist = JSONObject(json).getJSONArray("playlist")
+            val sources = playlist.getJSONObject(0).getJSONArray("sources")
+            for (i in 0 until sources.length()) {
+                val src = sources.getJSONObject(i)
+                val file = src.optString("file", "")
+                if (file.contains(".m3u8") || src.optString("type", "").contains("mpegurl")) {
+                    return file
+                }
+            }
+            null
+        } catch (e: Exception) {
+            println("FaselHD: parseJwPlayerCdnResponse failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun triggerCdnFetch(mediaId: String, referer: String, finish: (String?) -> Unit) {
+        println("FaselHD: MediaId detected -> $mediaId. Attempting direct CDN fetch.")
+        val scope = CoroutineScope(Dispatchers.IO)
+        scope.launch {
+            try {
+                val cdnUrl = "https://cdn.jwplayer.com/v2/media/$mediaId"
+                val response = app.get(cdnUrl, referer = referer)
+                println("FaselHD: Layer3 CDN response: ${response.code} ${response.text.take(800)}")
+                val streamUrl = parseJwPlayerCdnResponse(response.text)
+                if (streamUrl != null) {
+                    println("FaselHD: Layer3 SUCCESS: $streamUrl")
+                    finish(streamUrl)
+                }
+            } catch (e: Exception) {
+                println("FaselHD: Layer3 CDN failed: ${e.message}")
+            }
+        }
+    }
 
     private fun normalizeUrl(url: String, host: String): String {
         if (!url.contains(baseDomain)) return url
@@ -337,26 +376,7 @@ class FaselHDProvider : MainAPI() {
                         
                         // Layer 3 (Fix B): Direct verify from mediaId detection
                         mediaIdRegex.find(value)?.groupValues?.get(1)?.let { mediaId ->
-                            println("FaselHD: MediaId detected -> $mediaId. Attempting direct CDN fetch.")
-                            val scope = CoroutineScope(Dispatchers.IO)
-                            scope.launch {
-                                try {
-                                    val apiRes = app.get("https://cdn.jwplayer.com/v2/media/$mediaId", referer = playerUrl)
-                                    println("FaselHD: Direct CDN fetch response -> ${apiRes.code}")
-                                    if (apiRes.isSuccessful) {
-                                        val json = apiRes.text
-                                        val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(json)?.groupValues?.get(1)
-                                            ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
-                                        
-                                        if (streamUrl != null) {
-                                            println("FaselHD: Direct CDN fetch success -> $streamUrl")
-                                            finish(streamUrl)
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    println("FaselHD: Direct CDN fetch failed -> ${e.message}")
-                                }
-                            }
+                            triggerCdnFetch(mediaId, playerUrl) { finish(it) }
                         }
 
                         // Fix A: Capture from response body if sent by hook
@@ -477,11 +497,13 @@ class FaselHDProvider : MainAPI() {
                     override fun onPageStarted(
                         view: WebView?,
                         url: String?,
-                        favicon: android.graphics.Bitmap?
+                        favicon: Bitmap?
                     ) {
                         super.onPageStarted(view, url, favicon)
                         if (url?.contains("video_player", true) == true) {
+                            // Bug 16 Fix A: Inject hooks in onPageStarted (before page JS runs)
                             view?.evaluateJavascript(hookScript, null)
+                            println("FaselHD: Hooks injected early in onPageStarted for $url")
                         }
                     }
 
@@ -506,6 +528,16 @@ class FaselHDProvider : MainAPI() {
                                 !u.contains("challenge") && u.contains(playerHost, true))
                         ) {
                             println("FaselHD: WebView request (MF:$mainFrame $method) -> $u")
+                        }
+
+                        // Bug 16 Fix B: Native Intercept (no JS needed)
+                        // Intercept entitlements call → trigger parallel CDN fetch immediately
+                        val entitlementsMatch = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9_\-]+)\.json""").find(u)
+                        if (entitlementsMatch != null) {
+                            val mediaId = entitlementsMatch.groupValues[1]
+                            println("FaselHD: Intercepted entitlements for mediaId: $mediaId")
+                            triggerCdnFetch(mediaId, playerUrl) { finish(it) }
+                            return null // Let original request proceed
                         }
 
                         if (
