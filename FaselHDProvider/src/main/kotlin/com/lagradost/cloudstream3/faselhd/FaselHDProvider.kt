@@ -392,7 +392,17 @@ class FaselHDProvider : MainAPI() {
                     loadsImagesAutomatically = true
                     allowFileAccess = true
                     allowContentAccess = true
-                    userAgentString = userAgent
+                    
+                    // Bug 11 Fix: Force User-Agent parity
+                    // Some versions of CloudflareKiller might have a getter or we just use ours
+                    val targetUA = runCatching { 
+                        val field = cfKiller.javaClass.getDeclaredField("savedUserAgent")
+                        field.isAccessible = true
+                        field.get(cfKiller) as? String 
+                    }.getOrNull() ?: userAgent
+                    
+                    userAgentString = targetUA
+                    println("FaselHD: WebView User-Agent set to -> $targetUA")
                 }
 
                 webView.webChromeClient = android.webkit.WebChromeClient()
