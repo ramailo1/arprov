@@ -66,6 +66,38 @@ class FaselHDProvider : MainAPI() {
         return isVideo
     }
 
+    private fun triggerJwPlayerPlay(webView: WebView?) {
+        if (webView == null) return
+        println("FaselHD: Injecting JS play trigger...")
+        webView.evaluateJavascript("""
+            (function() {
+                try {
+                    // Try JWPlayer API first
+                    if (typeof jwplayer === 'function') {
+                        var p = jwplayer();
+                        if (p && typeof p.play === 'function') {
+                            p.play(true);
+                            return 'jwplayer.play() called';
+                        }
+                    }
+                    // Fallback: click the play button DOM element
+                    var selectors = [
+                        '.jw-icon-playback',
+                        '.jw-icon-play', 
+                        '[aria-label="Play"]',
+                        '.vjs-play-control',
+                        'button.play'
+                    ];
+                    for (var i = 0; i < selectors.length; i++) {
+                        var btn = document.querySelector(selectors[i]);
+                        if (btn) { btn.click(); return 'clicked: ' + selectors[i]; }
+                    }
+                    return 'no player found';
+                } catch(e) { return 'error: ' + e.message; }
+            })()
+        """) { result -> println("FaselHD: JS play trigger result -> $result") }
+    }
+
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
@@ -547,6 +579,7 @@ class FaselHDProvider : MainAPI() {
                                     if (quiet && hasClearance && !captureStarted) {
                                         captureStarted = true
                                         println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
+                                        triggerJwPlayerPlay(view) // Bug 14 Fix: Initial play trigger
                                         captureTimeout = Runnable {
                                             if (loadGeneration == myGen) {
                                                 println("FaselHD: Player capture timed out after final page load (gen $myGen)")
@@ -559,6 +592,12 @@ class FaselHDProvider : MainAPI() {
                                     } else if (quiet && !hasClearance) {
                                         // log only every few checks to avoid spam
                                         if (i % 5 == 0) println("FaselHD: Window is quiet but cf_clearance is missing for $playerHost. Waiting...")
+                                    }
+                                    
+                                    // Bug 14 Fix: Retry play trigger at check #1
+                                    if (i == 1 && view != null) {
+                                        println("FaselHD: Quiet check #1 - retry play trigger")
+                                        triggerJwPlayerPlay(view)
                                     }
                                 }, i * checkInterval)
                             }
@@ -577,7 +616,19 @@ class FaselHDProvider : MainAPI() {
                                             if (window.jwplayer) {
                                                 const p = jwplayer();
                                                 try { p.setMute(true); } catch(e) {}
-                                                try { p.play(); } catch(e) {}
+                                                try { 
+                                                    if (p && typeof p.play === 'function') {
+                                                        p.play(true);
+                                                    }
+                                                } catch(e) {}
+                                                
+                                                // Fallback: click play buttons
+                                                const sel = ['.jw-icon-playback', '.jw-icon-play', '[aria-label="Play"]', '.vjs-play-control', 'button.play'];
+                                                for (let s of sel) {
+                                                    const b = document.querySelector(s);
+                                                    if (b) { try { b.click(); } catch(e) {} }
+                                                }
+
                                                 if (p) {
                                                     const item = p.getPlaylistItem ? p.getPlaylistItem() : null;
                                                     const file =
