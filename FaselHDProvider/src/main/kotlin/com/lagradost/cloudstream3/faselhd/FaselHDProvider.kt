@@ -260,84 +260,32 @@ class FaselHDProvider : MainAPI() {
 
                 function log(msg) {
                     if (window.CSBridge) CSBridge.report(msg);
+                function log(msg) {
+                    if (window.CSBridge) CSBridge.report(msg);
                     console.log("FaselHD-JS: " + msg);
                 }
 
-                // --- Fetch Hook (Layer 1) ---
-                const origFetch = window.fetch;
-                window.fetch = function() {
-                    const url = (typeof arguments[0] === 'string') ? arguments[0] : (arguments[0] && arguments[0].url ? arguments[0].url : String(arguments[0]));
-                    log("fetch_req: " + url);
-                    return origFetch.apply(this, arguments).then(res => {
-                        const clone = res.clone();
-                        clone.text().then(body => {
-                            log("fetch_res: [" + res.status + "] " + url + " | body: " + body.substring(0, 2000));
-                        }).catch(e => log("fetch_body_err: " + e));
-                        return res;
-                    }).catch(err => {
-                        log("fetch_err: " + url + " (" + err + ")");
-                        throw err;
-                    });
-                };
-
-                // --- XHR Hook ---
+                // --- XHR Body Intercept (Fix A) ---
                 const origOpen = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function(method, url) {
                     this.__url = url;
-                    log("xhr_req: " + url);
                     return origOpen.apply(this, arguments);
                 };
                 const origSend = XMLHttpRequest.prototype.send;
                 XMLHttpRequest.prototype.send = function() {
                     this.addEventListener('load', function() {
-                        log("xhr_res: [" + this.status + "] " + this.__url);
-                    });
-                    this.addEventListener('error', function() {
-                        log("xhr_err: " + this.__url);
+                        try {
+                            const url = this.__url || '';
+                            log("xhr_res: [" + this.status + "] " + url);
+                            if (url.includes('jwplayer.com')) {
+                                // Extract signed URL from JSON body if present
+                                log("xhr_body: [" + this.status + "] " + url + " | body: " + (this.responseText || '').substring(0, 3000));
+                            }
+                        } catch(e) { log("xhr_hook_err: " + e); }
                     });
                     return origSend.apply(this, arguments);
                 };
 
-                // --- Blob Hook (Layer 2) ---
-                const origCreateURL = URL.createObjectURL;
-                URL.createObjectURL = function(obj) {
-                    const url = origCreateURL.apply(this, arguments);
-                    log("blob_url: " + url);
-                    if (obj instanceof Blob) {
-                        const reader = new FileReader();
-                        reader.onload = function(e) {
-                            const content = e.target.result;
-                            if (content && content.indexOf('#EXTM3U') !== -1) {
-                                log("blob_m3u8: detected manifest in " + url);
-                            }
-                        };
-                        reader.readAsText(obj);
-                    }
-                    return url;
-                };
-
-                // --- MSE Hook ---
-                const OrigMS = window.MediaSource || window.WebKitMediaSource;
-                if (OrigMS) {
-                    const origASB = OrigMS.prototype.addSourceBuffer;
-                    OrigMS.prototype.addSourceBuffer = function(mime) {
-                        log("mse_mime: " + mime);
-                        return origASB.apply(this, arguments);
-                    };
-                }
-
-                // --- DOM Mutation Hook ---
-                const observer = new MutationObserver((mutations) => {
-                    for (const m of mutations) {
-                        for (const n of m.addedNodes) {
-                            if (n.tagName === 'VIDEO' && n.src) log("video_src: " + n.src);
-                            if (n.tagName === 'SOURCE' && n.src) log("source_src: " + n.src);
-                            if (n.tagName === 'IFRAME' && n.src) log("iframe_src: " + n.src);
-                        }
-                    }
-                });
-                observer.observe(document.documentElement, { childList: true, subtree: true });
-                
                 log("Hooks installed");
             })();
         """.trimIndent()
@@ -384,18 +332,19 @@ class FaselHDProvider : MainAPI() {
                         if (value.isNullOrBlank()) return
                         println("FaselHD: JSBridge -> $value")
 
-                        // Layer 3: Direct JWPlayer CDN call via mediaId detection
-                        val mediaIdRegex = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9]+)\.json""")
+                        // Fix A & B: Unified media capture from XHR and API (JWPlayer)
+                        val mediaIdRegex = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9_\-]+)\.json""")
+                        
+                        // Layer 3 (Fix B): Direct verify from mediaId detection
                         mediaIdRegex.find(value)?.groupValues?.get(1)?.let { mediaId ->
                             println("FaselHD: MediaId detected -> $mediaId. Attempting direct CDN fetch.")
                             val scope = CoroutineScope(Dispatchers.IO)
                             scope.launch {
                                 try {
                                     val apiRes = app.get("https://cdn.jwplayer.com/v2/media/$mediaId", referer = playerUrl)
+                                    println("FaselHD: Direct CDN fetch response -> ${apiRes.code}")
                                     if (apiRes.isSuccessful) {
                                         val json = apiRes.text
-                                        // Parse for m3u8 in sources
-                                        // {"playlist": [{"sources": [{"file": "..."}]}]}
                                         val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(json)?.groupValues?.get(1)
                                             ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
                                         
@@ -407,6 +356,17 @@ class FaselHDProvider : MainAPI() {
                                 } catch (e: Exception) {
                                     println("FaselHD: Direct CDN fetch failed -> ${e.message}")
                                 }
+                            }
+                        }
+
+                        // Fix A: Capture from response body if sent by hook
+                        if (value.contains("xhr_body", true)) {
+                            val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(value)?.groupValues?.get(1)
+                                ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(value)?.groupValues?.get(1)
+                            if (streamUrl != null) {
+                                println("FaselHD: Captured stream from XHR body -> $streamUrl")
+                                finish(streamUrl)
+                                return
                             }
                         }
 
