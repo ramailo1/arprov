@@ -261,11 +261,53 @@ class FaselHDProvider : MainAPI() {
                 window.__cs_hooked = true;
 
                 function log(msg) {
-                    if (window.CSBridge) CSBridge.report(msg);
-                function log(msg) {
-                    if (window.CSBridge) CSBridge.report(msg);
+                    if (window.CSBridge) window.CSBridge.report(msg);
                     console.log("FaselHD-JS: " + msg);
                 }
+
+                // --- Fix B: Intercept jwplayer().setup() to capture config at source ---
+                function hookJwSetup(jw) {
+                    if (!jw || jw.__hooked__) return;
+                    jw.__hooked__ = true;
+                    var origSetup = jw.setup.bind(jw);
+                    jw.setup = function(config) {
+                        try {
+                            var file = null;
+                            if (config.file) {
+                                file = config.file;
+                            } else if (config.playlist && config.playlist[0]) {
+                                var item = config.playlist[0];
+                                file = item.file;
+                                if (!file && item.sources) {
+                                    for (var i = 0; i < item.sources.length; i++) {
+                                        if (item.sources[i].file) { file = item.sources[i].file; break; }
+                                    }
+                                }
+                            }
+                            if (file) {
+                                log('JW_SETUP_FILE:' + file);
+                                if (window.CSBridge && window.CSBridge.onStreamUrl) {
+                                    window.CSBridge.onStreamUrl(file);
+                                }
+                            }
+                        } catch(e) { log('hook_setup_err:' + e.message); }
+                        return origSetup(config);
+                    };
+                }
+
+                // Hook immediately if jwplayer exists
+                if (typeof jwplayer !== 'undefined') hookJwSetup(jwplayer());
+
+                // Also poll every 100ms until jwplayer appears
+                var maxTries = 30; var tries = 0;
+                var t = setInterval(function() {
+                    tries++;
+                    if (tries >= maxTries) { clearInterval(t); return; }
+                    if (typeof jwplayer !== 'undefined') {
+                        hookJwSetup(jwplayer());
+                        clearInterval(t);
+                    }
+                }, 100);
 
                 // --- XHR Body Intercept (Fix A) ---
                 const origOpen = XMLHttpRequest.prototype.open;
@@ -280,7 +322,6 @@ class FaselHDProvider : MainAPI() {
                             const url = this.__url || '';
                             log("xhr_res: [" + this.status + "] " + url);
                             if (url.includes('jwplayer.com')) {
-                                // Extract signed URL from JSON body if present
                                 log("xhr_body: [" + this.status + "] " + url + " | body: " + (this.responseText || '').substring(0, 3000));
                             }
                         } catch(e) { log("xhr_hook_err: " + e); }
@@ -375,6 +416,15 @@ class FaselHDProvider : MainAPI() {
                             }, 3000)
                         }
                     }
+
+                    @android.webkit.JavascriptInterface
+                    fun onStreamUrl(url: String) {
+                        if (url.isNullOrBlank()) return
+                        println("FaselHD: JSBridge onStreamUrl -> $url")
+                        if (url.startsWith("http")) {
+                            finish(url)
+                        }
+                    }
                 }, "CSBridge")
 
                 continuation.invokeOnCancellation {
@@ -444,6 +494,48 @@ class FaselHDProvider : MainAPI() {
 
                 webView.webChromeClient = android.webkit.WebChromeClient()
 
+                var pollCount = 0
+                fun startJWPlayerPolling() {
+                    handler.post {
+                        if (resolved || pollCount >= 60) {
+                            return@post
+                        }
+                        pollCount++
+                        webView.evaluateJavascript("""
+                            (function() {
+                                try {
+                                    if (typeof jwplayer === 'undefined') return 'no_jw';
+                                    var p = jwplayer(); if (!p) return 'no_inst';
+                                    var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
+                                    if (item && item.file) {
+                                        if (item.file.indexOf('blob:') === 0 && item.sources) {
+                                            for (var i = 0; i < item.sources.length; i++) {
+                                                if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) return item.sources[i].file;
+                                            }
+                                        }
+                                        return item.file;
+                                    }
+                                    var pl = p.getPlaylist ? p.getPlaylist() : null;
+                                    if (pl && pl.length > 0) {
+                                        if (pl[0].file) return pl[0].file;
+                                        var src = pl[0].sources;
+                                        if (src) for (var i=0;i<src.length;i++) if(src[i].file) return src[i].file;
+                                    }
+                                    return 'jw_found_no_url';
+                                } catch(e) { return 'err:'+e.message; }
+                            })()
+                        """.trimIndent()) { result ->
+                            val v = result?.trim('"') ?: return@evaluateJavascript
+                            if (v.startsWith("http")) {
+                                println("FaselHD: ✅ JWPlayer POLL SUCCESS: $v")
+                                finish(v)
+                            } else {
+                                handler.postDelayed({ startJWPlayerPolling() }, 100)
+                            }
+                        }
+                    }
+                }
+
                 webView.webViewClient = object : WebViewClient() {
                     private var lastChallengeMs = 0L
                     private var lastOnPageFinishedMs = 0L
@@ -455,10 +547,13 @@ class FaselHDProvider : MainAPI() {
                         favicon: Bitmap?
                     ) {
                         super.onPageStarted(view, url, favicon)
-                        if (url?.contains("video_player", true) == true) {
+                        if (url?.contains("video_player", true) == true || url?.contains("videoplayer", true) == true) {
                             // Bug 16 Fix A: Inject hooks in onPageStarted (before page JS runs)
                             view?.evaluateJavascript(hookScript, null)
                             println("FaselHD: Hooks injected early in onPageStarted for $url")
+                            
+                            // Bug 19 Fix: Start polling immediately
+                            startJWPlayerPolling()
                         }
                     }
 
