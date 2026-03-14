@@ -9,6 +9,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import okhttp3.Cookie
@@ -492,7 +495,20 @@ class FaselHDProvider : MainAPI() {
                     println("FaselHD: WebView UA confirmed: $userAgentString")
                 }
 
-                webView.webChromeClient = android.webkit.WebChromeClient()
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                        val msg = consoleMessage.message()
+                        if (msg.contains("JW_SETUP_FILE:")) {
+                            val url = msg.substringAfter("JW_SETUP_FILE:")
+                            Log.i("FaselHD", "✅ JW setup() hook fired: $url")
+                            if (url.startsWith("http")) {
+                                finish(url)
+                                Log.i("FaselHD", "setup() hook won the race")
+                            }
+                        }
+                        return true
+                    }
+                }
 
                 var pollCount = 0
                 fun startJWPlayerPolling() {
