@@ -112,39 +112,56 @@ class FaselHDProvider : MainAPI() {
         host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
 
-    private fun parseJwPlayerCdnResponse(json: String): String? {
+    private fun parseEntitlementsResponse(json: String): String? {
         return try {
-            val playlist = JSONObject(json).getJSONArray("playlist")
-            val sources = playlist.getJSONObject(0).getJSONArray("sources")
-            for (i in 0 until sources.length()) {
-                val src = sources.getJSONObject(i)
-                val file = src.optString("file", "")
-                if (file.contains(".m3u8") || src.optString("type", "").contains("mpegurl")) {
-                    return file
+            val root = JSONObject(json)
+
+            // Path 1: Standard JW Player format
+            val playlist = root.optJSONArray("playlist")
+            if (playlist != null && playlist.length() > 0) {
+                val sources = playlist.getJSONObject(0).optJSONArray("sources")
+                if (sources != null) {
+                    for (i in 0 until sources.length()) {
+                        val src = sources.getJSONObject(i)
+                        val file = src.optString("file", "")
+                        val type = src.optString("type", "")
+                        if (file.contains(".m3u8") || type.contains("mpegurl")) {
+                            return file
+                        }
+                    }
                 }
             }
+
+            // Path 2: Signed URL token format
+            val directUrl = root.optString("url", "")
+            if (directUrl.contains(".m3u8")) return directUrl
+
+            // Path 3: Flat "file" at root level
+            val flatFile = root.optString("file", "")
+            if (flatFile.contains(".m3u8")) return flatFile
+
+            println("FaselHD: Entitlements JSON keys: ${root.keys().asSequence().toList()}")
             null
         } catch (e: Exception) {
-            println("FaselHD: parseJwPlayerCdnResponse failed: ${e.message}")
+            println("FaselHD: parseEntitlementsResponse error: ${e.message}")
             null
         }
     }
 
-    private fun triggerCdnFetch(mediaId: String, referer: String, finish: (String?) -> Unit) {
-        println("FaselHD: MediaId detected -> $mediaId. Attempting direct CDN fetch.")
+    private fun mirrorEntitlementsRequest(url: String, headers: Map<String, String>, finish: (String?) -> Unit) {
+        println("FaselHD: Mirroring entitlements request -> $url")
         val scope = CoroutineScope(Dispatchers.IO)
         scope.launch {
             try {
-                val cdnUrl = "https://cdn.jwplayer.com/v2/media/$mediaId"
-                val response = app.get(cdnUrl, referer = referer)
-                println("FaselHD: Layer3 CDN response: ${response.code} ${response.text.take(800)}")
-                val streamUrl = parseJwPlayerCdnResponse(response.text)
+                val response = app.get(url, headers = headers)
+                println("FaselHD: Entitlements mirror response: ${response.code} ${response.text.take(800)}")
+                val streamUrl = parseEntitlementsResponse(response.text)
                 if (streamUrl != null) {
-                    println("FaselHD: Layer3 SUCCESS: $streamUrl")
+                    println("FaselHD: Entitlements mirror SUCCESS: $streamUrl")
                     finish(streamUrl)
                 }
             } catch (e: Exception) {
-                println("FaselHD: Layer3 CDN failed: ${e.message}")
+                println("FaselHD: Entitlements mirror failed: ${e.message}")
             }
         }
     }
@@ -371,12 +388,14 @@ class FaselHDProvider : MainAPI() {
                         if (value.isNullOrBlank()) return
                         println("FaselHD: JSBridge -> $value")
 
-                        // Fix A & B: Unified media capture from XHR and API (JWPlayer)
-                        val mediaIdRegex = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9_\-]+)\.json""")
-                        
-                        // Layer 3 (Fix B): Direct verify from mediaId detection
-                        mediaIdRegex.find(value)?.groupValues?.get(1)?.let { mediaId ->
-                            triggerCdnFetch(mediaId, playerUrl) { finish(it) }
+                        // Layer 3 (Fix B): Mirror fetch from entitlements URL detection
+                        if (value.contains("entitlements.jwplayer.com")) {
+                            println("FaselHD: Entitlements URL detected in JSBridge -> $value")
+                            val headers = mapOf(
+                                "Referer" to playerUrl,
+                                "Origin" to "https://${java.net.URI(playerUrl).host}"
+                            )
+                            mirrorEntitlementsRequest(value, headers) { finish(it) }
                         }
 
                         // Fix A: Capture from response body if sent by hook
@@ -530,13 +549,13 @@ class FaselHDProvider : MainAPI() {
                             println("FaselHD: WebView request (MF:$mainFrame $method) -> $u")
                         }
 
-                        // Bug 16 Fix B: Native Intercept (no JS needed)
-                        // Intercept entitlements call → trigger parallel CDN fetch immediately
-                        val entitlementsMatch = Regex("""entitlements\.jwplayer\.com/([A-Za-z0-9_\-]+)\.json""").find(u)
-                        if (entitlementsMatch != null) {
-                            val mediaId = entitlementsMatch.groupValues[1]
-                            println("FaselHD: Intercepted entitlements for mediaId: $mediaId")
-                            triggerCdnFetch(mediaId, playerUrl) { finish(it) }
+                        // Bug 17: Intercept entitlements call → trigger mirror fetch immediately
+                        if (u.contains("entitlements.jwplayer.com")) {
+                            println("FaselHD: Intercepted entitlements call: $u")
+                            val headers = request.requestHeaders.toMutableMap()
+                            headers["Referer"] = playerUrl
+                            headers["Origin"] = "https://${java.net.URI(playerUrl).host}"
+                            mirrorEntitlementsRequest(u, headers) { finish(it) }
                             return null // Let original request proceed
                         }
 
