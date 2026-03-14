@@ -112,60 +112,6 @@ class FaselHDProvider : MainAPI() {
         host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
 
-    private fun parseEntitlementsResponse(json: String): String? {
-        return try {
-            val root = JSONObject(json)
-
-            // Path 1: Standard JW Player format
-            val playlist = root.optJSONArray("playlist")
-            if (playlist != null && playlist.length() > 0) {
-                val sources = playlist.getJSONObject(0).optJSONArray("sources")
-                if (sources != null) {
-                    for (i in 0 until sources.length()) {
-                        val src = sources.getJSONObject(i)
-                        val file = src.optString("file", "")
-                        val type = src.optString("type", "")
-                        if (file.contains(".m3u8") || type.contains("mpegurl")) {
-                            return file
-                        }
-                    }
-                }
-            }
-
-            // Path 2: Signed URL token format
-            val directUrl = root.optString("url", "")
-            if (directUrl.contains(".m3u8")) return directUrl
-
-            // Path 3: Flat "file" at root level
-            val flatFile = root.optString("file", "")
-            if (flatFile.contains(".m3u8")) return flatFile
-
-            println("FaselHD: Entitlements JSON keys: ${root.keys().asSequence().toList()}")
-            null
-        } catch (e: Exception) {
-            println("FaselHD: parseEntitlementsResponse error: ${e.message}")
-            null
-        }
-    }
-
-    private fun mirrorEntitlementsRequest(url: String, headers: Map<String, String>, finish: (String?) -> Unit) {
-        println("FaselHD: Mirroring entitlements request -> $url")
-        val scope = CoroutineScope(Dispatchers.IO)
-        scope.launch {
-            try {
-                val response = app.get(url, headers = headers)
-                println("FaselHD: Entitlements mirror response: ${response.code} ${response.text.take(800)}")
-                val streamUrl = parseEntitlementsResponse(response.text)
-                if (streamUrl != null) {
-                    println("FaselHD: Entitlements mirror SUCCESS: $streamUrl")
-                    finish(streamUrl)
-                }
-            } catch (e: Exception) {
-                println("FaselHD: Entitlements mirror failed: ${e.message}")
-            }
-        }
-    }
-
     private fun normalizeUrl(url: String, host: String): String {
         if (!url.contains(baseDomain)) return url
         val old = runCatching { java.net.URL(url) }.getOrNull() ?: return url
@@ -388,16 +334,6 @@ class FaselHDProvider : MainAPI() {
                         if (value.isNullOrBlank()) return
                         println("FaselHD: JSBridge -> $value")
 
-                        // Layer 3 (Fix B): Mirror fetch from entitlements URL detection
-                        if (value.contains("entitlements.jwplayer.com")) {
-                            println("FaselHD: Entitlements URL detected in JSBridge -> $value")
-                            val headers = mapOf(
-                                "Referer" to playerUrl,
-                                "Origin" to "https://${java.net.URI(playerUrl).host}"
-                            )
-                            mirrorEntitlementsRequest(value, headers) { finish(it) }
-                        }
-
                         // Fix A: Capture from response body if sent by hook
                         if (value.contains("xhr_body", true)) {
                             val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(value)?.groupValues?.get(1)
@@ -549,16 +485,6 @@ class FaselHDProvider : MainAPI() {
                             println("FaselHD: WebView request (MF:$mainFrame $method) -> $u")
                         }
 
-                        // Bug 17: Intercept entitlements call → trigger mirror fetch immediately
-                        if (u.contains("entitlements.jwplayer.com")) {
-                            println("FaselHD: Intercepted entitlements call: $u")
-                            val headers = request.requestHeaders.toMutableMap()
-                            headers["Referer"] = playerUrl
-                            headers["Origin"] = "https://${java.net.URI(playerUrl).host}"
-                            mirrorEntitlementsRequest(u, headers) { finish(it) }
-                            return null // Let original request proceed
-                        }
-
                         if (
                             isVideoMediaUrl(u) &&
                             !u.contains("challenges.cloudflare.com", true) &&
@@ -583,6 +509,61 @@ class FaselHDProvider : MainAPI() {
                         // ALWAYS re-inject hooks when on the player page
                         if (currentUrl.contains("video_player", true)) {
                             view?.evaluateJavascript(hookScript, null)
+                        }
+
+                        // Bug 18 Fix: Query JWPlayer's Runtime Directly
+                        if (currentUrl.contains("video_player", true) || currentUrl.contains("videoplayer", true)) {
+                            println("FaselHD: onPageFinished - querying JWPlayer runtime config")
+                            view?.evaluateJavascript("""
+                                (function() {
+                                    try {
+                                        if (typeof jwplayer === 'undefined') return 'no_jwplayer';
+                                        var p = jwplayer();
+                                        if (!p) return 'no_instance';
+                    
+                                        // Path 1: getPlaylistItem (most direct, post-setup)
+                                        var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
+                                        if (item && item.file) {
+                                            if (item.file.indexOf('blob:') === 0 && item.sources) {
+                                                for (var i = 0; i < item.sources.length; i++) {
+                                                    if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) return item.sources[i].file;
+                                                }
+                                            }
+                                            return item.file;
+                                        }
+                    
+                                        // Path 2: getConfig
+                                        var cfg = p.getConfig ? p.getConfig() : null;
+                                        if (cfg && cfg.file) return cfg.file;
+                    
+                                        // Path 3: getPlaylist → sources array
+                                        var pl = p.getPlaylist ? p.getPlaylist() : null;
+                                        if (pl && pl.length > 0) {
+                                            if (pl[0].file) return pl[0].file;
+                                            if (pl[0].sources) {
+                                                for (var i = 0; i < pl[0].sources.length; i++) {
+                                                    if (pl[0].sources[i].file) return pl[0].sources[i].file;
+                                                }
+                                            }
+                                        }
+                    
+                                        // Diagnostic fallback: dump all config keys
+                                        var keys = cfg ? JSON.stringify(Object.keys(cfg)) : 'no_config';
+                                        var itemKeys = item ? JSON.stringify(Object.keys(item)) : 'no_item';
+                                        return 'not_found|cfg_keys:' + keys + '|item_keys:' + itemKeys;
+                                    } catch(e) {
+                                        return 'error:' + e.message;
+                                    }
+                                })()
+                            """.trimIndent()) { result ->
+                                val cleaned = result?.trim('"') ?: return@evaluateJavascript
+                                println("FaselHD: JWPlayer runtime query -> $cleaned")
+                                if (cleaned.startsWith("http") && 
+                                   (cleaned.contains(".m3u8") || cleaned.contains("cdn") || cleaned.contains("manifest"))) {
+                                    println("FaselHD: ✅ JWPlayer SUCCESS: $cleaned")
+                                    finish(cleaned)
+                                }
+                            }
                         }
 
                         if (!currentUrl.contains("video_player", true)) return
