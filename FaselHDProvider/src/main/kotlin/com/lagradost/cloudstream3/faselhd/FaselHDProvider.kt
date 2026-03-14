@@ -59,7 +59,6 @@ class FaselHDProvider : MainAPI() {
         val lower = url.lowercase()
         // Hard reject images first
         if (IMAGE_EXTENSIONS.any { lower.endsWith(it) || lower.contains("$it?") }) {
-            println("FaselHD-Filter: Rejected image/thumbnail -> $url")
             return false
         }
         // Accept only known video patterns
@@ -68,15 +67,12 @@ class FaselHDProvider : MainAPI() {
                 || lower.contains("playlist")
                 || lower.contains("stream")
         
-        if (!isVideo) {
-            // println("FaselHD-Filter: URL did not match video patterns -> $url")
-        }
+        
         return isVideo
     }
 
     private fun triggerJwPlayerPlay(webView: WebView?) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger...")
         webView.evaluateJavascript("""
             (function() {
                 try {
@@ -103,15 +99,13 @@ class FaselHDProvider : MainAPI() {
                     return 'no player found';
                 } catch(e) { return 'error: ' + e.message; }
             })()
-        """) { result -> println("FaselHD: JS play trigger result -> $result") }
+        """) { _ -> }
     }
 
     private suspend fun resolveHost(): String = runCatching {
-        println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
         val uri = java.net.URL(resp.url.trimEnd('/'))
         val host = "${uri.protocol}://${uri.host}"
-        println("FaselHD: Host resolved to $host")
         host.also { mainUrl = it }
     }.getOrDefault(mainUrl)
 
@@ -141,15 +135,12 @@ class FaselHDProvider : MainAPI() {
     }
 
     private suspend fun safeGet(url: String, referer: String = url): Document? {
-        println("FaselHD: safeGet -> $url (Referer: $referer)")
         return runCatching {
             val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
             if (res.isSuccessful && !isBlocked(res.document)) {
-                println("FaselHD: Plain GET successful for $url")
                 return res.document
             }
 
-            println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
             mutex.withLock {
                 val cfRes = app.get(
                     url,
@@ -200,10 +191,8 @@ class FaselHDProvider : MainAPI() {
             }
 
             cookieManager.flush()
-            println("FaselHD: Synced $count non-CF cookies to WebView across all hosts")
-            println("FaselHD: WebView cookies for https://$mainHost: ${cookieManager.getCookie("https://$mainHost")}")
         } catch (e: Exception) {
-            println("FaselHD: Cookie sync failed: ${e.message}")
+            Log.e("FaselHD", "Cookie sync failed", e)
         }
     }
 
@@ -214,15 +203,13 @@ class FaselHDProvider : MainAPI() {
                 val kv = part.trim()
                 if (kv.startsWith("cf_clearance=")) {
                     val value = kv.removePrefix("cf_clearance=")
-                    println("FaselHD: Harvested WebView cf_clearance -> ${value.take(30)}...")
-                    
                     val cookies = cfKiller.savedCookies[host]?.toMutableMap() ?: mutableMapOf<String, String>()
                     cookies["cf_clearance"] = value
                     cfKiller.savedCookies[host] = cookies
                 }
             }
         } catch (e: Exception) {
-            println("FaselHD: Cookie harvest failed: ${e.message}")
+            Log.e("FaselHD", "Cookie harvest failed", e)
         }
     }
     
@@ -233,9 +220,8 @@ class FaselHDProvider : MainAPI() {
                 cookieManager.setCookie("https://$host", "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
             }
             cookieManager.flush()
-            println("FaselHD: Purged stale CF cookies for $host")
         } catch (e: Exception) {
-            println("FaselHD: Cookie purge failed: ${e.message}")
+            Log.e("FaselHD", "Cookie purge failed", e)
         }
     }
 
@@ -246,9 +232,8 @@ class FaselHDProvider : MainAPI() {
                 setCookie("https://$host", "cf_clearance=$clearance")
                 flush()
             }
-            println("FaselHD: Synced fresh cf_clearance to WebView for $host")
         } catch (e: Exception) {
-            println("FaselHD: CF clearance sync failed: ${e.message}")
+            Log.e("FaselHD", "CF clearance sync failed", e)
         }
     }
 
@@ -359,7 +344,6 @@ class FaselHDProvider : MainAPI() {
                         resolved = true
                         loadGeneration++
                         captureTimeout?.let(handler::removeCallbacks)
-                        println("FaselHD: Finished extraction (gen $loadGeneration) -> ${value?.take(50)}${if ((value?.length ?: 0) > 50) "..." else ""}")
                         
                         runCatching { harvestWebViewCookies(java.net.URI(playerUrl).host) }
                         runCatching { webView.stopLoading() }
@@ -376,14 +360,12 @@ class FaselHDProvider : MainAPI() {
                     @android.webkit.JavascriptInterface
                     fun report(value: String?) {
                         if (value.isNullOrBlank()) return
-                        println("FaselHD: JSBridge -> $value")
 
                         // Fix A: Capture from response body if sent by hook
                         if (value.contains("xhr_body", true)) {
                             val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(value)?.groupValues?.get(1)
                                 ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(value)?.groupValues?.get(1)
                             if (streamUrl != null) {
-                                println("FaselHD: Captured stream from XHR body -> $streamUrl")
                                 finish(streamUrl)
                                 return
                             }
@@ -423,7 +405,6 @@ class FaselHDProvider : MainAPI() {
                     @android.webkit.JavascriptInterface
                     fun onStreamUrl(url: String) {
                         if (url.isNullOrBlank()) return
-                        println("FaselHD: JSBridge onStreamUrl -> $url")
                         if (url.startsWith("http")) {
                             finish(url)
                         }
@@ -444,7 +425,6 @@ class FaselHDProvider : MainAPI() {
                 fun setupGlobalTimeout(gen: Int) {
                     handler.postDelayed({
                         if (!resolved && loadGeneration == gen) {
-                            println("FaselHD: Global WebView timeout after 120s (gen $gen)")
                             finish(null)
                         }
                     }, 120_000)
@@ -492,7 +472,6 @@ class FaselHDProvider : MainAPI() {
                     allowContentAccess = true
                     
                     userAgentString = defaultUA
-                    println("FaselHD: WebView UA confirmed: $userAgentString")
                 }
 
                 webView.webChromeClient = object : WebChromeClient() {
@@ -500,10 +479,8 @@ class FaselHDProvider : MainAPI() {
                         val msg = consoleMessage.message()
                         if (msg.contains("JW_SETUP_FILE:")) {
                             val url = msg.substringAfter("JW_SETUP_FILE:")
-                            Log.i("FaselHD", "✅ JW setup() hook fired: $url")
                             if (url.startsWith("http")) {
                                 finish(url)
-                                Log.i("FaselHD", "setup() hook won the race")
                             }
                         }
                         return true
@@ -543,7 +520,6 @@ class FaselHDProvider : MainAPI() {
                         """.trimIndent()) { result ->
                             val v = result?.trim('"') ?: return@evaluateJavascript
                             if (v.startsWith("http")) {
-                                println("FaselHD: ✅ JWPlayer POLL SUCCESS: $v")
                                 finish(v)
                             } else {
                                 handler.postDelayed({ startJWPlayerPolling() }, 100)
@@ -584,7 +560,6 @@ class FaselHDProvider : MainAPI() {
                         
                         if (u.contains("cdn-cgi/challenge", true) || u.contains("cdn-cgi/challenge-platform", true)) {
                             lastChallengeMs = System.currentTimeMillis()
-                            println("FaselHD: CF challenge request detected (MF:$mainFrame $method), resetting capture delay -> $u")
                         }
 
                         // Broad domain logging to find segment CDN or APIs
@@ -601,7 +576,6 @@ class FaselHDProvider : MainAPI() {
                             !u.contains("challenges.cloudflare.com", true) &&
                             !u.contains("cdn-cgi", true)
                         ) {
-                            println("FaselHD: WebView media subrequest (filtered) -> $u")
                             finish(u)
                         }
                         return super.shouldInterceptRequest(view, request)
@@ -668,10 +642,8 @@ class FaselHDProvider : MainAPI() {
                                 })()
                             """.trimIndent()) { result ->
                                 val cleaned = result?.trim('"') ?: return@evaluateJavascript
-                                println("FaselHD: JWPlayer runtime query -> $cleaned")
                                 if (cleaned.startsWith("http") && 
                                    (cleaned.contains(".m3u8") || cleaned.contains("cdn") || cleaned.contains("manifest"))) {
-                                    println("FaselHD: ✅ JWPlayer SUCCESS: $cleaned")
                                     finish(cleaned)
                                 }
                             }
@@ -697,12 +669,9 @@ class FaselHDProvider : MainAPI() {
                         handler.postDelayed({
                             if (resolved || loadGeneration != myGen) return@postDelayed
                             if (lastChallengeMs > lastOnPageFinishedMs) {
-                                println("FaselHD: Challenge request detected after onPageFinished. Likely interstitial. Skipping capture start for gen $myGen.")
                                 captureCheckScheduled = false
                                 return@postDelayed
                             }
-
-                            println("FaselHD: Starting quiet-check loop for gen $myGen (Passed interstitial gate)")
                             
                             // Poll for a CF-quiet window
                             val checkInterval = 2_000L
@@ -719,15 +688,11 @@ class FaselHDProvider : MainAPI() {
                                     val cookieStr = CookieManager.getInstance().getCookie(playerUrl) ?: ""
                                     val hasClearance = cookieStr.contains("cf_clearance=", true)
                                     
-                                    println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet, hasClearance=$hasClearance (age=${now - lastChallengeMs}ms)")
-
                                     if (quiet && hasClearance && !captureStarted) {
                                         captureStarted = true
-                                        println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
                                         triggerJwPlayerPlay(view) // Bug 14 Fix: Initial play trigger
                                         captureTimeout = Runnable {
                                             if (loadGeneration == myGen) {
-                                                println("FaselHD: Player capture timed out after final page load (gen $myGen)")
                                                 finish(null)
                                             }
                                         }
@@ -736,7 +701,7 @@ class FaselHDProvider : MainAPI() {
                                         startPolling(view, myGen)
                                     } else if (quiet && !hasClearance) {
                                         // log only every few checks to avoid spam
-                                        if (i % 5 == 0) println("FaselHD: Window is quiet but cf_clearance is missing for $playerHost. Waiting...")
+                                        if (i % 5 == 0) { /* FaselHD: Window is quiet but cf_clearance is missing for $playerHost. Waiting...*/ }
                                     }
                                     
                                     // Bug 14 Fix: Retry play trigger at check #1
@@ -806,7 +771,6 @@ class FaselHDProvider : MainAPI() {
                                 ) { raw ->
                                     val found = raw.trim('"')
                                     if (found.isNotBlank() && !resolved && loadGeneration == myGen) {
-                                        println("FaselHD: Found stream via JS polling (gen $myGen) -> $found")
                                         finish(found)
                                     }
                                 }
@@ -815,7 +779,6 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
 
-                println("FaselHD: WebView loading player: $playerUrl")
                 // sync logic handled above
                 webView.loadUrl(
                     playerUrl,
@@ -897,10 +860,8 @@ class FaselHDProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        println("FaselHD: load -> $url")
         val host = resolveHost()
         val pageUrl = normalizeUrl(url, host)
-        println("FaselHD: Normalized page URL -> $pageUrl")
 
         val doc = safeGet(pageUrl, pageUrl) ?: return null
 
@@ -1001,10 +962,8 @@ class FaselHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("FaselHD: loadLinks for data -> $data")
         val host = resolveHost()
         val pageUrl = normalizeUrl(data, host)
-        println("FaselHD: Normalized loadLinks URL -> $pageUrl")
 
         val doc = safeGet(pageUrl, pageUrl) ?: return false
         val html = doc.html()
@@ -1024,13 +983,10 @@ class FaselHDProvider : MainAPI() {
         val rawPlayerUrl = playerUrl ?: return rawScan(html, pageUrl, callback)
         val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
 
-        println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
-
         val playerDoc = safeGet(rawPlayerUrl, pageUrl)
         if (playerDoc != null) {
             val playerHtml = playerDoc.html()
             val links = extractFromPlayerHtml(playerHtml)
-            println("FaselHD: extractFromPlayerHtml found ${links.size} links")
             if (links.isNotEmpty()) {
                 links.forEach { url ->
                     callback(
@@ -1049,14 +1005,6 @@ class FaselHDProvider : MainAPI() {
             }
         }
 
-        println("FaselHD: Direct extraction failed, attempting custom WebView extraction...")
-        val resolved = extractM3u8ViaWebView(
-            playerUrl = rawPlayerUrl,
-            playerHost = playerHost,
-            referer = pageUrl
-        )
-        println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
-
         if (resolved != null) {
             callback(
                 newExtractorLink(
@@ -1072,7 +1020,6 @@ class FaselHDProvider : MainAPI() {
             return true
         }
 
-        println("FaselHD: Everything failed, final rawScan of original page")
         return rawScan(html, pageUrl, callback)
     }
 
@@ -1092,7 +1039,6 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("FaselHD: Starting rawScan for $referer")
         val urls = Regex("""(https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*)""")
             .findAll(html)
             .map { it.groupValues[1] }
@@ -1100,7 +1046,6 @@ class FaselHDProvider : MainAPI() {
             .distinct()
             .toList()
 
-        println("FaselHD: rawScan found ${urls.size} potential links")
         if (urls.isEmpty()) return false
 
         urls.forEach { url ->
