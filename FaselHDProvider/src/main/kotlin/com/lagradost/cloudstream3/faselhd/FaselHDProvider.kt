@@ -1004,6 +1004,11 @@ class FaselHDProvider : MainAPI() {
                 return true
             }
         }
+        val resolved = extractM3u8ViaWebView(
+            playerUrl = rawPlayerUrl,
+            playerHost = playerHost,
+            referer = pageUrl
+        )
 
         if (resolved != null) {
             callback(
