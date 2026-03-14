@@ -268,49 +268,34 @@ class FaselHDProvider : MainAPI() {
                     console.log("FaselHD-JS: " + msg);
                 }
 
-                // --- Fix B: Intercept jwplayer().setup() to capture config at source ---
-                function hookJwSetup(jw) {
-                    if (!jw || jw.__hooked__) return;
-                    jw.__hooked__ = true;
-                    var origSetup = jw.setup.bind(jw);
-                    jw.setup = function(config) {
-                        try {
-                            var file = null;
-                            if (config.file) {
-                                file = config.file;
-                            } else if (config.playlist && config.playlist[0]) {
-                                var item = config.playlist[0];
-                                file = item.file;
-                                if (!file && item.sources) {
-                                    for (var i = 0; i < item.sources.length; i++) {
-                                        if (item.sources[i].file) { file = item.sources[i].file; break; }
-                                    }
-                                }
+                // --- Robust JWPlayer Interceptor ---
+                var _nativeJw = window.jwplayer;
+                Object.defineProperty(window, 'jwplayer', {
+                    configurable: true,
+                    get: function() {
+                        return function() {
+                            var inst = _nativeJw ? _nativeJw.apply(this, arguments) : null;
+                            if (inst && inst.setup && !inst.__setupHooked__) {
+                                inst.__setupHooked__ = true;
+                                var origSetup = inst.setup.bind(inst);
+                                inst.setup = function(cfg) {
+                                    try {
+                                        var f = (cfg.file) || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file);
+                                        if (f) {
+                                            log('JW_SETUP_FILE:' + f);
+                                            if (window.CSBridge && window.CSBridge.onStreamUrl) {
+                                                window.CSBridge.onStreamUrl(f);
+                                            }
+                                        }
+                                    } catch(e) { log('hook_setup_err:' + e.message); }
+                                    return origSetup(cfg);
+                                };
                             }
-                            if (file) {
-                                log('JW_SETUP_FILE:' + file);
-                                if (window.CSBridge && window.CSBridge.onStreamUrl) {
-                                    window.CSBridge.onStreamUrl(file);
-                                }
-                            }
-                        } catch(e) { log('hook_setup_err:' + e.message); }
-                        return origSetup(config);
-                    };
-                }
-
-                // Hook immediately if jwplayer exists
-                if (typeof jwplayer !== 'undefined') hookJwSetup(jwplayer());
-
-                // Also poll every 100ms until jwplayer appears
-                var maxTries = 30; var tries = 0;
-                var t = setInterval(function() {
-                    tries++;
-                    if (tries >= maxTries) { clearInterval(t); return; }
-                    if (typeof jwplayer !== 'undefined') {
-                        hookJwSetup(jwplayer());
-                        clearInterval(t);
-                    }
-                }, 100);
+                            return inst;
+                        };
+                    },
+                    set: function(val) { _nativeJw = val; }
+                });
 
                 // --- XHR Body Intercept (Fix A) ---
                 const origOpen = XMLHttpRequest.prototype.open;
