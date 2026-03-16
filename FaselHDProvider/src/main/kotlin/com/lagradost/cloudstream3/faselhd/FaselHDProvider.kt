@@ -29,6 +29,7 @@ import org.jsoup.nodes.Element
 import org.json.JSONObject
 import android.graphics.Bitmap
 import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 class FaselHDProvider : MainAPI() {
@@ -57,6 +58,7 @@ class FaselHDProvider : MainAPI() {
     private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
     private val ioScope = CoroutineScope(Dispatchers.IO)
+    private val playTriggerStarted = AtomicBoolean(false)
 
     private fun isVideoMediaUrl(url: String): Boolean {
         val lower = url.lowercase()
@@ -79,6 +81,11 @@ class FaselHDProvider : MainAPI() {
 
     private fun startKotlinDrivenPlayTrigger(webView: WebView?, scope: CoroutineScope) {
         if (webView == null) return
+        if (!playTriggerStarted.compareAndSet(false, true)) {
+            Log.i("FaselHD", "KotlinPlay already running, skipping duplicate start")
+            return
+        }
+
         println("FaselHD: Starting Kotlin-driven play trigger loop...")
         scope.launch {
             // Wait a bit before polling to let page initialize
@@ -89,28 +96,17 @@ class FaselHDProvider : MainAPI() {
                     withContext(Dispatchers.Main) {
                         webView.evaluateJavascript("""
                         (function() {
-                            try {
-                                if (!window.jwplayer) return 'nojwplayer_' + $attempt;
-                                var p = null;
-                                // Try finding the player instance
-                                if (typeof window.jwplayer === 'function') {
-                                    try { p = window.jwplayer(0); } catch(e) {}
-                                }
-                                if (!p) {
-                                    var el = document.querySelector('.jw-wrapper,[id^="jwplayer"]');
-                                    if (el) p = window.jwplayer(el);
-                                }
-                                
-                                if (p && typeof p.play === 'function') {
-                                    var state = p.getState ? p.getState() : '?';
-                                    p.play();
-                                    return 'play_' + $attempt + ':state=' + state;
-                                }
-                                return 'noinstance_' + $attempt;
-                            } catch(e) { return 'err_' + $attempt + ':' + e.message; }
+                          var jwKeys = Object.keys(window).filter(function(k) {
+                            return k.toLowerCase().includes('jw') || k.toLowerCase().includes('player');
+                          });
+                          var t = typeof window.jwplayer;
+                          return JSON.stringify({type: t, jwKeys: jwKeys.slice(0,10)});
                         })()
                         """.trimIndent()) { result ->
                             Log.i("FaselHD", "KotlinPlay attempt $attempt: $result")
+                            if (result != null && result.contains("\"function\"")) {
+                                triggerJwPlayerPlay(webView, attempt)
+                            }
                         }
                     }
                 }
@@ -392,6 +388,7 @@ class FaselHDProvider : MainAPI() {
                         if (resolved) return@post
                         resolved = true
                         loadGeneration++
+                        playTriggerStarted.set(false)
                         captureTimeout?.let(handler::removeCallbacks)
                         println("FaselHD: Finished extraction (gen $loadGeneration) -> ${value?.take(50)}${if ((value?.length ?: 0) > 50) "..." else ""}")
                         
@@ -476,6 +473,7 @@ class FaselHDProvider : MainAPI() {
                         if (!resolved) {
                             resolved = true
                             loadGeneration++ // invalidate all pending callbacks
+                            playTriggerStarted.set(false)
                             runCatching { webView.stopLoading() }
                             runCatching { webView.destroy() }
                         }
@@ -538,6 +536,7 @@ class FaselHDProvider : MainAPI() {
 
                 webView.webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                        Log.i("FaselHD-JS", "[${consoleMessage.messageLevel()}] ${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})")
                         val msg = consoleMessage.message()
                         if (msg.contains("JW_SETUP_FILE:")) {
                             val url = msg.substringAfter("JW_SETUP_FILE:")
@@ -601,6 +600,7 @@ class FaselHDProvider : MainAPI() {
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         Log.i("FaselHD", "onPageStarted: $url")
+                        playTriggerStarted.set(false)
 
                         // Inject XHR + fetch intercept hooks for M3U8 capture early
                         if (url?.contains("videoplayer") == true || url?.contains("faselhdx") == true) {
