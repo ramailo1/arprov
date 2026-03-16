@@ -43,7 +43,7 @@ class FaselHDProvider : MainAPI() {
     )
 
     private val baseDomain = "faselhdx.bid"
-    override var mainUrl = "https://web3126x.$baseDomain"
+    override var mainUrl = "https://web31612x.$baseDomain"
 
     private var userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
@@ -76,34 +76,42 @@ class FaselHDProvider : MainAPI() {
 
     private fun triggerJwPlayerPlay(webView: WebView?) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger...")
+        println("FaselHD: Injecting JS play trigger (simulated gesture)...")
         webView.evaluateJavascript("""
             (function() {
-                try {
-                    // Try JWPlayer API first
-                    if (typeof jwplayer === 'function') {
+                // Simulate a real pointer event on the player container
+                var targets = [
+                    document.getElementById('player'),
+                    document.querySelector('.jwplayer'),
+                    document.querySelector('video'),
+                    document.querySelector('[id*="player"]'),
+                    document.querySelector('[class*="player"]'),
+                    document.body
+                ].filter(Boolean);
+                
+                for (var t of targets) {
+                    ['pointerdown','mousedown','click','pointerup','mouseup']
+                        .forEach(function(ev) {
+                            try {
+                                t.dispatchEvent(new MouseEvent(ev, 
+                                    {bubbles:true, cancelable:true, view:window}));
+                            } catch(e) {}
+                        });
+                }
+                
+                // Also try JWPlayer if it showed up late
+                if (typeof jwplayer !== 'undefined') {
+                    try { 
                         var p = jwplayer();
                         if (p && typeof p.play === 'function') {
                             p.play(true);
-                            return 'jwplayer.play() called';
                         }
-                    }
-                    // Fallback: click the play button DOM element
-                    var selectors = [
-                        '.jw-icon-playback',
-                        '.jw-icon-play', 
-                        '[aria-label="Play"]',
-                        '.vjs-play-control',
-                        'button.play'
-                    ];
-                    for (var i = 0; i < selectors.length; i++) {
-                        var btn = document.querySelector(selectors[i]);
-                        if (btn) { btn.click(); return 'clicked: ' + selectors[i]; }
-                    }
-                    return 'no player found';
-                } catch(e) { return 'error: ' + e.message; }
+                    } catch(e) {}
+                    return 'jw_triggered';
+                }
+                return 'click_dispatched';
             })()
-        """) { result -> println("FaselHD: JS play trigger result -> $result") }
+        """.trimIndent()) { result -> println("FaselHD: JS play trigger result -> $result") }
     }
 
     private suspend fun resolveHost(): String = runCatching {
@@ -604,6 +612,13 @@ class FaselHDProvider : MainAPI() {
                             println("FaselHD: WebView media subrequest (filtered) -> $u")
                             finish(u)
                         }
+
+                        // Part 1: Intercept M3U8 at the network layer (most reliable)
+                        if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
+                            Log.i("FaselHD", "INTERCEPT_M3U8: $u")
+                            finish(u)
+                        }
+
                         return super.shouldInterceptRequest(view, request)
                     }
 
@@ -795,6 +810,13 @@ class FaselHDProvider : MainAPI() {
 
                                             const source = document.querySelector("video source");
                                             if (source && source.src) return source.src;
+
+                                            // Part 3: Watch for video elements with m3u8 sources
+                                            var vid = document.querySelector('video[src*="m3u8"], source[src*="m3u8"]');
+                                            if (vid) {
+                                                var src = vid.src || vid.getAttribute('src');
+                                                if (src && src.includes('.m3u8')) return src;
+                                            }
 
                                             const html = document.documentElement ? document.documentElement.outerHTML : "";
                                             const match = html.match(/https?:\/\/[^\s"'\\]+(?:\.m3u8|\.mp4)[^\s"'\\]*/i);
