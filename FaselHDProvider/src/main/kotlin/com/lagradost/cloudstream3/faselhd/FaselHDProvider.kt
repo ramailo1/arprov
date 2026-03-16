@@ -28,6 +28,7 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.json.JSONObject
 import android.graphics.Bitmap
+import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
 
 class FaselHDProvider : MainAPI() {
@@ -82,7 +83,7 @@ class FaselHDProvider : MainAPI() {
         scope.launch {
             // Wait a bit before polling to let page initialize
             delay(2000L)
-            repeat(15) { attempt ->
+            repeat(30) { attempt ->
                 if (extractionMutex.isLocked) { // Simple way to check if extraction is still active
                     delay(1000L) 
                     withContext(Dispatchers.Main) {
@@ -652,6 +653,26 @@ class FaselHDProvider : MainAPI() {
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
+                        
+                        // ✅ ALWAYS allow: JS from JWPlayer CDN (jwpcdn.com covers all versions/paths)
+                        if (u.contains("jwpcdn.com") || u.contains("jwplayer.js")) return null
+                        
+                        // ✅ ALWAYS allow: scdns.io (video CDN - M3U8 + thumbnails needed for config)
+                        if (u.contains("scdns.io")) {
+                            if (u.contains("master.m3u8")) {
+                                Log.i("FaselHD", "INTERCEPT_M3U8: $u")
+                                // finish() will be called below if it matches video pattern or here
+                                // finish(u) // Re-calling finish here might be redundant but safe
+                            }
+                            return null // allow through, don't block thumbnails
+                        }
+                        
+                        // Block known ad/tracker domains only
+                        val blockList = listOf("doubleclick.net", "googlesyndication.com", "adservice.google")
+                        if (blockList.any { u.contains(it) }) {
+                            println("FaselHD: Blocking ad/tracker -> $u")
+                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                        }
 
                         val mainFrame = request.isForMainFrame
                         val method = request.method
@@ -662,8 +683,7 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         // Broad domain logging to find segment CDN or APIs
-                        if (u.contains("faselhdx", true) || u.contains("scdns", true) ||
-                            u.contains("api", true) || u.contains("v1/", true) ||
+                        if (u.contains("faselhdx", true) || u.contains("api", true) || u.contains("v1/", true) ||
                             (!u.contains("cloudflare") && !u.contains("cdn-cgi") &&
                                 !u.contains("challenge") && u.contains(playerHost, true))
                         ) {
@@ -680,10 +700,7 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         // Part 1: Intercept M3U8 at the network layer (most reliable)
-                        if (u.contains("scdns.io") && u.contains("master.m3u8")) {
-                            Log.i("FaselHD", "INTERCEPT_M3U8 (scdns): $u")
-                            finish(u)
-                        } else if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
+                        if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
                             Log.i("FaselHD", "INTERCEPT_M3U8: $u")
                             finish(u)
                         }
@@ -805,9 +822,10 @@ class FaselHDProvider : MainAPI() {
                                     
                                     println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet, hasClearance=$hasClearance (age=${now - lastChallengeMs}ms)")
 
-                                    if (quiet && hasClearance && !captureStarted) {
+                                    val isVideoplayer = currentUrl.contains("videoplayer") || currentUrl.contains("playertoken")
+                                    if ((quiet && hasClearance && !captureStarted) || (isVideoplayer && !captureStarted)) {
                                         captureStarted = true
-                                        println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
+                                        println("FaselHD: Gate passed (hasClearance=$hasClearance isVideoplayer=$isVideoplayer). Starting 45s capture window for gen $myGen.")
                                         
                                         // Start play triggers
                                         startKotlinDrivenPlayTrigger(view, ioScope)
