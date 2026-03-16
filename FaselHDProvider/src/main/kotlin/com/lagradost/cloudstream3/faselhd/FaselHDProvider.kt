@@ -290,79 +290,107 @@ class FaselHDProvider : MainAPI() {
     ): String? = extractionMutex.withLock {
         val hookScript = """
             (function() {
-                if (window.__cs_hooked) return;
-                window.__cs_hooked = true;
+                try {
+                    if (window.__cs_hooked) return;
+                    window.__cs_hooked = true;
 
-                function log(msg) {
-                    if (window.CSBridge) window.CSBridge.report(msg);
-                    console.log("FaselHD-JS: " + msg);
-                }
+                    function log(msg) {
+                        try { if (window.CSBridge) window.CSBridge.report(msg); } catch(e) {}
+                        console.log("FaselHD-JS: " + msg);
+                    }
 
-                // --- Fix B: Intercept jwplayer().setup() to capture config at source ---
-                function hookJwSetup(jw) {
-                    if (!jw || jw.__hooked__) return;
-                    jw.__hooked__ = true;
-                    var origSetup = jw.setup.bind(jw);
-                    jw.setup = function(config) {
-                        try {
-                            var file = null;
-                            if (config.file) {
-                                file = config.file;
-                            } else if (config.playlist && config.playlist[0]) {
-                                var item = config.playlist[0];
-                                file = item.file;
-                                if (!file && item.sources) {
-                                    for (var i = 0; i < item.sources.length; i++) {
-                                        if (item.sources[i].file) { file = item.sources[i].file; break; }
+                    // --- Fix B: Intercept jwplayer().setup() to capture config at source ---
+                    function hookJwSetup(jw) {
+                        if (!jw || jw.__hooked__) return;
+                        if (typeof jw.setup !== 'function') return;
+                        jw.__hooked__ = true;
+                        
+                        var origSetup = jw.setup.bind(jw);
+                        jw.setup = function(config) {
+                            try {
+                                var file = null;
+                                if (config.file) {
+                                    file = config.file;
+                                } else if (config.playlist && config.playlist[0]) {
+                                    var item = config.playlist[0];
+                                    file = item.file;
+                                    if (!file && item.sources) {
+                                        for (var i = 0; i < item.sources.length; i++) {
+                                            if (item.sources[i].file) { file = item.sources[i].file; break; }
+                                        }
                                     }
                                 }
-                            }
-                            if (file) {
-                                log('JW_SETUP_FILE:' + file);
-                                if (window.CSBridge && window.CSBridge.onStreamUrl) {
-                                    window.CSBridge.onStreamUrl(file);
+                                if (file) {
+                                    log('JW_SETUP_FILE:' + file);
+                                    if (window.CSBridge && window.CSBridge.onStreamUrl) {
+                                        window.CSBridge.onStreamUrl(file);
+                                    }
+                                }
+                            } catch(e) { log('hook_setup_err:' + e.message); }
+                            return origSetup(config);
+                        };
+                    }
+
+                    // Hook immediately if jwplayer exists
+                    try { if (typeof jwplayer !== 'undefined') hookJwSetup(jwplayer()); } catch(e) {}
+
+                    // Also poll every 100ms until jwplayer appears
+                    var maxTries = 30; var tries = 0;
+                    var t = setInterval(function() {
+                        tries++;
+                        if (tries >= maxTries) { clearInterval(t); return; }
+                        try {
+                            if (typeof jwplayer !== 'undefined') {
+                                var jw = jwplayer();
+                                if (jw && typeof jw.setup === 'function') {
+                                    hookJwSetup(jw);
+                                    clearInterval(t);
                                 }
                             }
-                        } catch(e) { log('hook_setup_err:' + e.message); }
-                        return origSetup(config);
-                    };
-                }
+                        } catch(e) {}
+                    }, 100);
 
-                // Hook immediately if jwplayer exists
-                if (typeof jwplayer !== 'undefined') hookJwSetup(jwplayer());
-
-                // Also poll every 100ms until jwplayer appears
-                var maxTries = 30; var tries = 0;
-                var t = setInterval(function() {
-                    tries++;
-                    if (tries >= maxTries) { clearInterval(t); return; }
-                    if (typeof jwplayer !== 'undefined') {
-                        hookJwSetup(jwplayer());
-                        clearInterval(t);
+                    // --- XHR and Fetch Intercept (Fix A) ---
+                    if (window.XMLHttpRequest && XMLHttpRequest.prototype.open) {
+                        const origOpen = XMLHttpRequest.prototype.open;
+                        XMLHttpRequest.prototype.open = function(method, url) {
+                            this.__url = url;
+                            return origOpen.apply(this, arguments);
+                        };
+                        const origSend = XMLHttpRequest.prototype.send;
+                        XMLHttpRequest.prototype.send = function() {
+                            this.addEventListener('load', function() {
+                                try {
+                                    const url = this.__url || '';
+                                    log("xhr_res: [" + this.status + "] " + url);
+                                    if (url.includes('jwplayer.com')) {
+                                        log("xhr_body: [" + this.status + "] " + url + " | body: " + (this.responseText || '').substring(0, 3000));
+                                    }
+                                    if (url.includes('scdns') || url.includes('.m3u8')) {
+                                        window.CSBridge && window.CSBridge.onM3u8Intercepted(url);
+                                    }
+                                } catch(e) { log("xhr_hook_err: " + e); }
+                            });
+                            return origSend.apply(this, arguments);
+                        };
                     }
-                }, 100);
 
-                // --- XHR Body Intercept (Fix A) ---
-                const origOpen = XMLHttpRequest.prototype.open;
-                XMLHttpRequest.prototype.open = function(method, url) {
-                    this.__url = url;
-                    return origOpen.apply(this, arguments);
-                };
-                const origSend = XMLHttpRequest.prototype.send;
-                XMLHttpRequest.prototype.send = function() {
-                    this.addEventListener('load', function() {
-                        try {
-                            const url = this.__url || '';
-                            log("xhr_res: [" + this.status + "] " + url);
-                            if (url.includes('jwplayer.com')) {
-                                log("xhr_body: [" + this.status + "] " + url + " | body: " + (this.responseText || '').substring(0, 3000));
+                    if (window.fetch) {
+                        var _origFetch = window.fetch;
+                        window.fetch = function(input, init) {
+                            var u = typeof input === 'string' ? input : (input && input.url);
+                            if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
+                                log("fetch_intercepted: " + u);
+                                try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
                             }
-                        } catch(e) { log("xhr_hook_err: " + e); }
-                    });
-                    return origSend.apply(this, arguments);
-                };
+                            return _origFetch.apply(this, arguments);
+                        };
+                    }
 
-                log("Hooks installed");
+                    log("Hooks installed");
+                } catch(e) {
+                    console.error("FaselHD-JS Hook fatal error: " + e.message);
+                }
             })();
         """.trimIndent()
 
@@ -602,52 +630,7 @@ class FaselHDProvider : MainAPI() {
                         Log.i("FaselHD", "onPageStarted: $url")
                         playTriggerStarted.set(false)
 
-                        if (url?.contains("videoplayer") == true || url?.contains("faselhdx") == true) {
-                            view?.evaluateJavascript("""
-                            (function() {
-                              try {
-                                if (window.__faselHDHooksInstalled) return;
-                                window.__faselHDHooksInstalled = true;
-                                if (!window.XMLHttpRequest || !XMLHttpRequest.prototype.open) return;
-                                
-                                var _open = XMLHttpRequest.prototype.open;
-                                var _send = XMLHttpRequest.prototype.send;
-                                
-                                XMLHttpRequest.prototype.open = function(method, url) {
-                                  this._url = url;
-                                  return _open.apply(this, arguments);
-                                };
-                                XMLHttpRequest.prototype.send = function() {
-                                  var self = this;
-                                  this.addEventListener('load', function() {
-                                    try { 
-                                      if (self._url && (self._url.includes('scdns') || self._url.includes('.m3u8'))) {
-                                          window.CSBridge && window.CSBridge.onM3u8Intercepted(self._url); 
-                                      }
-                                    } catch(e) {}
-                                  });
-                                  return _send.apply(this, arguments);
-                                };
-                                
-                                if (window.fetch) {
-                                  var _fetch = window.fetch;
-                                  window.fetch = function(input, init) {
-                                    var u = typeof input === 'string' ? input : (input && input.url);
-                                    if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
-                                      try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
-                                    }
-                                    return _fetch.apply(this, arguments);
-                                  };
-                                }
-                                console.log('FaselHD-JS Hooks installed');
-                              } catch(e) {
-                                console.error('FaselHD-JS Hook install failed: ' + e.message);
-                              }
-                            })();
-                            """, null)
-                        }
-                        
-                        if (url?.contains("video_player", true) == true || url?.contains("videoplayer", true) == true) {
+                        if (url?.contains("video_player", true) == true || url?.contains("videoplayer", true) == true || url?.contains("faselhdx") == true) {
                             // Bug 16 Fix A: Inject initial hookScript as well
                             view?.evaluateJavascript(hookScript, null)
                             println("FaselHD: Hooks injected early in onPageStarted for $url")
