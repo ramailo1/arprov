@@ -602,36 +602,48 @@ class FaselHDProvider : MainAPI() {
                         Log.i("FaselHD", "onPageStarted: $url")
                         playTriggerStarted.set(false)
 
-                        // Inject XHR + fetch intercept hooks for M3U8 capture early
                         if (url?.contains("videoplayer") == true || url?.contains("faselhdx") == true) {
                             view?.evaluateJavascript("""
                             (function() {
+                              try {
                                 if (window.__faselHDHooksInstalled) return;
                                 window.__faselHDHooksInstalled = true;
-                                console.log('FaselHD: Installing XHR/fetch hooks...');
+                                if (!window.XMLHttpRequest || !XMLHttpRequest.prototype.open) return;
                                 
-                                // XHR hook
-                                var _origOpen = XMLHttpRequest.prototype.open;
-                                XMLHttpRequest.prototype.open = function(method, reqUrl) {
-                                    if (reqUrl && typeof reqUrl === 'string' && 
-                                        (reqUrl.includes('scdns') || reqUrl.includes('.m3u8'))) {
-                                        console.log('FaselHD: XHR intercepted -> ' + reqUrl);
-                                        try { window.CSBridge && window.CSBridge.onM3u8Intercepted(reqUrl); } catch(e) {}
-                                    }
-                                    return _origOpen.apply(this, arguments);
+                                var _open = XMLHttpRequest.prototype.open;
+                                var _send = XMLHttpRequest.prototype.send;
+                                
+                                XMLHttpRequest.prototype.open = function(method, url) {
+                                  this._url = url;
+                                  return _open.apply(this, arguments);
+                                };
+                                XMLHttpRequest.prototype.send = function() {
+                                  var self = this;
+                                  this.addEventListener('load', function() {
+                                    try { 
+                                      if (self._url && (self._url.includes('scdns') || self._url.includes('.m3u8'))) {
+                                          window.CSBridge && window.CSBridge.onM3u8Intercepted(self._url); 
+                                      }
+                                    } catch(e) {}
+                                  });
+                                  return _send.apply(this, arguments);
                                 };
                                 
-                                // fetch hook
-                                var _origFetch = window.fetch;
-                                window.fetch = function(input, init) {
+                                if (window.fetch) {
+                                  var _fetch = window.fetch;
+                                  window.fetch = function(input, init) {
                                     var u = typeof input === 'string' ? input : (input && input.url);
                                     if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
-                                        console.log('FaselHD: fetch intercepted -> ' + u);
-                                        try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
+                                      try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
                                     }
-                                    return _origFetch.apply(this, arguments);
-                                };
-                            })()
+                                    return _fetch.apply(this, arguments);
+                                  };
+                                }
+                                console.log('FaselHD-JS Hooks installed');
+                              } catch(e) {
+                                console.error('FaselHD-JS Hook install failed: ' + e.message);
+                              }
+                            })();
                             """, null)
                         }
                         
