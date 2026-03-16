@@ -653,18 +653,17 @@ class FaselHDProvider : MainAPI() {
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
-                        
+                        Log.i("FaselHD-Intercept", "shouldInterceptRequest: ${u.take(200)}")
+
                         // ✅ ALWAYS allow: JS from JWPlayer CDN (jwpcdn.com covers all versions/paths)
-                        if (u.contains("jwpcdn.com") || u.contains("jwplayer.js")) return null
+                        if (u.contains("jwpcdn.com") || u.contains("jwplayer")) return null
                         
-                        // ✅ ALWAYS allow: scdns.io (video CDN - M3U8 + thumbnails needed for config)
+                        // ✅ ALWAYS allow: scdns.io entirely (thumbnails + M3U8)
                         if (u.contains("scdns.io")) {
-                            if (u.contains("master.m3u8")) {
+                            if (u.contains(".m3u8")) {
                                 Log.i("FaselHD", "INTERCEPT_M3U8: $u")
-                                // finish() will be called below if it matches video pattern or here
-                                // finish(u) // Re-calling finish here might be redundant but safe
                             }
-                            return null // allow through, don't block thumbnails
+                            return null
                         }
                         
                         // Block known ad/tracker domains only
@@ -823,7 +822,13 @@ class FaselHDProvider : MainAPI() {
                                     println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet, hasClearance=$hasClearance (age=${now - lastChallengeMs}ms)")
 
                                     val isVideoplayer = currentUrl.contains("videoplayer") || currentUrl.contains("playertoken")
-                                    if ((quiet && hasClearance && !captureStarted) || (isVideoplayer && !captureStarted)) {
+                                    if (!hasClearance && !isVideoplayer) {
+                                        // log only every few checks to avoid spam
+                                        if (i % 5 == 0) println("FaselHD: Waiting for cfclearance on $playerHost (not a videoplayer URL)...")
+                                        return@postDelayed
+                                    }
+
+                                    if (!captureStarted) {
                                         captureStarted = true
                                         println("FaselHD: Gate passed (hasClearance=$hasClearance isVideoplayer=$isVideoplayer). Starting 45s capture window for gen $myGen.")
                                         
