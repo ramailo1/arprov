@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.json.JSONObject
@@ -54,6 +55,7 @@ class FaselHDProvider : MainAPI() {
 
     private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
+    private val ioScope = CoroutineScope(Dispatchers.IO)
 
     private fun isVideoMediaUrl(url: String): Boolean {
         val lower = url.lowercase()
@@ -74,37 +76,66 @@ class FaselHDProvider : MainAPI() {
         return isVideo
     }
 
+    private fun startKotlinDrivenPlayTrigger(webView: WebView?, scope: CoroutineScope) {
+        if (webView == null) return
+        println("FaselHD: Starting Kotlin-driven play trigger loop...")
+        scope.launch {
+            // Wait a bit before polling to let page initialize
+            delay(2000L)
+            repeat(15) { attempt ->
+                if (extractionMutex.isLocked) { // Simple way to check if extraction is still active
+                    delay(1000L) 
+                    withContext(Dispatchers.Main) {
+                        webView.evaluateJavascript("""
+                        (function() {
+                            try {
+                                if (!window.jwplayer) return 'nojwplayer_' + $attempt;
+                                var p = null;
+                                // Try finding the player instance
+                                if (typeof window.jwplayer === 'function') {
+                                    try { p = window.jwplayer(0); } catch(e) {}
+                                }
+                                if (!p) {
+                                    var el = document.querySelector('.jw-wrapper,[id^="jwplayer"]');
+                                    if (el) p = window.jwplayer(el);
+                                }
+                                
+                                if (p && typeof p.play === 'function') {
+                                    var state = p.getState ? p.getState() : '?';
+                                    p.play();
+                                    return 'play_' + $attempt + ':state=' + state;
+                                }
+                                return 'noinstance_' + $attempt;
+                            } catch(e) { return 'err_' + $attempt + ':' + e.message; }
+                        })()
+                        """.trimIndent()) { result ->
+                            Log.i("FaselHD", "KotlinPlay attempt $attempt: $result")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun triggerJwPlayerPlay(webView: WebView?, attempt: Int = 0) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger (API play + readiness polling)...")
+        println("FaselHD: Injecting JS play trigger (Single attempt API call)...")
         val js = """
         (function() {
-            // Poll until JWPlayer is ready, max 20 tries x 300ms = 6s
-            var tries = 0;
-            var poll = setInterval(function() {
-                tries++;
-                try {
-                    // Try to finding the player instance
-                    var p = (window.jwplayer && typeof window.jwplayer === 'function') ? window.jwplayer(0) : null;
-                    if (p && p.getState && p.getPlaylist && p.getPlaylist().length > 0) {
-                        var state = p.getState();
-                        console.log('FaselHD: JWPlayer ready! state=' + state + ', calling play()');
-                        clearInterval(poll);
-                        p.play();
-                        return;
-                    }
-                } catch(e) { console.log('FaselHD: Poll error -> ' + e.message); }
-                if (tries >= 20) {
-                    console.log('FaselHD: JWPlayer polling timed out');
-                    clearInterval(poll);
+            try {
+                if (typeof jwplayer === 'undefined') return 'no_jw';
+                var p = (typeof jwplayer === 'function') ? jwplayer(0) : null;
+                if (p && typeof p.play === 'function') {
+                    p.play();
+                    return 'play_called';
                 }
-            }, 300);
-            return 'polling_started';
+                return 'no_instance';
+            } catch(e) { return 'err:' + e.message; }
         })()
         """.trimIndent()
         
         webView.evaluateJavascript(js) { result -> 
-            Log.i("FaselHD", "Play poll started attempt $attempt: $result") 
+            Log.i("FaselHD", "Play trigger attempt $attempt: $result") 
         }
     }
 
@@ -608,7 +639,10 @@ class FaselHDProvider : MainAPI() {
                             view?.evaluateJavascript(hookScript, null)
                             println("FaselHD: Hooks injected early in onPageStarted for $url")
                             
-                            // Bug 19 Fix: Start polling immediately
+                            // Bug 19 & Fix: Start Kotlin play trigger 
+                            startKotlinDrivenPlayTrigger(view, ioScope)
+                            
+                            // Start polling immediately
                             startJWPlayerPolling()
                         }
                     }
@@ -774,7 +808,11 @@ class FaselHDProvider : MainAPI() {
                                     if (quiet && hasClearance && !captureStarted) {
                                         captureStarted = true
                                         println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
-                                        triggerJwPlayerPlay(view, 0) // Bug 14 Fix: Initial play trigger
+                                        
+                                        // Start play triggers
+                                        startKotlinDrivenPlayTrigger(view, ioScope)
+                                        triggerJwPlayerPlay(view, 0)
+                                        
                                         captureTimeout = Runnable {
                                             if (loadGeneration == myGen) {
                                                 println("FaselHD: Player capture timed out after final page load (gen $myGen)")
@@ -813,7 +851,7 @@ class FaselHDProvider : MainAPI() {
                                                 try { p.setMute(true); } catch(e) {}
                                                 try { 
                                                     if (p && typeof p.play === 'function') {
-                                                        p.play(true);
+                                                        p.play();
                                                     }
                                                 } catch(e) {}
                                                 
