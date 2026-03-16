@@ -76,28 +76,37 @@ class FaselHDProvider : MainAPI() {
 
     private fun triggerJwPlayerPlay(webView: WebView?) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger (simulated gesture)...")
+        println("FaselHD: Injecting JS play trigger (PointerEvent gesture gate bypass)...")
         webView.evaluateJavascript("""
             (function() {
-                // Simulate a real pointer event on the player container
+                // Target the JWPlayer display/click container specifically
                 var targets = [
+                    document.querySelector('.jw-media'),
+                    document.querySelector('.jw-display'),
+                    document.querySelector('.jw-icon-display'),
+                    document.querySelector('.jw-wrapper'),
+                    document.querySelector('[aria-label="Play"]'),
                     document.getElementById('player'),
                     document.querySelector('.jwplayer'),
-                    document.querySelector('video'),
-                    document.querySelector('[id*="player"]'),
-                    document.querySelector('[class*="player"]'),
-                    document.body
+                    document.querySelector('video')
                 ].filter(Boolean);
-                
-                for (var t of targets) {
-                    ['pointerdown','mousedown','click','pointerup','mouseup']
-                        .forEach(function(ev) {
-                            try {
-                                t.dispatchEvent(new MouseEvent(ev, 
-                                    {bubbles:true, cancelable:true, view:window}));
-                            } catch(e) {}
+
+                targets.forEach(function(el) {
+                    try {
+                        var rect = el.getBoundingClientRect();
+                        var cx = rect.left + rect.width / 2;
+                        var cy = rect.top + rect.height / 2;
+                        
+                        ['pointerdown','pointerup','click'].forEach(function(type) {
+                            el.dispatchEvent(new PointerEvent(type, {
+                                bubbles: true, cancelable: true,
+                                view: window, isPrimary: true,
+                                clientX: cx, clientY: cy,
+                                pointerId: 1, pointerType: 'touch'
+                            }));
                         });
-                }
+                    } catch(e) {}
+                });
                 
                 // Also try JWPlayer if it showed up late
                 if (typeof jwplayer !== 'undefined') {
@@ -109,7 +118,7 @@ class FaselHDProvider : MainAPI() {
                     } catch(e) {}
                     return 'jw_triggered';
                 }
-                return 'click_dispatched';
+                return 'pointer_events_dispatched';
             })()
         """.trimIndent()) { result -> println("FaselHD: JS play trigger result -> $result") }
     }
@@ -614,7 +623,10 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         // Part 1: Intercept M3U8 at the network layer (most reliable)
-                        if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
+                        if (u.contains("scdns.io") && u.contains("master.m3u8")) {
+                            Log.i("FaselHD", "INTERCEPT_M3U8 (scdns): $u")
+                            finish(u)
+                        } else if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
                             Log.i("FaselHD", "INTERCEPT_M3U8: $u")
                             finish(u)
                         }
