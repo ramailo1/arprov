@@ -74,53 +74,38 @@ class FaselHDProvider : MainAPI() {
         return isVideo
     }
 
-    private fun triggerJwPlayerPlay(webView: WebView?) {
+    private fun triggerJwPlayerPlay(webView: WebView?, attempt: Int = 0) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger (PointerEvent gesture gate bypass)...")
-        webView.evaluateJavascript("""
-            (function() {
-                // Target the JWPlayer display/click container specifically
-                var targets = [
-                    document.querySelector('.jw-media'),
-                    document.querySelector('.jw-display'),
-                    document.querySelector('.jw-icon-display'),
-                    document.querySelector('.jw-wrapper'),
-                    document.querySelector('[aria-label="Play"]'),
-                    document.getElementById('player'),
-                    document.querySelector('.jwplayer'),
-                    document.querySelector('video')
-                ].filter(Boolean);
-
-                targets.forEach(function(el) {
-                    try {
-                        var rect = el.getBoundingClientRect();
-                        var cx = rect.left + rect.width / 2;
-                        var cy = rect.top + rect.height / 2;
-                        
-                        ['pointerdown','pointerup','click'].forEach(function(type) {
-                            el.dispatchEvent(new PointerEvent(type, {
-                                bubbles: true, cancelable: true,
-                                view: window, isPrimary: true,
-                                clientX: cx, clientY: cy,
-                                pointerId: 1, pointerType: 'touch'
-                            }));
-                        });
-                    } catch(e) {}
-                });
-                
-                // Also try JWPlayer if it showed up late
-                if (typeof jwplayer !== 'undefined') {
-                    try { 
-                        var p = jwplayer();
-                        if (p && typeof p.play === 'function') {
-                            p.play(true);
-                        }
-                    } catch(e) {}
-                    return 'jw_triggered';
+        println("FaselHD: Injecting JS play trigger (API play + readiness polling)...")
+        val js = """
+        (function() {
+            // Poll until JWPlayer is ready, max 20 tries x 300ms = 6s
+            var tries = 0;
+            var poll = setInterval(function() {
+                tries++;
+                try {
+                    // Try to finding the player instance
+                    var p = (window.jwplayer && typeof window.jwplayer === 'function') ? window.jwplayer(0) : null;
+                    if (p && p.getState && p.getPlaylist && p.getPlaylist().length > 0) {
+                        var state = p.getState();
+                        console.log('FaselHD: JWPlayer ready! state=' + state + ', calling play()');
+                        clearInterval(poll);
+                        p.play();
+                        return;
+                    }
+                } catch(e) { console.log('FaselHD: Poll error -> ' + e.message); }
+                if (tries >= 20) {
+                    console.log('FaselHD: JWPlayer polling timed out');
+                    clearInterval(poll);
                 }
-                return 'pointer_events_dispatched';
-            })()
-        """.trimIndent()) { result -> println("FaselHD: JS play trigger result -> $result") }
+            }, 300);
+            return 'polling_started';
+        })()
+        """.trimIndent()
+        
+        webView.evaluateJavascript(js) { result -> 
+            Log.i("FaselHD", "Play poll started attempt $attempt: $result") 
+        }
     }
 
     private suspend fun resolveHost(): String = runCatching {
@@ -438,6 +423,13 @@ class FaselHDProvider : MainAPI() {
                     }
 
                     @android.webkit.JavascriptInterface
+                    fun onM3u8Intercepted(url: String) {
+                        if (url.isNullOrBlank()) return
+                        Log.i("FaselHD", "CSBridge: onM3u8Intercepted -> $url")
+                        finish(url)
+                    }
+
+                    @android.webkit.JavascriptInterface
                     fun onStreamUrl(url: String) {
                         if (url.isNullOrBlank()) return
                         println("FaselHD: JSBridge onStreamUrl -> $url")
@@ -574,14 +566,45 @@ class FaselHDProvider : MainAPI() {
                     private var lastOnPageFinishedMs = 0L
                     var captureCheckScheduled = false
 
-                    override fun onPageStarted(
-                        view: WebView?,
-                        url: String?,
-                        favicon: Bitmap?
-                    ) {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
+                        Log.i("FaselHD", "onPageStarted: $url")
+
+                        // Inject XHR + fetch intercept hooks for M3U8 capture early
+                        if (url?.contains("videoplayer") == true || url?.contains("faselhdx") == true) {
+                            view?.evaluateJavascript("""
+                            (function() {
+                                if (window.__faselHDHooksInstalled) return;
+                                window.__faselHDHooksInstalled = true;
+                                console.log('FaselHD: Installing XHR/fetch hooks...');
+                                
+                                // XHR hook
+                                var _origOpen = XMLHttpRequest.prototype.open;
+                                XMLHttpRequest.prototype.open = function(method, reqUrl) {
+                                    if (reqUrl && typeof reqUrl === 'string' && 
+                                        (reqUrl.includes('scdns') || reqUrl.includes('.m3u8'))) {
+                                        console.log('FaselHD: XHR intercepted -> ' + reqUrl);
+                                        try { window.CSBridge && window.CSBridge.onM3u8Intercepted(reqUrl); } catch(e) {}
+                                    }
+                                    return _origOpen.apply(this, arguments);
+                                };
+                                
+                                // fetch hook
+                                var _origFetch = window.fetch;
+                                window.fetch = function(input, init) {
+                                    var u = typeof input === 'string' ? input : (input && input.url);
+                                    if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
+                                        console.log('FaselHD: fetch intercepted -> ' + u);
+                                        try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
+                                    }
+                                    return _origFetch.apply(this, arguments);
+                                };
+                            })()
+                            """, null)
+                        }
+                        
                         if (url?.contains("video_player", true) == true || url?.contains("videoplayer", true) == true) {
-                            // Bug 16 Fix A: Inject hooks in onPageStarted (before page JS runs)
+                            // Bug 16 Fix A: Inject initial hookScript as well
                             view?.evaluateJavascript(hookScript, null)
                             println("FaselHD: Hooks injected early in onPageStarted for $url")
                             
@@ -751,7 +774,7 @@ class FaselHDProvider : MainAPI() {
                                     if (quiet && hasClearance && !captureStarted) {
                                         captureStarted = true
                                         println("FaselHD: CF cleared & Cookie verified! Starting 45s capture window for gen $myGen.")
-                                        triggerJwPlayerPlay(view) // Bug 14 Fix: Initial play trigger
+                                        triggerJwPlayerPlay(view, 0) // Bug 14 Fix: Initial play trigger
                                         captureTimeout = Runnable {
                                             if (loadGeneration == myGen) {
                                                 println("FaselHD: Player capture timed out after final page load (gen $myGen)")
@@ -769,7 +792,7 @@ class FaselHDProvider : MainAPI() {
                                     // Bug 14 Fix: Retry play trigger at check #1
                                     if (i == 1 && view != null) {
                                         println("FaselHD: Quiet check #1 - retry play trigger")
-                                        triggerJwPlayerPlay(view)
+                                        triggerJwPlayerPlay(view, 1)
                                     }
                                 }, i * checkInterval)
                             }
