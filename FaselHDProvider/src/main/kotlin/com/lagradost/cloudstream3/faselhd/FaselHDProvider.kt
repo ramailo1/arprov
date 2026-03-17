@@ -366,8 +366,12 @@ class FaselHDProvider : MainAPI() {
                                     try {
                                         const url = self.__url || '';
                                         const body = self.responseText || '';
+                                        var bodyLen = body ? body.length : -1;
+                                        
                                         log("xhr_res: [" + self.status + "] " + url);
+                                        
                                         if (url.includes('jwplayer.com') || url.includes('videoplayer')) {
+                                            log("FaselHD-JS xhrBody len=" + bodyLen + " for " + url);
                                             log("XHR_BODY|" + url + "|" + body.substring(0, 5000));
                                         }
                                         if (url.includes('scdns') || url.includes('.m3u8')) {
@@ -446,7 +450,7 @@ class FaselHDProvider : MainAPI() {
                             if (parts.size >= 3) {
                                 val url = parts[1]
                                 val body = parts[2]
-                                Log.i("FaselHD", "JSBridge - xhrBody for $url: (len=${body.length}) ${body.take(200)}...")
+                                Log.i("FaselHD", "xhrBody CALLED url=$url bodyLen=${body.length} snippet=${body.take(200)}")
                                 
                                 // Unconditional regex for m3u8 in ANY captured XHR body
                                 val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(body)?.value
@@ -570,9 +574,9 @@ class FaselHDProvider : MainAPI() {
                     println("FaselHD:   $name=${value.take(15)}...")
                 }
 
-                // Bug 12 Fix: Use WebView default UA as source of truth
-                val defaultUA = android.webkit.WebSettings.getDefaultUserAgent(context)
-                println("FaselHD: WebView default UA: $defaultUA")
+                // Bug 12 & Empty Body Fix: Force Desktop Chrome UA for player WebView
+                val defaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                println("FaselHD: WebView default UA forced to desktop: $defaultUA")
                 
                 // Update provider-wide UA so headers() use it too
                 userAgent = defaultUA
