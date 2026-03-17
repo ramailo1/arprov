@@ -317,8 +317,6 @@ class FaselHDProvider : MainAPI() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
-    private var activePlayerUrl: String? = null
-    @Volatile
     private var cachedPlayerHtml: String? = null
 
     private fun buildJwProbeJs(): String = """
@@ -787,7 +785,6 @@ class FaselHDProvider : MainAPI() {
         activeSession.set(session)
         
         this@FaselHDProvider.cachedPlayerHtml = cachedHtml
-        this@FaselHDProvider.activePlayerUrl = null
 
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
@@ -885,15 +882,17 @@ class FaselHDProvider : MainAPI() {
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
-                        Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=${request.isForMainFrame}")
+                        val isMain = request.isForMainFrame
+                        val activeUrl = view.tag as? String
+                        Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=$isMain")
 
-                        if (!request.isForMainFrame && u.contains("playertoken")) {
-                            Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activePlayerUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
+                        if (!isMain && u.contains("playertoken")) {
+                            Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activeUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
                         }
 
                         // Fix 2: Intercept JW Player XHR at Native Layer to bypass 403
-                        if (!request.isForMainFrame
-                            && activePlayerUrl != null
+                        if (!isMain
+                            && activeUrl != null
                             && "videoplayer" in u
                             && "playertoken" in u
                         ) {
@@ -905,7 +904,7 @@ class FaselHDProvider : MainAPI() {
                                     headers = mapOf(
                                         "Accept"           to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                                         "Accept-Language"  to "en-US,en;q=0.9,ar;q=0.8",
-                                        "Referer"          to (activePlayerUrl ?: playerUrl),
+                                        "Referer"          to (activeUrl ?: playerUrl),
                                         "User-Agent"       to userAgent,
                                         "Cache-Control"    to "no-cache"
                                     ),
@@ -940,10 +939,9 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         // New Fix A: Synchronous Hook Injection via cached HTML
-                        if (request.isForMainFrame && u.isPlayerUrl() && cachedPlayerHtml != null) {
+                        if (isMain && u.contains("videoplayer") && u.contains("playertoken") && cachedPlayerHtml != null) {
                             val hookScript = buildJwHookScript()
                             val html = cachedPlayerHtml!!
-                            activePlayerUrl = u
                             cachedPlayerHtml = null
 
                             val injected = html.replace(
@@ -1038,7 +1036,6 @@ class FaselHDProvider : MainAPI() {
                 runCatching { webView.url }.getOrNull() 
             }
             Log.i("FaselHD", "WV-FINAL-URL generation=$gen url=$finalUrl")
-            activePlayerUrl = null
             cachedPlayerHtml = null
             if (session.closed.compareAndSet(false, true)) {
                 activeSession.compareAndSet(session, null)
