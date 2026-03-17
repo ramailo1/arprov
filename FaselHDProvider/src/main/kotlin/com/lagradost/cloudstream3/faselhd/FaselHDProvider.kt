@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -550,29 +551,42 @@ class FaselHDProvider : MainAPI() {
                 if (window.__faselHooked) return;
                 window.__faselHooked = true;
                 
-                var _jw = window.jwplayer;
+                var _jwImpl = window.jwplayer;
                 Object.defineProperty(window, 'jwplayer', {
-                    get: function() { return _jw; },
-                    set: function(val) {
-                        if (typeof val !== 'function') { _jw = val; return; }
-                        _jw = function() {
-                            var inst = val.apply(this, arguments);
+                    configurable: true,
+                    enumerable: true,
+                    get: function() { return _jwImpl; },
+                    set: function(jw) {
+                        if (typeof jw !== 'function') { _jwImpl = jw; return; }
+                        _jwImpl = function() {
+                            var inst = jw.apply(this, arguments);
                             if (inst && inst.setup) {
                                 var origSetup = inst.setup.bind(inst);
                                 inst.setup = function(cfg) {
                                     try {
-                                        var src = cfg.file || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file) || '';
-                                        if (src) window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP', url: src}));
-                                        else window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP-RAW', text: JSON.stringify(cfg).substring(0, 500)}));
+                                        var src = (cfg.file)
+                                            || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file)
+                                            || (cfg.sources && cfg.sources[0] && cfg.sources[0].file)
+                                            || '';
+                                        if (src) {
+                                            window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP', url: src}));
+                                        } else {
+                                            window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP-RAW', text: JSON.stringify(cfg).substring(0, 800)}));
+                                        }
                                     } catch(e) {}
                                     return origSetup(cfg);
                                 };
                             }
                             return inst;
                         };
-                        for (var k in val) { if (val.hasOwnProperty(k)) _jw[k] = val[k]; }
-                    },
-                    configurable: true
+                        try {
+                            for (var k in jw) {
+                                if (jw.hasOwnProperty(k)) {
+                                    try { _jwImpl[k] = jw[k]; } catch(e) {}
+                                }
+                            }
+                        } catch(e) {}
+                    }
                 });
                 
                 var origFetch = window.fetch;
@@ -863,6 +877,52 @@ class FaselHDProvider : MainAPI() {
                     ): WebResourceResponse? {
                         val u = request.url.toString()
                         Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=${request.isForMainFrame}")
+
+                        // Fix 2: Intercept JW Player XHR at Native Layer to bypass 403
+                        if (!request.isForMainFrame
+                            && "videoplayer" in u
+                            && "playertoken" in u
+                            && cachedHtml != null
+                        ) {
+                            Log.i("FaselHD", "WV-XHR-INTERCEPT gen=${session.gen} url=$u")
+                            val currentCfClearance = cfKiller.savedCookies[playerHost.removePrefix("https://").removePrefix("http://")]?.get("cf_clearance") ?: ""
+                            
+                            val okhttpResponse = runBlocking {
+                                app.get(u,
+                                    headers = mapOf(
+                                        "Accept"           to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                                        "Accept-Language"  to "en-US,en;q=0.9,ar;q=0.8",
+                                        "Referer"          to playerUrl,
+                                        "User-Agent"       to userAgent,
+                                        "Cache-Control"    to "no-cache"
+                                    ),
+                                    cookies = mapOf("cf_clearance" to currentCfClearance)
+                                )
+                            }
+
+                            val body = okhttpResponse.text
+                            Log.i("FaselHD", "WV-XHR-OHTTP gen=${session.gen} status=${okhttpResponse.code} bodyLen=${body.length}")
+
+                            val streamUrl = Regex(
+                                """https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""",
+                                RegexOption.IGNORE_CASE
+                            ).find(body)?.value
+
+                            if (streamUrl != null) {
+                                Log.i("FaselHD", "WV-XHR-HIT gen=${session.gen} url=$streamUrl")
+                                session.completeSuccess(streamUrl)
+                            }
+
+                            val contentType = okhttpResponse.headers["content-type"] ?: "text/html"
+                            return WebResourceResponse(
+                                contentType.substringBefore(";").trim(),
+                                "UTF-8",
+                                200,
+                                "OK",
+                                mapOf("Access-Control-Allow-Origin" to "*"),
+                                body.byteInputStream(Charsets.UTF_8)
+                            )
+                        }
 
                         // New Fix A: Synchronous Hook Injection via cached HTML
                         if (request.isForMainFrame && u.isPlayerUrl() && cachedHtml != null) {
