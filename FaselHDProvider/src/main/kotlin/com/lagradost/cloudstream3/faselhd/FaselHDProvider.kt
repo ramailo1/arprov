@@ -144,7 +144,30 @@ private class ProbeBridge(
         try {
             val obj = JSONObject(raw)
             when (obj.optString("kind")) {
-                "JW-SETUP", "candidate" -> {
+                "JW-SETUP" -> {
+                    val u = obj.optString("url")
+                    if (!u.isNullOrBlank() && completed.compareAndSet(false, true)) {
+                        Log.i("FaselHD", "BRIDGE-SUCCESS via JW-SETUP: $u")
+                        onMediaUrl(u)
+                    }
+                }
+                "JW-SETUP-RAW" -> {
+                    val text = obj.optString("text")
+                    log("JW-SETUP-RAW: $text")
+                }
+                "XHR-STREAM" -> {
+                    val u = obj.optString("text")
+                    if (!u.isNullOrBlank() && completed.compareAndSet(false, true)) {
+                        Log.i("FaselHD", "BRIDGE-SUCCESS via XHR-STREAM: $u")
+                        onMediaUrl(u)
+                    }
+                }
+                "XHR-BODY" -> {
+                    val url = obj.optString("url")
+                    val text = obj.optString("text")
+                    log("XHR-BODY from $url: $text")
+                }
+                "candidate" -> {
                     val url = obj.optString("url")
                     val via = obj.optString("via").ifBlank { obj.optString("kind") }
                     Log.i("FaselHD", "BRIDGE-CANDIDATE via=$via url=$url")
@@ -438,11 +461,15 @@ class FaselHDProvider : MainAPI() {
 
   try {
     log("PROBE-INSTALLED href=" + location.href);
+    
+    // Patch fetch to always include credentials and scan response
     var origFetch = window.fetch;
     if (origFetch) {
-      window.fetch = function(resource) {
+      window.fetch = function(resource, init) {
+        init = init || {};
+        init.credentials = init.credentials || 'include';
         var fetchUrl = (resource && resource.url) ? resource.url : String(resource || "");
-        return origFetch.apply(this, arguments).then(function(resp) {
+        return origFetch.call(this, resource, init).then(function(resp) {
           try {
             var url = (resp && resp.url) || fetchUrl || location.href;
             log("PROBE-FETCH url=" + url);
@@ -450,6 +477,10 @@ class FaselHDProvider : MainAPI() {
 
             var clone = resp.clone();
             clone.text().then(function(txt) {
+              if (txt.includes('.m3u8') || txt.includes('.mp4')) {
+                var m = txt.match(/https?:\/\/[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*/i);
+                if (m) post({ kind: "XHR-STREAM", url: url, text: m[0] });
+              }
               scanText(txt, url, "fetch.body");
             }).catch(function(){});
           } catch (e) {}
@@ -457,16 +488,14 @@ class FaselHDProvider : MainAPI() {
         });
       };
     }
-  } catch (e) {
-    log("fetch hook error: " + e);
-  }
 
-  try {
+    // Patch XHR to always include credentials and scan response
     var XO = XMLHttpRequest.prototype.open;
     var XS = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function(method, url) {
-      this.__faselUrl = url;
+      this.withCredentials = true;
+      this.__faselUrl = (url && url.url) ? url.url : String(url || "");
       return XO.apply(this, arguments);
     };
 
@@ -479,13 +508,21 @@ class FaselHDProvider : MainAPI() {
 
           var text = "";
           try { text = this.responseType === "" || this.responseType === "text" ? this.responseText : ""; } catch (e) {}
-          if (text) scanText(text, finalUrl, "xhr.body");
+          if (text) {
+             if (text.includes('.m3u8') || text.includes('.mp4')) {
+                var m = text.match(/https?:\/\/[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*/i);
+                if (m) post({ kind: "XHR-STREAM", url: finalUrl, text: m[0] });
+             } else if (text.length > 0 && text.length < 5000) {
+                post({ kind: "XHR-BODY", url: finalUrl, text: text.substring(0, 500) });
+             }
+             scanText(text, finalUrl, "xhr.body");
+          }
         } catch (e) {}
       });
       return XS.apply(this, arguments);
     };
   } catch (e) {
-    log("xhr hook error: " + e);
+    log("probe hooks error: " + e);
   }
 
   try { scanText(document.documentElement.outerHTML, location.href, "dom.initial"); } catch (e) {}
@@ -506,6 +543,56 @@ class FaselHDProvider : MainAPI() {
   } catch (e) {}
 })();
 """.trimIndent()
+
+    private fun buildJwHookScript(): String {
+        return """
+            (function() {
+                if (window.__faselHooked) return;
+                window.__faselHooked = true;
+                
+                var _jw = window.jwplayer;
+                Object.defineProperty(window, 'jwplayer', {
+                    get: function() { return _jw; },
+                    set: function(val) {
+                        if (typeof val !== 'function') { _jw = val; return; }
+                        _jw = function() {
+                            var inst = val.apply(this, arguments);
+                            if (inst && inst.setup) {
+                                var origSetup = inst.setup.bind(inst);
+                                inst.setup = function(cfg) {
+                                    try {
+                                        var src = cfg.file || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file) || '';
+                                        if (src) window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP', url: src}));
+                                        else window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP-RAW', text: JSON.stringify(cfg).substring(0, 500)}));
+                                    } catch(e) {}
+                                    return origSetup(cfg);
+                                };
+                            }
+                            return inst;
+                        };
+                        for (var k in val) { if (val.hasOwnProperty(k)) _jw[k] = val[k]; }
+                    },
+                    configurable: true
+                });
+                
+                var origFetch = window.fetch;
+                if (origFetch) {
+                  window.fetch = function(resource, init) {
+                    init = init || {};
+                    init.credentials = init.credentials || 'include';
+                    return origFetch.call(this, resource, init);
+                  };
+                }
+
+                var XO = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                  this.withCredentials = true;
+                  return XO.apply(this, arguments);
+                };
+            })();
+        """.trimIndent()
+    }
+
 
     private fun injectJwProbe(webView: WebView, session: CaptureSession) {
         val js = buildJwProbeJs()
@@ -673,8 +760,9 @@ class FaselHDProvider : MainAPI() {
     private suspend fun extractM3u8ViaWebView(
         playerUrl: String,
         playerHost: String,
-        referer: String
-    ): String? = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+        referer: String,
+        cachedHtml: String? = null
+    ): String? = kotlinx.coroutines.withTimeoutOrNull(35000) {
         val gen = captureGeneration.incrementAndGet()
         val session = CaptureSession(gen = gen, targetUrl = playerUrl)
         activeSession.set(session)
@@ -743,34 +831,6 @@ class FaselHDProvider : MainAPI() {
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
                         
-                        // Fix #2: Inject early JW hook before page JS runs
-                        view.evaluateJavascript("""
-                            (function() {
-                                var _jw = window.jwplayer;
-                                Object.defineProperty(window, 'jwplayer', {
-                                    get: function() { return _jw; },
-                                    set: function(val) {
-                                        _jw = function() {
-                                            var inst = val.apply(this, arguments);
-                                            if (inst && inst.setup) {
-                                                var origSetup = inst.setup.bind(inst);
-                                                inst.setup = function(cfg) {
-                                                    try {
-                                                        var src = cfg.file || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file) || '';
-                                                        if (src) window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP', url: src}));
-                                                        else window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP-RAW', text: JSON.stringify(cfg).substring(0, 500)}));
-                                                    } catch(e) {}
-                                                    return origSetup(cfg);
-                                                };
-                                            }
-                                            return inst;
-                                        };
-                                    },
-                                    configurable: true
-                                });
-                            })();
-                        """.trimIndent(), null)
-
                         if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
                             injectJwProbe(view, session)
                         }
@@ -803,6 +863,21 @@ class FaselHDProvider : MainAPI() {
                     ): WebResourceResponse? {
                         val u = request.url.toString()
                         Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=${request.isForMainFrame}")
+
+                        // New Fix A: Synchronous Hook Injection via cached HTML
+                        if (request.isForMainFrame && u.isPlayerUrl() && cachedHtml != null) {
+                            val hookScript = buildJwHookScript()
+                            val injected = cachedHtml.replace(
+                                "<head>",
+                                "<head><script type=\"text/javascript\">$hookScript</script>",
+                                ignoreCase = true
+                            )
+                            Log.i("FaselHD", "WV-INJECT-HTML gen=${session.gen} url=$u")
+                            return WebResourceResponse(
+                                "text/html", "UTF-8",
+                                injected.byteInputStream(Charsets.UTF_8)
+                            )
+                        }
 
                         // Native interception is the primary path for nested iframe players
                         val isMedia = u.contains(".m3u8", ignoreCase = true)
@@ -1193,7 +1268,8 @@ class FaselHDProvider : MainAPI() {
             val resolved = extractM3u8ViaWebView(
                 playerUrl = rawPlayerUrl,
                 playerHost = playerHost,
-                referer = pageUrl
+                referer = pageUrl,
+                cachedHtml = videoPageHtml
             )
             println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
