@@ -446,12 +446,12 @@ class FaselHDProvider : MainAPI() {
                             if (parts.size >= 3) {
                                 val url = parts[1]
                                 val body = parts[2]
-                                Log.i("FaselHD", "JSBridge - xhrBody for $url: ${body.take(200)}...")
+                                Log.i("FaselHD", "JSBridge - xhrBody for $url: (len=${body.length}) ${body.take(200)}...")
                                 
-                                // 1. Try regex for m3u8
+                                // Unconditional regex for m3u8 in ANY captured XHR body
                                 val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(body)?.value
                                 if (m3u8 != null) {
-                                    Log.i("FaselHD", "JSBridge - m3u8 found in XHR body: $m3u8")
+                                    Log.i("FaselHD", "JSBridge - m3u8 caught in XHR body scan: $m3u8")
                                     finish(m3u8)
                                     return
                                 }
@@ -743,9 +743,10 @@ class FaselHDProvider : MainAPI() {
                             finish(u)
                         }
 
-                        // Part 1: Intercept M3U8 at the network layer (most reliable)
-                        if (u.contains(".m3u8") && !u.contains("chunk") && !u.contains("segment")) {
-                            Log.i("FaselHD", "INTERCEPT_M3U8: $u")
+                        // Part 1: Intercept M3U8/HLS at the network layer (most robust)
+                        if ((u.contains(".m3u8") || u.contains("/hls/") || u.contains("/manifest")) 
+                             && !u.contains("chunk") && !u.contains("segment")) {
+                            Log.i("FaselHD", "shouldInterceptRequest - STREAM CAPTURED: $u")
                             finish(u)
                         }
 
@@ -818,6 +819,32 @@ class FaselHDProvider : MainAPI() {
                                    (cleaned.contains(".m3u8") || cleaned.contains("cdn") || cleaned.contains("manifest"))) {
                                     println("FaselHD: ✅ JWPlayer SUCCESS: $cleaned")
                                     finish(cleaned)
+                                }
+                            }
+
+                            // Bug 20: DOM fallback scan for rendered configs or tags
+                            view?.evaluateJavascript("""
+                                (function() {
+                                    // 1. Check for data-setup attribute on the player div
+                                    var el = document.querySelector('[data-setup]');
+                                    if (el) {
+                                        var ds = el.getAttribute('data-setup');
+                                        if (ds && ds.includes('http')) return 'dom_setup:' + ds;
+                                    }
+                                    // 2. Check for video src
+                                    var v = document.querySelector('video[src]');
+                                    if (v && v.src && v.src.startsWith('http')) return 'dom_video:' + v.src;
+                                    // 3. Check for source tags
+                                    var s = document.querySelector('source[src*=".m3u8"]');
+                                    if (s && s.src) return 'dom_source:' + s.src;
+                                    return 'dom_not_found';
+                                })()
+                            """.trimIndent()) { result ->
+                                val cleaned = result?.trim('"') ?: return@evaluateJavascript
+                                if (cleaned.startsWith("dom_") && cleaned != "dom_not_found") {
+                                    Log.i("FaselHD", "DOM scan found stream: $cleaned")
+                                    val url = cleaned.substringAfter(":")
+                                    if (url.startsWith("http")) finish(url)
                                 }
                             }
                         }
