@@ -299,56 +299,57 @@ class FaselHDProvider : MainAPI() {
                         console.log("FaselHD-JS: " + msg);
                     }
 
-                    // --- Fix B: Intercept jwplayer().setup() to capture config at source ---
-                    function hookJwSetup(jw) {
-                        if (!jw || jw.__hooked__) return;
-                        if (typeof jw.setup !== 'function') return;
-                        jw.__hooked__ = true;
-                        
-                        var origSetup = jw.setup.bind(jw);
-                        jw.setup = function(config) {
-                            try {
-                                var file = null;
-                                if (config.file) {
-                                    file = config.file;
-                                } else if (config.playlist && config.playlist[0]) {
-                                    var item = config.playlist[0];
-                                    file = item.file;
-                                    if (!file && item.sources) {
-                                        for (var i = 0; i < item.sources.length; i++) {
-                                            if (item.sources[i].file) { file = item.sources[i].file; break; }
+                    // --- Fix B: Intercept jwplayer().setup() at the source ---
+                    function wrapJwplayer(jw) {
+                        if (!jw || jw.__cs_wrapped) return jw;
+                        var wrapper = function() {
+                            var api = jw.apply(this, arguments);
+                            if (api && typeof api.setup === 'function' && !api.__setup_hooked) {
+                                api.__setup_hooked = true;
+                                var origSetup = api.setup.bind(api);
+                                api.setup = function(config) {
+                                    try {
+                                        log('JW_SETUP_CALLED:' + JSON.stringify(config).substring(0, 500));
+                                        var file = config.file;
+                                        if (!file && config.playlist && config.playlist[0]) {
+                                            var item = config.playlist[0];
+                                            file = item.file;
+                                            if (!file && item.sources) {
+                                                for (var i = 0; i < item.sources.length; i++) {
+                                                    if (item.sources[i].file) { file = item.sources[i].file; break; }
+                                                }
+                                            }
                                         }
-                                    }
-                                }
-                                if (file) {
-                                    log('JW_SETUP_FILE:' + file);
-                                    if (window.CSBridge && window.CSBridge.onStreamUrl) {
-                                        window.CSBridge.onStreamUrl(file);
-                                    }
-                                }
-                            } catch(e) { log('hook_setup_err:' + e.message); }
-                            return origSetup(config);
+                                        if (file) {
+                                            log('JW_SETUP_FILE:' + file);
+                                            window.CSBridge && window.CSBridge.onStreamUrl(file);
+                                        }
+                                    } catch(e) { log('setup_hook_err:' + e.message); }
+                                    return origSetup(config);
+                                };
+                            }
+                            return api;
                         };
+                        // Copy properties from original jwplayer (like .key, .version etc)
+                        for (var key in jw) { if (jw.hasOwnProperty(key)) wrapper[key] = jw[key]; }
+                        wrapper.__cs_wrapped = true;
+                        return wrapper;
                     }
 
-                    // Hook immediately if jwplayer exists
-                    try { if (typeof jwplayer !== 'undefined') hookJwSetup(jwplayer()); } catch(e) {}
-
-                    // Also poll every 100ms until jwplayer appears
-                    var maxTries = 30; var tries = 0;
-                    var t = setInterval(function() {
-                        tries++;
-                        if (tries >= maxTries) { clearInterval(t); return; }
-                        try {
-                            if (typeof jwplayer !== 'undefined') {
-                                var jw = jwplayer();
-                                if (jw && typeof jw.setup === 'function') {
-                                    hookJwSetup(jw);
-                                    clearInterval(t);
-                                }
-                            }
-                        } catch(e) {}
-                    }, 100);
+                    if (window.jwplayer) {
+                        window.jwplayer = wrapJwplayer(window.jwplayer);
+                    } else {
+                        // If not yet loaded, use a setter to catch it the moment it's assigned
+                        var _jw = undefined;
+                        Object.defineProperty(window, 'jwplayer', {
+                            get: function() { return _jw; },
+                            set: function(val) {
+                                log("jwplayer library detected via setter");
+                                _jw = wrapJwplayer(val);
+                            },
+                            configurable: true
+                        });
+                    }
 
                     // --- XHR and Fetch Intercept (Fix A) ---
                     if (window.XMLHttpRequest && XMLHttpRequest.prototype.open) {
