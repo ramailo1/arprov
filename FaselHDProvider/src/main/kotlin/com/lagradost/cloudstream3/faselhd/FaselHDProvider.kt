@@ -672,7 +672,7 @@ class FaselHDProvider : MainAPI() {
         playerUrl: String,
         playerHost: String,
         referer: String
-    ): String? = kotlinx.coroutines.withTimeoutOrNull(120_000) {
+    ): String? = kotlinx.coroutines.withTimeoutOrNull(30_000) {
         val gen = captureGeneration.incrementAndGet()
         val session = CaptureSession(gen = gen, targetUrl = playerUrl)
         activeSession.set(session)
@@ -770,18 +770,24 @@ class FaselHDProvider : MainAPI() {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
-                        Log.i("FaselHD", "WV-LOAD generation=${session.gen} url=${request.url} isMainFrame=${request.isForMainFrame}")
                         val u = request.url.toString()
+                        Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=${request.isForMainFrame}")
 
-                        if (u.contains("jwpcdn.com") || u.contains("jwplayer")) {
+                        // Native interception is the primary path for nested iframe players
+                        val isMedia = u.contains(".m3u8", ignoreCase = true)
+                            || u.contains(".mp4", ignoreCase = true)
+                            || u.contains("/hls/", ignoreCase = true)
+                            || u.contains("master.", ignoreCase = true)
+                            || u.contains("/playlist", ignoreCase = true)
+                            || u.contains("index.m3u8", ignoreCase = true)
+
+                        if (isMedia && !u.contains("chunk") && !u.contains("segment") && !u.contains(".ts")) {
+                            Log.i("FaselHD", "INTERCEPT-HIT gen=${session.gen} url=$u main=${request.isForMainFrame}")
+                            session.completeSuccess(u)
                             return null
                         }
-                        
-                        if (u.contains("scdns.io")) {
-                            if (u.contains(".m3u8") && !u.contains("segment") && !u.contains(".ts")) {
-                                Log.i("FaselHD", "[Gen ${session.gen}] scdns.io M3U8 CAPTURED: $u")
-                                session.completeSuccess(u)
-                            }
+
+                        if (u.contains("jwpcdn.com") || u.contains("jwplayer")) {
                             return null
                         }
                         
@@ -792,15 +798,6 @@ class FaselHDProvider : MainAPI() {
 
                         if (u.contains("cdn-cgi/challenge", true) || u.contains("cdn-cgi/challenge-platform", true)) {
                             lastChallengeMs = System.currentTimeMillis()
-                        }
-
-                        if (isVideoMediaUrl(u) && !u.contains("challenges.cloudflare.com", true) && !u.contains("cdn-cgi", true)) {
-                            session.completeSuccess(u)
-                        }
-
-                        if ((u.contains(".m3u8") || u.contains("/hls/") || u.contains("/manifest")) 
-                             && !u.contains("chunk") && !u.contains("segment")) {
-                            session.completeSuccess(u)
                         }
 
                         return super.shouldInterceptRequest(view, request)
@@ -852,7 +849,10 @@ class FaselHDProvider : MainAPI() {
         try {
             session.result.await()
         } finally {
-            Log.i("FaselHD", "WV-FINAL-URL generation=$gen url=${webView.url}")
+            val finalUrl = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { 
+                runCatching { webView.url }.getOrNull() 
+            }
+            Log.i("FaselHD", "WV-FINAL-URL generation=$gen url=$finalUrl")
             if (session.closed.compareAndSet(false, true)) {
                 activeSession.compareAndSet(session, null)
                 mainHandler.post {
