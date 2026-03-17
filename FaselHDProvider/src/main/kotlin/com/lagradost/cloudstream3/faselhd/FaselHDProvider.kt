@@ -850,6 +850,7 @@ class FaselHDProvider : MainAPI() {
 
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                        Log.i("FaselHD", "WV-START generation=$gen url=$url referer=$referer")
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
                         
@@ -885,6 +886,10 @@ class FaselHDProvider : MainAPI() {
                     ): WebResourceResponse? {
                         val u = request.url.toString()
                         Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=${request.isForMainFrame}")
+
+                        if (!request.isForMainFrame && u.contains("playertoken")) {
+                            Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activePlayerUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
+                        }
 
                         // Fix 2: Intercept JW Player XHR at Native Layer to bypass 403
                         if (!request.isForMainFrame
