@@ -1152,31 +1152,10 @@ class FaselHDProvider : MainAPI() {
 
         println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
-        val playerDoc = safeGet(rawPlayerUrl, pageUrl)
-        if (playerDoc != null) {
-            val playerHtml = playerDoc.html()
-            val links = extractFromPlayerHtml(playerHtml)
-            println("FaselHD: extractFromPlayerHtml found ${links.size} links")
-            if (links.isNotEmpty()) {
-                links.forEach { url ->
-                    callback(
-                        newExtractorLink(
-                            name,
-                            name,
-                            url,
-                            if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            referer = rawPlayerUrl
-                            quality = getVideoQuality(url)
-                        }
-                    )
-                }
-                return true
-            }
-        }
-
-        println("FaselHD: Direct extraction failed, attempting custom WebView extraction...")
+        Log.i("FaselHD", "Skipping safeGet for videoplayer — loading directly in WebView")
+        // Go straight to WebView extraction
         val resolved = extractM3u8ViaWebView(
+
             playerUrl = rawPlayerUrl,
             playerHost = playerHost,
             referer = pageUrl
