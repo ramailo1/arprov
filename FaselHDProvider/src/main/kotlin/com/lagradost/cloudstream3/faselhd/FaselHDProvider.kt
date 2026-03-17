@@ -155,6 +155,7 @@ class FaselHDProvider : MainAPI() {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
         val uri = java.net.URL(resp.url.trimEnd('/'))
+        resp.okhttpResponse.close()
         val host = "${uri.protocol}://${uri.host}"
         println("FaselHD: Host resolved to $host")
         host.also { mainUrl = it }
@@ -189,9 +190,10 @@ class FaselHDProvider : MainAPI() {
         println("FaselHD: safeGet -> $url (Referer: $referer)")
         return runCatching {
             val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
-            if (res.isSuccessful && !isBlocked(res.document)) {
+            val doc = res.document
+            if (res.isSuccessful && !isBlocked(doc)) {
                 println("FaselHD: Plain GET successful for $url")
-                return res.document
+                return doc
             }
 
             println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
@@ -202,10 +204,11 @@ class FaselHDProvider : MainAPI() {
                     interceptor = cfKiller,
                     timeout = 120
                 )
+                val cfDoc = cfRes.document
                 if (cfRes.isSuccessful) {
                     println("FaselHD: CloudflareKiller successful for $url")
                     delay(2000)
-                    if (!isBlocked(cfRes.document)) return cfRes.document
+                    if (!isBlocked(cfDoc)) return cfDoc
                 }
                 println("FaselHD: CloudflareKiller failed or still blocked for $url")
                 null
@@ -646,6 +649,21 @@ class FaselHDProvider : MainAPI() {
                                 try {
                                     if (typeof jwplayer === 'undefined') return 'no_jw';
                                     var p = jwplayer(); if (!p) return 'no_inst';
+                                    
+                                    if (p.on && !p.__cs_ready_hooked) {
+                                        p.__cs_ready_hooked = true;
+                                        p.on('ready', function() {
+                                            try {
+                                                var cfg = p.getConfig();
+                                                var src = cfg && cfg.playlist && cfg.playlist[0] && cfg.playlist[0].sources;
+                                                if (src && src[0] && src[0].file) {
+                                                    if (window.CSBridge) window.CSBridge.onStreamUrl(src[0].file);
+                                                }
+                                                p.play();
+                                            } catch(e) {}
+                                        });
+                                    }
+                                    
                                     var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
                                     if (item && item.file) {
                                         if (item.file.indexOf('blob:') === 0 && item.sources) {
@@ -800,62 +818,6 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (isPlayerPage) {
-                            println("FaselHD: onPageFinished - querying JWPlayer runtime config")
-                            view?.evaluateJavascript(
-                                """
-                                (function() {
-                                    try {
-                                        if (typeof jwplayer === 'undefined') return 'no_jwplayer';
-                                        var p = jwplayer();
-                                        if (!p) return 'no_instance';
-
-                                        var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
-                                        if (item && item.file) {
-                                            if (item.file.indexOf('blob:') === 0 && item.sources) {
-                                                for (var i = 0; i < item.sources.length; i++) {
-                                                    if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) {
-                                                        return item.sources[i].file;
-                                                    }
-                                                }
-                                            }
-                                            return item.file;
-                                        }
-
-                                        var cfg = p.getConfig ? p.getConfig() : null;
-                                        if (cfg && cfg.file) return cfg.file;
-
-                                        var pl = p.getPlaylist ? p.getPlaylist() : null;
-                                        if (pl && pl.length > 0) {
-                                            if (pl[0].file) return pl[0].file;
-                                            if (pl[0].sources) {
-                                                for (var i = 0; i < pl[0].sources.length; i++) {
-                                                    if (pl[0].sources[i].file) return pl[0].sources[i].file;
-                                                }
-                                            }
-                                        }
-
-                                        var keys = cfg ? JSON.stringify(Object.keys(cfg)) : 'no_config';
-                                        var itemKeys = item ? JSON.stringify(Object.keys(item)) : 'no_item';
-                                        return 'notfound|cfgkeys=' + keys + '|itemkeys=' + itemKeys;
-                                    } catch(e) {
-                                        return 'error:' + e.message;
-                                    }
-                                })();
-                                """.trimIndent()
-                            ) { result ->
-                                val cleaned = result?.trim('"') ?: return@evaluateJavascript
-                                println("FaselHD: JWPlayer runtime query -> $cleaned")
-                                if (
-                                    cleaned.startsWith("http") ||
-                                    cleaned.contains(".m3u8", true) ||
-                                    cleaned.contains("cdn", true) ||
-                                    cleaned.contains("manifest", true)
-                                ) {
-                                    println("FaselHD: JWPlayer SUCCESS -> $cleaned")
-                                    finish(cleaned)
-                                }
-                            }
-
                             view?.evaluateJavascript(
                                 """
                                 (function() {
@@ -1239,7 +1201,7 @@ class FaselHDProvider : MainAPI() {
         val allPlayerUrls = mutableListOf<String>()
 
         // 1. Extract from multi-server tabs
-        doc.select("ul.tabs-ul li").forEach { li ->
+        doc.select("ul.tabs-ul li").sortedByDescending { it.hasClass("active") }.forEach { li ->
             val onclick = li.attr("onclick")
             Regex("""(?:playertoken|player_token)=([^'"]+)""", RegexOption.IGNORE_CASE).find(onclick)?.groupValues?.get(1)?.let { token ->
                 allPlayerUrls.add("$host/videoplayer?playertoken=$token")
