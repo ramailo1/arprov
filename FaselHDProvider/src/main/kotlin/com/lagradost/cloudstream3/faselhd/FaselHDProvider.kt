@@ -316,6 +316,11 @@ class FaselHDProvider : MainAPI() {
     private val activeSession = java.util.concurrent.atomic.AtomicReference<CaptureSession?>(null)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    @Volatile
+    private var activePlayerUrl: String? = null
+    @Volatile
+    private var cachedPlayerHtml: String? = null
+
     private fun buildJwProbeJs(): String = """
 (function() {
   if (window.__faselProbeInstalled) return;
@@ -780,6 +785,9 @@ class FaselHDProvider : MainAPI() {
         val gen = captureGeneration.incrementAndGet()
         val session = CaptureSession(gen = gen, targetUrl = playerUrl)
         activeSession.set(session)
+        
+        this@FaselHDProvider.cachedPlayerHtml = cachedHtml
+        this@FaselHDProvider.activePlayerUrl = null
 
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
@@ -880,9 +888,9 @@ class FaselHDProvider : MainAPI() {
 
                         // Fix 2: Intercept JW Player XHR at Native Layer to bypass 403
                         if (!request.isForMainFrame
+                            && activePlayerUrl != null
                             && "videoplayer" in u
                             && "playertoken" in u
-                            && cachedHtml != null
                         ) {
                             Log.i("FaselHD", "WV-XHR-INTERCEPT gen=${session.gen} url=$u")
                             val currentCfClearance = cfKiller.savedCookies[playerHost.removePrefix("https://").removePrefix("http://")]?.get("cf_clearance") ?: ""
@@ -892,7 +900,7 @@ class FaselHDProvider : MainAPI() {
                                     headers = mapOf(
                                         "Accept"           to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                                         "Accept-Language"  to "en-US,en;q=0.9,ar;q=0.8",
-                                        "Referer"          to playerUrl,
+                                        "Referer"          to (activePlayerUrl ?: playerUrl),
                                         "User-Agent"       to userAgent,
                                         "Cache-Control"    to "no-cache"
                                     ),
@@ -911,9 +919,11 @@ class FaselHDProvider : MainAPI() {
                             if (streamUrl != null) {
                                 Log.i("FaselHD", "WV-XHR-HIT gen=${session.gen} url=$streamUrl")
                                 session.completeSuccess(streamUrl)
+                            } else {
+                                Log.i("FaselHD", "WV-XHR-MISS gen=${session.gen} body=${body.take(300)}")
                             }
 
-                            val contentType = okhttpResponse.headers["content-type"] ?: "text/html"
+                            val contentType = okhttpResponse.headers["content-type"] ?: "application/json"
                             return WebResourceResponse(
                                 contentType.substringBefore(";").trim(),
                                 "UTF-8",
@@ -925,9 +935,13 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         // New Fix A: Synchronous Hook Injection via cached HTML
-                        if (request.isForMainFrame && u.isPlayerUrl() && cachedHtml != null) {
+                        if (request.isForMainFrame && u.isPlayerUrl() && cachedPlayerHtml != null) {
                             val hookScript = buildJwHookScript()
-                            val injected = cachedHtml.replace(
+                            val html = cachedPlayerHtml!!
+                            activePlayerUrl = u
+                            cachedPlayerHtml = null
+
+                            val injected = html.replace(
                                 "<head>",
                                 "<head><script type=\"text/javascript\">$hookScript</script>",
                                 ignoreCase = true
@@ -1019,6 +1033,8 @@ class FaselHDProvider : MainAPI() {
                 runCatching { webView.url }.getOrNull() 
             }
             Log.i("FaselHD", "WV-FINAL-URL generation=$gen url=$finalUrl")
+            activePlayerUrl = null
+            cachedPlayerHtml = null
             if (session.closed.compareAndSet(false, true)) {
                 activeSession.compareAndSet(session, null)
                 mainHandler.post {
