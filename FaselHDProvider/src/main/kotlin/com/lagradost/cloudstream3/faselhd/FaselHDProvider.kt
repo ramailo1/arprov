@@ -79,76 +79,41 @@ class FaselHDProvider : MainAPI() {
         return isVideo
     }
 
-    private fun startKotlinDrivenPlayTrigger(webView: WebView?, scope: CoroutineScope) {
-        if (webView == null) return
-        if (!playTriggerStarted.compareAndSet(false, true)) {
-            Log.i("FaselHD", "KotlinPlay already running, skipping duplicate start")
-            return
-        }
-
-        println("FaselHD: Starting Kotlin-driven play trigger loop...")
-        scope.launch {
-            // Wait a bit before polling to let page initialize
-            delay(2000L)
-            repeat(30) { attempt ->
-                if (extractionMutex.isLocked) { // Simple way to check if extraction is still active
-                    delay(1000L) 
-                    withContext(Dispatchers.Main) {
-                        webView.evaluateJavascript("""
-                        (function() {
-                          var jwKeys = Object.keys(window).filter(function(k) {
-                            return k.toLowerCase().includes('jw') || k.toLowerCase().includes('player');
-                          });
-                          var t = typeof window.jwplayer;
-                          return JSON.stringify({type: t, jwKeys: jwKeys.slice(0,10)});
-                        })()
-                        """.trimIndent()) { result ->
-                            Log.i("FaselHD", "KotlinPlay attempt $attempt: $result")
-                            if (result != null && result.contains("\"function\"")) {
-                                triggerJwPlayerPlay(webView, attempt)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private fun triggerJwPlayerPlay(webView: WebView?, attempt: Int = 0) {
         if (webView == null) return
-        println("FaselHD: Injecting JS play trigger (Single attempt API call)...")
+        println("FaselHD: Injecting persistent JS play trigger loop...")
         val js = """
-        (function() {
-            var targets = [
-                document.querySelector('.jw-display'),
-                document.querySelector('.jw-video'),
-                document.querySelector('.jwplayer'),
-                document.querySelector('.jw-wrapper'),
-                document.getElementById('player')
-            ];
-            for (var i = 0; i < targets.length; i++) {
-                if (targets[i]) {
-                    targets[i].dispatchEvent(new MouseEvent('click', {
-                        bubbles: true, cancelable: true, view: window
-                    }));
-                    break;
-                }
+        (function waitForPlayer(retry = 0) {
+            if (retry > 60) {
+                console.log("FaselHD-JS: play trigger timeout after 60 retries");
+                return;
             }
             try {
-                if (typeof jwplayer === 'undefined') return 'no_jw';
-                var p = (typeof jwplayer === 'function') ? jwplayer(0) : null;
-                if (p && typeof p.play === 'function') {
-                    p.play();
-                    return 'play_called';
+                if (typeof jwplayer === 'function') {
+                    let p = null;
+                    try { p = jwplayer(); } catch(e) {}
+                    if (p && typeof p.play === 'function' && typeof p.getState === 'function') {
+                        console.log("FaselHD-JS: Player instance found at retry " + retry + ", triggering play");
+                        try {
+                            p.on('ready', function() {
+                                try { p.play(true); } catch(e) {}
+                            });
+                        } catch(e) {}
+                        try { p.play(true); } catch(e) {}
+
+                        const btn = document.querySelector('.jw-display, .jw-icon-playback, .jw-video, .jw-wrapper, #player');
+                        if (btn) {
+                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }
+                        return;
+                    }
                 }
-                return 'no_instance';
-            } catch(e) { return 'err:' + e.message; }
-        })()
+            } catch(e) { console.log("FaselHD-JS: trigger error: " + e.message); }
+            setTimeout(() => waitForPlayer(retry + 1), 500);
+        })();
         """.trimIndent()
         
-        webView.evaluateJavascript(js) { result -> 
-            Log.i("FaselHD", "Play trigger attempt $attempt: $result") 
-        }
+        webView.evaluateJavascript(js, null)
     }
 
     private suspend fun resolveHost(): String = runCatching {
@@ -714,11 +679,10 @@ class FaselHDProvider : MainAPI() {
                         val currentUrl = url ?: ""
 
                         if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
-                            playTriggerStarted.set(false)
                             view?.evaluateJavascript(hookScript, null)
-                            Log.i("FaselHD", "onPageStarted $currentUrl")
+                            Log.i("FaselHD", "onPageStarted $currentUrl - Triggering persistent play loop")
 
-                            startKotlinDrivenPlayTrigger(view, ioScope)
+                            triggerJwPlayerPlay(view, 0)
                             startJWPlayerPolling()
                         } else {
                             Log.i("FaselHD", "onPageStarted IGNORED (non-player URL): $currentUrl")
@@ -897,7 +861,6 @@ class FaselHDProvider : MainAPI() {
                                         captureStarted = true
                                         println("FaselHD: Gate passed. Starting 45s capture window for gen $myGen.")
 
-                                        startKotlinDrivenPlayTrigger(view, ioScope)
                                         triggerJwPlayerPlay(view, 0)
 
                                         captureTimeout = Runnable {
@@ -914,7 +877,7 @@ class FaselHDProvider : MainAPI() {
                                     }
 
                                     if (i == 1 && view != null) {
-                                        println("FaselHD: Quiet check 1 - retry play trigger")
+                                        println("FaselHD: Quiet check 1 - ensure trigger is active")
                                         triggerJwPlayerPlay(view, 1)
                                     }
                                 }, i * checkInterval)
