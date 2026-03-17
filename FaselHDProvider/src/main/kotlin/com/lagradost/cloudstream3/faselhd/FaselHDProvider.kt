@@ -546,10 +546,11 @@ class FaselHDProvider : MainAPI() {
             "performing security verification" in b
     }
 
-    private suspend fun safeGet(url: String, referer: String = url): Document? {
+    private suspend fun safeGet(url: String, referer: String = url, headers: Map<String, String>? = null): Document? {
         println("FaselHD: safeGet -> $url (Referer: $referer)")
+        val finalHeaders = headers(mainUrl, referer) + (headers ?: emptyMap())
         return runCatching {
-            val res = app.get(url, headers = headers(mainUrl, referer), timeout = 15)
+            val res = app.get(url, headers = finalHeaders, timeout = 15)
             val doc = res.document
             if (res.isSuccessful && !isBlocked(doc)) {
                 println("FaselHD: Plain GET successful for $url")
@@ -1153,7 +1154,14 @@ class FaselHDProvider : MainAPI() {
             println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
             // Fix #1: Try SafeGet first to avoid single-use token consumption in WebView
-            val videoPageHtml = safeGet(rawPlayerUrl, referer = pageUrl)?.html()
+            val videoPageHtml = safeGet(
+                rawPlayerUrl, 
+                referer = pageUrl,
+                headers = mapOf("User-Agent" to USER_AGENT)
+            )?.html() ?: run {
+                Log.i("FaselHD", "SAFEGET-NULL falling back to WebView")
+                null
+            }
             if (videoPageHtml != null) {
                 val jwFileRegex = Regex("""(?:["']file["']\s*:\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)""")
                 val jwSrcRegex  = Regex("""https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""", RegexOption.IGNORE_CASE)
