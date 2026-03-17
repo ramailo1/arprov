@@ -58,64 +58,273 @@ class FaselHDProvider : MainAPI() {
     private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
     private val ioScope = CoroutineScope(Dispatchers.IO)
-    private val playTriggerStarted = AtomicBoolean(false)
+
 
     private fun isVideoMediaUrl(url: String): Boolean {
+        if (url.contains("challenges.cloudflare.com", true) || url.contains("cdn-cgi", true)) return false
+
         val lower = url.lowercase()
-        // Hard reject images first
-        if (IMAGE_EXTENSIONS.any { lower.endsWith(it) || lower.contains("$it?") }) {
-            println("FaselHD-Filter: Rejected image/thumbnail -> $url")
-            return false
-        }
-        // Accept only known video patterns
+        
+        if (IMAGE_EXTENSIONS.any { lower.contains(it) } || 
+            lower.contains("favicon") || 
+            lower.contains("thumb") || 
+            lower.contains("track")) return false
+
         val isVideo = VIDEO_EXTENSIONS.any { lower.contains(it) }
                 || lower.contains("manifest")
                 || lower.contains("playlist")
                 || lower.contains("stream")
-        
-        if (!isVideo) {
-            // println("FaselHD-Filter: URL did not match video patterns -> $url")
-        }
         return isVideo
     }
 
-    private fun triggerJwPlayerPlay(webView: WebView?, attempt: Int = 0) {
-        if (webView == null) return
-        println("FaselHD: Injecting persistent JS play trigger loop...")
-        val js = """
-        (function waitForPlayer(retry = 0) {
-            if (retry > 60) {
-                console.log("FaselHD-JS: play trigger timeout after 60 retries");
-                return;
+    private fun isUsefulMediaUrl(url: String): Boolean {
+        val u = url.lowercase()
+        return u.contains(".m3u8") ||
+               u.contains(".mp4") ||
+               u.contains("master.m3u8") ||
+               u.contains("playlist.m3u8") ||
+               u.contains("scdns")
+    }
+
+    private fun normalizeMediaUrl(url: String): String? {
+        return url.trim()
+            .takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    }
+
+    private data class CaptureSession(
+        val gen: Int,
+        val targetUrl: String,
+        val result: kotlinx.coroutines.CompletableDeferred<String?> = kotlinx.coroutines.CompletableDeferred(),
+        val streamFound: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+        val quietGateStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+        val captureWindowStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+        val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
+    )
+
+    private val captureGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val activeSession = java.util.concurrent.atomic.AtomicReference<CaptureSession?>(null)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private inner class FaselBridge(private val session: CaptureSession) {
+        @android.webkit.JavascriptInterface
+        fun onLog(msg: String) {
+            Log.i("FaselHD-JS", "gen=${session.gen} $msg")
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onStreamFound(url: String) {
+            val current = activeSession.get() ?: return
+            if (current.gen != session.gen) return
+            val normalized = normalizeMediaUrl(url) ?: return
+            if (!isUsefulMediaUrl(normalized)) return
+            if (!session.streamFound.compareAndSet(false, true)) return
+            
+            Log.i("FaselHD", "Gen ${session.gen} Found Stream -> ${normalized.take(100)}")
+            session.result.complete(normalized)
+        }
+        
+        @android.webkit.JavascriptInterface
+        fun report(msg: String) { onLog(msg) }
+
+        @android.webkit.JavascriptInterface
+        fun onM3u8Intercepted(url: String) { onStreamFound(url) }
+
+        @android.webkit.JavascriptInterface
+        fun onXhrResponse(url: String?, body: String?) {
+            val safeBody = body ?: ""
+            if (safeBody.isBlank()) return
+            val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(safeBody)?.value
+            if (m3u8 != null) {
+                onStreamFound(m3u8)
+                return
             }
             try {
-                if (typeof jwplayer === 'function') {
-                    let p = null;
-                    try { p = jwplayer(); } catch(e) {}
-                    if (p && typeof p.play === 'function' && typeof p.getState === 'function') {
-                        console.log("FaselHD-JS: Player instance found at retry " + retry + ", triggering play");
-                        try {
-                            p.on('ready', function() {
-                                try { p.play(true); } catch(e) {}
-                            });
-                        } catch(e) {}
-                        try { p.play(true); } catch(e) {}
-
-                        const btn = document.querySelector('.jw-display, .jw-icon-playback, .jw-video, .jw-wrapper, #player');
-                        if (btn) {
-                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                        }
-                        return;
-                    }
+                val json = JSONObject(safeBody)
+                val file = json.optString("file").ifEmpty {
+                    json.optJSONArray("sources")?.optJSONObject(0)?.optString("file") ?: ""
                 }
-            } catch(e) { console.log("FaselHD-JS: trigger error: " + e.message); }
-            setTimeout(() => waitForPlayer(retry + 1), 500);
-        })();
-        """.trimIndent()
-        
+                if (file.isNotEmpty()) {
+                    onStreamFound(file)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildJwProbeJs(gen: Int): String = """
+    (function() {
+      const GEN = $gen;
+      if (window.__faselProbeGen === GEN && window.__faselProbeInstalled) return;
+      window.__faselProbeGen = GEN;
+      window.__faselProbeInstalled = true;
+
+      const armed = new WeakSet();
+
+      function log(msg) {
+        try { FaselHDBridge.onLog(String(msg)); } catch (e) {}
+      }
+
+      function emit(url) {
+        if (!url) return;
+        log("emit: " + url);
+        try { FaselHDBridge.onStreamFound(String(url)); } catch (e) {}
+      }
+
+      function reportSources(p) {
+        try {
+          const cfg = p && typeof p.getConfig === 'function' ? p.getConfig() : null;
+          const playlist = cfg && cfg.playlist && cfg.playlist[0] ? cfg.playlist[0] : null;
+          const sources = (playlist && playlist.sources) || cfg?.sources || [];
+          for (const s of sources) {
+            const file = s && s.file ? String(s.file) : "";
+            if (file && /(m3u8|mp4|scdns)/i.test(file)) emit(file);
+          }
+        } catch (e) {
+          log("reportSources error: " + e);
+        }
+      }
+
+      function arm(p, label) {
+        try {
+          if (!p || armed.has(p)) return false;
+          if (typeof p.play !== 'function' || typeof p.getState !== 'function') return false;
+          armed.add(p);
+          log("armed jwplayer instance: " + label);
+
+          try { p.on('ready', function() { log("jw ready: " + label); reportSources(p); try { p.play(true); } catch (e) {} }); } catch (e) {}
+          try { p.on('play', function() { log("jw play: " + label); reportSources(p); }); } catch (e) {}
+          try { p.on('playlist', function() { reportSources(p); }); } catch (e) {}
+          try { p.on('playlistItem', function() { reportSources(p); }); } catch (e) {}
+
+          reportSources(p);
+          try { p.play(true); } catch (e) {}
+
+          const btn = document.querySelector('.jw-display, .jw-icon-playback, .jw-video, video');
+          if (btn) {
+            try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+          }
+          return true;
+        } catch (e) {
+          log("arm error: " + e);
+          return false;
+        }
+      }
+
+      function scan() {
+        try {
+          if (typeof window.jwplayer === 'function') {
+            try { arm(window.jwplayer(), "default"); } catch (e) {}
+            document.querySelectorAll('[id]').forEach(function(el) {
+              if (!el.id) return;
+              try { arm(window.jwplayer(el.id), "id:" + el.id); } catch (e) {}
+            });
+          }
+        } catch (e) {
+          log("scan error: " + e);
+        }
+      }
+
+      function hookFactory() {
+        if (window.__faselJwSetterInstalled) return;
+        window.__faselJwSetterInstalled = true;
+
+        let current = window.jwplayer;
+        Object.defineProperty(window, 'jwplayer', {
+          configurable: true,
+          enumerable: true,
+          get() { return current; },
+          set(v) {
+            current = v;
+            log("jwplayer library detected via setter");
+            setTimeout(scan, 0);
+            setTimeout(scan, 300);
+            setTimeout(scan, 1000);
+          }
+        });
+
+        if (typeof current === 'function') {
+          log("jwplayer already present");
+          setTimeout(scan, 0);
+        }
+      }
+
+      hookFactory();
+      scan();
+
+      const iv = setInterval(scan, 500);
+      setTimeout(function() {
+        clearInterval(iv);
+        log("probe finished");
+      }, 45000);
+    })();
+    """.trimIndent()
+    
+    private fun injectJwProbe(webView: WebView, session: CaptureSession) {
+        val js = buildJwProbeJs(session.gen)
         webView.evaluateJavascript(js, null)
     }
 
+    private val hookScript = """
+        (function() {
+            try {
+                if (window.__cs_hooked) return;
+                window.__cs_hooked = true;
+
+                function log(msg) {
+                    try { if (window.FaselHDBridge) window.FaselHDBridge.report(msg); } catch(e) {}
+                }
+
+                if (window.XMLHttpRequest && XMLHttpRequest.prototype.open) {
+                    const origOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function(method, url) {
+                        this.__url = url;
+                        return origOpen.apply(this, arguments);
+                    };
+                    const origSend = XMLHttpRequest.prototype.send;
+                    XMLHttpRequest.prototype.send = function() {
+                        const self = this;
+                        this.addEventListener('readystatechange', function() {
+                            if (self.readyState === 4) {
+                                try {
+                                    const url = self.__url || '';
+                                    const body = self.responseText || '';
+                                    var bodyLen = body ? body.length : -1;
+                                    
+                                    log("xhr_res: [" + self.status + "] " + url);
+                                    
+                                    if (url.includes('jwplayer.com') || url.includes('videoplayer')) {
+                                        log("FaselHD-JS xhrBody len=" + bodyLen + " for " + url);
+                                        if (window.FaselHDBridge && window.FaselHDBridge.onXhrResponse) {
+                                            window.FaselHDBridge.onXhrResponse(url, body);
+                                        }
+                                    }
+                                    if (url.includes('scdns') || url.includes('.m3u8')) {
+                                        if (window.FaselHDBridge) window.FaselHDBridge.onM3u8Intercepted(url);
+                                    }
+                                } catch(e) { log("xhr_hook_err: " + e); }
+                            }
+                        });
+                        return origSend.apply(this, arguments);
+                    };
+                }
+
+                if (window.fetch) {
+                    var _origFetch = window.fetch;
+                    window.fetch = function(input, init) {
+                        var u = typeof input === 'string' ? input : (input && input.url);
+                        if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
+                            log("fetch_intercepted: " + u);
+                            try { if (window.FaselHDBridge) window.FaselHDBridge.onM3u8Intercepted(u); } catch(e) {}
+                        }
+                        return _origFetch.apply(this, arguments);
+                    };
+                }
+
+                log("Hooks installed");
+            } catch(e) {
+                console.error("FaselHD-JS Hook fatal error: " + e.message);
+            }
+        })();
+    """.trimIndent()
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
@@ -270,310 +479,38 @@ class FaselHDProvider : MainAPI() {
         playerUrl: String,
         playerHost: String,
         referer: String
-    ): String? = extractionMutex.withLock {
-        val hookScript = """
-            (function() {
-                try {
-                    if (window.__cs_hooked) return;
-                    window.__cs_hooked = true;
+    ): String? = kotlinx.coroutines.withTimeoutOrNull(120_000) {
+        val gen = captureGeneration.incrementAndGet()
+        val session = CaptureSession(gen = gen, targetUrl = playerUrl)
+        activeSession.set(session)
 
-                    function log(msg) {
-                        try { if (window.CSBridge) window.CSBridge.report(msg); } catch(e) {}
-                        console.log("FaselHD-JS: " + msg);
-                    }
-
-                    // --- Fix B: Intercept jwplayer().setup() at the source ---
-                    function wrapJwplayer(jw) {
-                        if (!jw || jw.__cs_wrapped) return jw;
-                        var wrapper = function() {
-                            var api = jw.apply(this, arguments);
-                            if (api && typeof api.setup === 'function' && !api.__setup_hooked) {
-                                api.__setup_hooked = true;
-                                var origSetup = api.setup.bind(api);
-                                api.setup = function(config) {
-                                    try {
-                                        log('JW_SETUP_CALLED:' + JSON.stringify(config).substring(0, 500));
-                                        var file = config.file;
-                                        if (!file && config.playlist && config.playlist[0]) {
-                                            var item = config.playlist[0];
-                                            file = item.file;
-                                            if (!file && item.sources) {
-                                                for (var i = 0; i < item.sources.length; i++) {
-                                                    if (item.sources[i].file) { file = item.sources[i].file; break; }
-                                                }
-                                            }
-                                        }
-                                        if (file) {
-                                            log('JW_SETUP_FILE:' + file);
-                                            window.CSBridge && window.CSBridge.onStreamUrl(file);
-                                        }
-                                    } catch(e) { log('setup_hook_err:' + e.message); }
-                                    return origSetup(config);
-                                };
-                            }
-                            return api;
-                        };
-                        // Copy properties from original jwplayer (like .key, .version etc)
-                        for (var key in jw) { if (jw.hasOwnProperty(key)) wrapper[key] = jw[key]; }
-                        wrapper.__cs_wrapped = true;
-                        return wrapper;
-                    }
-
-                    if (window.jwplayer) {
-                        window.jwplayer = wrapJwplayer(window.jwplayer);
-                    } else {
-                        // If not yet loaded, use a setter to catch it the moment it's assigned
-                        var _jw = undefined;
-                        Object.defineProperty(window, 'jwplayer', {
-                            get: function() { return _jw; },
-                            set: function(val) {
-                                log("jwplayer library detected via setter");
-                                _jw = wrapJwplayer(val);
-                            },
-                            configurable: true
-                        });
-                    }
-
-                    // --- XHR and Fetch Intercept (Fix A) ---
-                    if (window.XMLHttpRequest && XMLHttpRequest.prototype.open) {
-                        const origOpen = XMLHttpRequest.prototype.open;
-                        XMLHttpRequest.prototype.open = function(method, url) {
-                            this.__url = url;
-                            return origOpen.apply(this, arguments);
-                        };
-                        const origSend = XMLHttpRequest.prototype.send;
-                        XMLHttpRequest.prototype.send = function() {
-                            const self = this;
-                            this.addEventListener('readystatechange', function() {
-                                if (self.readyState === 4) {
-                                    try {
-                                        const url = self.__url || '';
-                                        const body = self.responseText || '';
-                                        var bodyLen = body ? body.length : -1;
-                                        
-                                        log("xhr_res: [" + self.status + "] " + url);
-                                        
-                                        if (url.includes('jwplayer.com') || url.includes('videoplayer')) {
-                                            log("FaselHD-JS xhrBody len=" + bodyLen + " for " + url);
-                                            if (window.CSBridge && window.CSBridge.onXhrResponse) {
-                                                window.CSBridge.onXhrResponse(url, body);
-                                            }
-                                        }
-                                        if (url.includes('scdns') || url.includes('.m3u8')) {
-                                            window.CSBridge && window.CSBridge.onM3u8Intercepted(url);
-                                        }
-                                    } catch(e) { log("xhr_hook_err: " + e); }
-                                }
-                            });
-                            return origSend.apply(this, arguments);
-                        };
-                    }
-
-                    if (window.fetch) {
-                        var _origFetch = window.fetch;
-                        window.fetch = function(input, init) {
-                            var u = typeof input === 'string' ? input : (input && input.url);
-                            if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
-                                log("fetch_intercepted: " + u);
-                                try { window.CSBridge && window.CSBridge.onM3u8Intercepted(u); } catch(e) {}
-                            }
-                            return _origFetch.apply(this, arguments);
-                        };
-                    }
-
-                    log("Hooks installed");
-                } catch(e) {
-                    console.error("FaselHD-JS Hook fatal error: " + e.message);
-                }
-            })();
-        """.trimIndent()
-
-        return suspendCancellableCoroutine { continuation ->
-            val handler = Handler(Looper.getMainLooper())
-            handler.post {
+        val webView = suspendCancellableCoroutine<WebView?> { continuation ->
+            mainHandler.post {
                 val context = AcraApplication.context
                 if (context == null) {
                     continuation.resume(null)
                     return@post
                 }
-
-                val webView = WebView(context)
+                val wv = WebView(context)
                 val cookieManager = CookieManager.getInstance()
-                var resolved = false
-                var captureStarted = false
-                var captureTimeout: Runnable? = null
-                var loadGeneration = 0
-
-                fun finish(value: String?) {
-                    // Bug 6 Fix: Ensure all WebView/continuation calls happen on main thread
-                    handler.post {
-                        if (resolved) return@post
-                        resolved = true
-                        loadGeneration++
-                        playTriggerStarted.set(false)
-                        captureTimeout?.let(handler::removeCallbacks)
-                        println("FaselHD: Finished extraction (gen $loadGeneration) -> ${value?.take(50)}${if ((value?.length ?: 0) > 50) "..." else ""}")
-                        
-                        runCatching { harvestWebViewCookies(java.net.URI(playerUrl).host) }
-                        runCatching { webView.stopLoading() }
-                        runCatching { webView.destroy() }
-                        
-                        if (continuation.isActive) {
-                            continuation.resume(value)
-                        }
-                    }
-                }
-
-                val wv = webView
-                webView.addJavascriptInterface(object {
-                    @android.webkit.JavascriptInterface
-                    fun report(value: String?) {
-                        if (value.isNullOrBlank()) return
-                        
-                        // XHR body parsing moved to dedicated method
-                        println("FaselHD: JSBridge -> $value")
-
-                        // Fix A: Capture from response body if sent by hook
-                        if (value.contains("xhr_body", true)) {
-                            val streamUrl = Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""").find(value)?.groupValues?.get(1)
-                                ?: Regex(""""file"\s*:\s*"([^"]+)"""").find(value)?.groupValues?.get(1)
-                            if (streamUrl != null) {
-                                println("FaselHD: Captured stream from XHR body -> $streamUrl")
-                                finish(streamUrl)
-                                return
-                            }
-                        }
-
-                        val media = if (isVideoMediaUrl(value)) value else null
-
-                        if (media != null && 
-                            !media.contains("cdn-cgi", true) && 
-                            !media.contains("challenge", true) &&
-                            !media.contains("challenges.cloudflare.com", true)) {
-                            finish(media)
-                            return
-                        }
-
-                        if (value.startsWith("mse_") || value.startsWith("blob_url=")) {
-                            handler.postDelayed({
-                                wv.evaluateJavascript(
-                                    """
-                                    (function() {
-                                        const all = performance.getEntriesByType('resource').map(x => x.name);
-                                        const found = all.find(x => /m3u8|\.ts\b|\/hls\/|\/stream\/|manifest/i.test(x) && !x.includes('cdn-cgi') && !/\.(jpg|jpeg|png|webp|gif|svg)/i.test(x));
-                                        return found || "";
-                                    })();
-                                    """.trimIndent()
-                                ) { raw ->
-                                    val url = raw.trim('"')
-                                    if (url.isNotBlank()) {
-                                        println("FaselHD: perf API found after MSE trigger -> $url")
-                                        finish(url)
-                                    }
-                                }
-                            }, 3000)
-                        }
-                    }
-
-                    @android.webkit.JavascriptInterface
-                    fun onM3u8Intercepted(url: String) {
-                        if (url.isNullOrBlank()) return
-                        Log.i("FaselHD", "CSBridge: onM3u8Intercepted -> $url")
-                        finish(url)
-                    }
-
-                    @android.webkit.JavascriptInterface
-                    fun onStreamUrl(url: String) {
-                        if (url.isNullOrBlank()) return
-                        println("FaselHD: JSBridge onStreamUrl -> $url")
-                        if (url.startsWith("http")) {
-                            finish(url)
-                        }
-                    }
-
-                    @android.webkit.JavascriptInterface
-                    fun onXhrResponse(url: String?, body: String?) {
-                        val safeUrl = url ?: ""
-                        val safeBody = body ?: ""
-                        Log.i("FaselHD", "xhrBody CALLED url=$safeUrl bodyLen=${safeBody.length} snippet=${safeBody.take(200)}")
-                        if (safeBody.isBlank()) return
-
-                        // 1. Unconditional regex for m3u8 in ANY captured XHR body
-                        val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(safeBody)?.value
-                        if (m3u8 != null) {
-                            Log.i("FaselHD", "JSBridge - m3u8 caught in XHR body scan: $m3u8")
-                            finish(m3u8)
-                            return
-                        }
-
-                        // 2. Try JSON parsing
-                        try {
-                            val json = JSONObject(safeBody)
-                            val file = json.optString("file").ifEmpty {
-                                json.optJSONArray("sources")?.optJSONObject(0)?.optString("file") ?: ""
-                            }
-                            if (file.isNotEmpty()) {
-                                Log.i("FaselHD", "JSBridge - file found in XHR JSON: $file")
-                                finish(file)
-                            }
-                        } catch (_: Exception) {}
-                    }
-                }, "CSBridge")
-
-                continuation.invokeOnCancellation {
-                    handler.post {
-                        if (!resolved) {
-                            resolved = true
-                            loadGeneration++ // invalidate all pending callbacks
-                            playTriggerStarted.set(false)
-                            runCatching { webView.stopLoading() }
-                            runCatching { webView.destroy() }
-                        }
-                    }
-                }
-
-                fun setupGlobalTimeout(gen: Int) {
-                    handler.postDelayed({
-                        if (!resolved && loadGeneration == gen) {
-                            println("FaselHD: Global WebView timeout after 120s (gen $gen)")
-                            finish(null)
-                        }
-                    }, 120_000)
-                }
-                setupGlobalTimeout(loadGeneration)
-
                 cookieManager.setAcceptCookie(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+                    cookieManager.setAcceptThirdPartyCookies(wv, true)
                 }
 
-                val host = java.net.URI(playerUrl).host
-                clearCfCookiesFromWebView(host)
-                syncCookiesToWebView(host)
-                syncCfClearanceToWebView(host)
-                
-                println("FaselHD: Cookies in cfKiller for $host (before load):")
-                cfKiller.savedCookies[host]?.forEach { (name, value) ->
-                    println("FaselHD:   $name=${value.take(15)}...")
-                }
+                clearCfCookiesFromWebView(playerHost)
+                syncCookiesToWebView(playerHost)
+                syncCfClearanceToWebView(playerHost)
 
-                // Bug 12 & Empty Body Fix: Force Desktop Chrome UA for player WebView
                 val defaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                println("FaselHD: WebView default UA forced to desktop: $defaultUA")
-                
-                // Update provider-wide UA so headers() use it too
                 userAgent = defaultUA
-                
-                // Try to push it to cfKiller if it has the property
                 runCatching {
                     val field = cfKiller.javaClass.getDeclaredField("userAgent")
                     field.isAccessible = true
                     field.set(cfKiller, defaultUA)
-                }.onFailure { e ->
-                    println("FaselHD: Could not set userAgent on cfKiller via reflection: ${e.message}")
                 }
 
-                webView.settings.apply {
+                wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
@@ -581,399 +518,152 @@ class FaselHDProvider : MainAPI() {
                     loadsImagesAutomatically = true
                     allowFileAccess = true
                     allowContentAccess = true
-                    
                     userAgentString = defaultUA
-                    println("FaselHD: WebView UA confirmed: $userAgentString")
                 }
 
-                webView.webChromeClient = object : WebChromeClient() {
+                wv.webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
                         Log.i("FaselHD-JS", "[${consoleMessage.messageLevel()}] ${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})")
-                        val msg = consoleMessage.message()
-                        if (msg.contains("JW_SETUP_FILE:")) {
-                            val url = msg.substringAfter("JW_SETUP_FILE:")
-                            Log.i("FaselHD", "✅ JW setup() hook fired: $url")
-                            if (url.startsWith("http")) {
-                                finish(url)
-                                Log.i("FaselHD", "setup() hook won the race")
-                            }
-                        }
                         return true
                     }
                 }
+                
+                wv.addJavascriptInterface(FaselBridge(session), "FaselHDBridge")
+                
+                var lastChallengeMs = 0L
+                var lastOnPageFinishedMs = 0L
 
-                var pollCount = 0
-                fun startJWPlayerPolling() {
-                    handler.post {
-                        if (resolved || pollCount >= 60) {
-                            return@post
-                        }
-                        pollCount++
-                        webView.evaluateJavascript("""
-                            (function() {
-                                try {
-                                    if (typeof jwplayer === 'undefined') return 'no_jw';
-                                    var p = jwplayer(); if (!p) return 'no_inst';
-                                    
-                                    if (p.on && !p.__cs_ready_hooked) {
-                                        p.__cs_ready_hooked = true;
-                                        p.on('ready', function() {
-                                            try {
-                                                var cfg = p.getConfig();
-                                                var src = cfg && cfg.playlist && cfg.playlist[0] && cfg.playlist[0].sources;
-                                                if (src && src[0] && src[0].file) {
-                                                    if (window.CSBridge) window.CSBridge.onStreamUrl(src[0].file);
-                                                }
-                                                p.play();
-                                            } catch(e) {}
-                                        });
-                                    }
-                                    
-                                    var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
-                                    if (item && item.file) {
-                                        if (item.file.indexOf('blob:') === 0 && item.sources) {
-                                            for (var i = 0; i < item.sources.length; i++) {
-                                                if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) return item.sources[i].file;
-                                            }
-                                        }
-                                        return item.file;
-                                    }
-                                    var pl = p.getPlaylist ? p.getPlaylist() : null;
-                                    if (pl && pl.length > 0) {
-                                        if (pl[0].file) return pl[0].file;
-                                        var src = pl[0].sources;
-                                        if (src) for (var i=0;i<src.length;i++) if(src[i].file) return src[i].file;
-                                    }
-                                    
-                                    var entries = performance.getEntriesByType('resource');
-                                    for (var i = 0; i < entries.length; i++) {
-                                        var n = entries[i].name;
-                                        if (n.includes('scdns.io') && n.includes('.m3u8') 
-                                            && !n.includes('segment') && !n.includes('.ts')) {
-                                            return n;
-                                        }
-                                    }
-                                    
-                                    return 'jw_found_no_url';
-                                } catch(e) { return 'err:'+e.message; }
-                            })()
-                        """.trimIndent()) { result ->
-                            val v = result?.trim('"') ?: return@evaluateJavascript
-                            if (v.startsWith("http")) {
-                                println("FaselHD: ✅ JWPlayer POLL SUCCESS: $v")
-                                finish(v)
-                            } else {
-                                handler.postDelayed({ startJWPlayerPolling() }, 100)
-                            }
-                        }
-                    }
-                }
-
-                webView.webViewClient = object : WebViewClient() {
-                    private var lastChallengeMs = 0L
-                    private var lastOnPageFinishedMs = 0L
-                    var captureCheckScheduled = false
-
-                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
-
                         if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
-                            view?.evaluateJavascript(hookScript, null)
-                            Log.i("FaselHD", "onPageStarted $currentUrl - Triggering persistent play loop")
-
-                            triggerJwPlayerPlay(view, 0)
-                            startJWPlayerPolling()
-                        } else {
-                            Log.i("FaselHD", "onPageStarted IGNORED (non-player URL): $currentUrl")
+                            view.evaluateJavascript(hookScript, null)
+                            injectJwProbe(view, session)
                         }
                     }
 
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val url = request.url.toString()
                         if (url.startsWith("intent://") || url.startsWith("market://")) {
-                            Log.i("FaselHD", "Blocked intent redirect: $url")
-                            return true  // swallow — do not navigate
+                            return true
                         }
                         return false
                     }
 
+                    override fun onReceivedHttpError(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        errorResponse: WebResourceResponse?
+                    ) {
+                        super.onReceivedHttpError(view, request, errorResponse)
+                        if (request?.isForMainFrame == true && errorResponse?.statusCode == 404) {
+                            println("FaselHD: 404 encountered for target URL, aborting session.")
+                            session.result.complete(null)
+                        }
+                    }
+                    
                     override fun shouldInterceptRequest(
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
                         val u = request.url.toString()
-                        Log.i("FaselHD-Intercept", "shouldInterceptRequest: ${u.take(200)}")
 
-                        // CRITICAL: must not intercept jwplayer — null = WebView fetches it from CDN normally
                         if (u.contains("jwpcdn.com") || u.contains("jwplayer")) {
-                            Log.i("FaselHD-Intercept", "$u → PASS THROUGH (returning null)")
                             return null
                         }
                         
-                        // ✅ ALWAYS allow: scdns.io entirely (thumbnails + M3U8)
                         if (u.contains("scdns.io")) {
-                            if (u.contains(".m3u8") 
-                                && !u.contains("segment") 
-                                && !u.contains(".ts")) {
+                            if (u.contains(".m3u8") && !u.contains("segment") && !u.contains(".ts")) {
                                 Log.i("FaselHD", "scdns.io M3U8 CAPTURED: $u")
-                                finish(u)
+                                if (session.streamFound.compareAndSet(false, true)) {
+                                    session.result.complete(u)
+                                }
                             }
                             return null
                         }
                         
-                        // Block known ad/tracker domains only
                         val blockList = listOf("doubleclick.net", "googlesyndication.com", "adservice.google")
                         if (blockList.any { u.contains(it) }) {
-                            println("FaselHD: Blocking ad/tracker -> $u")
                             return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                         }
 
-                        val mainFrame = request.isForMainFrame
-                        val method = request.method
-                        
                         if (u.contains("cdn-cgi/challenge", true) || u.contains("cdn-cgi/challenge-platform", true)) {
                             lastChallengeMs = System.currentTimeMillis()
-                            println("FaselHD: CF challenge request detected (MF:$mainFrame $method), resetting capture delay -> $u")
                         }
 
-                        // Broad domain logging to find segment CDN or APIs
-                        if (u.contains("faselhdx", true) || u.contains("api", true) || u.contains("v1/", true) ||
-                            (!u.contains("cloudflare") && !u.contains("cdn-cgi") &&
-                                !u.contains("challenge") && u.contains(playerHost, true))
-                        ) {
-                            println("FaselHD: WebView request (MF:$mainFrame $method) -> $u")
+                        if (isVideoMediaUrl(u) && !u.contains("challenges.cloudflare.com", true) && !u.contains("cdn-cgi", true)) {
+                            if (session.streamFound.compareAndSet(false, true)) {
+                                session.result.complete(u)
+                            }
                         }
 
-                        if (
-                            isVideoMediaUrl(u) &&
-                            !u.contains("challenges.cloudflare.com", true) &&
-                            !u.contains("cdn-cgi", true)
-                        ) {
-                            println("FaselHD: WebView media subrequest (filtered) -> $u")
-                            finish(u)
-                        }
-
-                        // Part 1: Intercept M3U8/HLS at the network layer (most robust)
                         if ((u.contains(".m3u8") || u.contains("/hls/") || u.contains("/manifest")) 
                              && !u.contains("chunk") && !u.contains("segment")) {
-                            Log.i("FaselHD", "shouldInterceptRequest - STREAM CAPTURED: $u")
-                            finish(u)
+                            if (session.streamFound.compareAndSet(false, true)) {
+                                session.result.complete(u)
+                            }
                         }
 
                         return super.shouldInterceptRequest(view, request)
                     }
 
-                    override fun onPageFinished(view: WebView?, url: String?) {
+                    override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
                         val currentUrl = url ?: ""
-                        println("FaselHD: WebView finished loading $currentUrl")
-
-                        if (
-                            currentUrl.contains("challenges.cloudflare.com", true) ||
-                            currentUrl.contains("/cdn-cgi/", true)
-                        ) return
+                        if (currentUrl.contains("challenges.cloudflare.com", true) || currentUrl.contains("/cdn-cgi/", true)) return
 
                         val isPlayerPage = currentUrl.isPlayerUrl()
-                        val hasPlayerToken = currentUrl.hasPlayerToken()
-
                         if (isPlayerPage) {
-                            view?.evaluateJavascript(hookScript, null)
-                        }
-
-                        if (isPlayerPage) {
-                            view?.evaluateJavascript(
-                                """
-                                (function() {
-                                    var el = document.querySelector('[data-setup]');
-                                    if (el) {
-                                        var ds = el.getAttribute('data-setup');
-                                        if (ds && ds.includes('http')) return 'domsetup:' + ds;
-                                    }
-
-                                    var v = document.querySelector('video[src]');
-                                    if (v && v.src && v.src.startsWith('http')) return 'domvideo:' + v.src;
-
-                                    var s = document.querySelector('source[src*=".m3u8"]');
-                                    if (s && s.src) return 'domsource:' + s.src;
-
-                                    return 'domnotfound';
-                                })();
-                                """.trimIndent()
-                            ) { result ->
-                                val cleaned = result?.trim('"') ?: return@evaluateJavascript
-                                if (cleaned.startsWith("dom") && cleaned != "domnotfound") {
-                                    Log.i("FaselHD", "DOM scan found stream -> $cleaned")
-                                    val foundUrl = cleaned.substringAfter(":")
-                                    if (foundUrl.startsWith("http")) finish(foundUrl)
+                            view.evaluateJavascript(hookScript, null)
+                            
+                            val myGen = session.gen
+                            lastOnPageFinishedMs = System.currentTimeMillis()
+                            
+                            if (session.quietGateStarted.compareAndSet(false, true)) {
+                                val checkInterval = 2000L
+                                val maxChecks = 75
+                                repeat(maxChecks) { i ->
+                                    mainHandler.postDelayed({
+                                        val active = activeSession.get()
+                                        if (active == null || active.gen != myGen || session.closed.get()) return@postDelayed
+                                        
+                                        if (lastChallengeMs > lastOnPageFinishedMs) {
+                                            return@postDelayed
+                                        }
+                                        
+                                        val quiet = System.currentTimeMillis() - lastChallengeMs > 3000
+                                        if (quiet && session.captureWindowStarted.compareAndSet(false, true)) {
+                                            println("FaselHD: Gate passed. Re-injecting probe.")
+                                            injectJwProbe(view, session)
+                                        }
+                                    }, i * checkInterval)
                                 }
                             }
-                        }
-
-                        if (!isPlayerPage) return
-
-                        loadGeneration++
-                        val myGen = loadGeneration
-                        captureCheckScheduled = false
-                        captureStarted = false
-                        lastChallengeMs = System.currentTimeMillis()
-                        lastOnPageFinishedMs = System.currentTimeMillis()
-
-                        captureTimeout?.let(handler::removeCallbacks)
-                        setupGlobalTimeout(myGen)
-
-                        if (captureCheckScheduled) return
-                        captureCheckScheduled = true
-
-                        handler.postDelayed({
-                            if (resolved || loadGeneration != myGen) return@postDelayed
-
-                            if (lastChallengeMs > lastOnPageFinishedMs) {
-                                println("FaselHD: Challenge request detected after onPageFinished. Likely interstitial. Skipping capture start for gen $myGen.")
-                                captureCheckScheduled = false
-                                return@postDelayed
-                            }
-
-                            println("FaselHD: Starting quiet-check loop for gen $myGen")
-                            val checkInterval = 2000L
-                            val maxChecks = 75
-
-                            repeat(maxChecks) { i ->
-                                handler.postDelayed({
-                                    if (resolved || loadGeneration != myGen) return@postDelayed
-
-                                    val now = System.currentTimeMillis()
-                                    val quiet = now - lastChallengeMs > 3000
-                                    val cookieStr = CookieManager.getInstance().getCookie(playerUrl) ?: ""
-                                    val hasClearance = cookieStr.contains("cf_clearance", true)
-                                    val looksPlayable = isPlayerPage || hasPlayerToken
-
-                                    println("FaselHD: CF quiet check $i gen $myGen -> quiet=$quiet hasClearance=$hasClearance")
-
-                                    if (!hasClearance || !looksPlayable) {
-                                        if (i % 5 == 0) {
-                                            println("FaselHD: Waiting for cf_clearance or valid player URL...")
-                                        }
-                                        return@postDelayed
-                                    }
-
-                                    if (!captureStarted && quiet) {
-                                        captureStarted = true
-                                        println("FaselHD: Gate passed. Starting 45s capture window for gen $myGen.")
-
-                                        triggerJwPlayerPlay(view, 0)
-
-                                        captureTimeout = Runnable {
-                                            if (loadGeneration == myGen) {
-                                                println("FaselHD: Player capture timed out after final page load gen $myGen")
-                                                finish(null)
-                                            }
-                                        }
-                                        handler.postDelayed(captureTimeout!!, 45_000)
-
-                                        startPolling(view, myGen)
-                                    } else if (quiet && !hasClearance && i % 5 == 0) {
-                                        println("FaselHD: Window is quiet but cf_clearance is missing for playerHost. Waiting...")
-                                    }
-
-                                    if (i == 1 && view != null) {
-                                        println("FaselHD: Quiet check 1 - ensure trigger is active")
-                                        triggerJwPlayerPlay(view, 1)
-                                    }
-                                }, i * checkInterval)
-                            }
-                        }, 1000)
-                    }
-
-                    fun startPolling(view: WebView?, myGen: Int) {
-                        repeat(90) { i ->
-                            view?.postDelayed({
-                                if (resolved || loadGeneration != myGen) return@postDelayed
-
-                                view.evaluateJavascript(
-                                    """
-                                    (function() {
-                                        try {
-                                            if (window.jwplayer) {
-                                                const p = jwplayer();
-                                                try { p.setMute(true); } catch(e) {}
-                                                try { 
-                                                    if (p && typeof p.play === 'function') {
-                                                        p.play();
-                                                    }
-                                                } catch(e) {}
-                                                
-                                                // Fallback: click play buttons
-                                                const sel = ['.jw-icon-playback', '.jw-icon-play', '[aria-label="Play"]', '.vjs-play-control', 'button.play'];
-                                                for (let s of sel) {
-                                                    const b = document.querySelector(s);
-                                                    if (b) { try { b.click(); } catch(e) {} }
-                                                }
-
-                                                if (p) {
-                                                    const item = p.getPlaylistItem ? p.getPlaylistItem() : null;
-                                                    const file =
-                                                        item && item.file ? item.file :
-                                                        item && item.sources && item.sources[0]
-                                                            ? (item.sources[0].file || "")
-                                                            : "";
-                                                    if (file) return file;
-                                                }
-                                            }
-
-                                            const perf = performance.getEntriesByType('resource')
-                                                .map(x => x.name)
-                                                .filter(x => /m3u8|scdns\.io|master\.m3u8|\.ts|\.mp4|playlist|manifest/i.test(x));
-                                            if (perf.length) return perf[0];
-
-                                            const video = document.querySelector("video");
-                                            if (video && video.src) return video.src;
-
-                                            const source = document.querySelector("video source");
-                                            if (source && source.src) return source.src;
-
-                                            // Part 3: Watch for video elements with m3u8 sources
-                                            var vid = document.querySelector('video[src*="m3u8"], source[src*="m3u8"]');
-                                            if (vid) {
-                                                var src = vid.src || vid.getAttribute('src');
-                                                if (src && src.includes('.m3u8')) return src;
-                                            }
-
-                                            const html = document.documentElement ? document.documentElement.outerHTML : "";
-                                            const match = html.match(/https?:\/\/[^\s"'\\]+(?:\.m3u8|\.mp4)[^\s"'\\]*/i);
-                                            if (match) return match[0];
-                                        } catch (e) {}
-                                        return "";
-                                    })();
-                                    """.trimIndent()
-                                ) { raw ->
-                                    val found = raw.trim('"')
-                                    if (found.isNotBlank() && !resolved && loadGeneration == myGen) {
-                                        println("FaselHD: Found stream via JS polling (gen $myGen) -> $found")
-                                        finish(found)
-                                    }
-                                }
-                            }, i * 1000L)
                         }
                     }
                 }
+                
+                continuation.resume(wv)
+            }
+        } ?: return@withTimeoutOrNull null
+        
+        mainHandler.post {
+            webView.loadUrl(playerUrl, mapOf("Referer" to referer, "Origin" to playerHost, "User-Agent" to userAgent))
+        }
 
-                println("FaselHD: WebView loading player: $playerUrl")
-                // sync logic handled above
-                webView.loadUrl(
-                    playerUrl,
-                    mapOf(
-                        "Referer" to referer,
-                        "Origin" to playerHost,
-                        "User-Agent" to userAgent
-                    )
-                )
-
-                // Global timeout is now managed via setupGlobalTimeout(gen) inside onPageFinished and at start
+        try {
+            session.result.await()
+        } finally {
+            if (session.closed.compareAndSet(false, true)) {
+                activeSession.compareAndSet(session, null)
+                mainHandler.post {
+                    runCatching { webView.stopLoading() }
+                    runCatching { webView.destroy() }
+                }
             }
         }
     }
-
     override val mainPage = mainPageOf(
         "/most_recent" to "المضاف حديثاً",
         "/series" to "مسلسلات",
@@ -1311,3 +1001,4 @@ class FaselHDProvider : MainAPI() {
         else -> Qualities.Unknown.value
     }
 }
+
