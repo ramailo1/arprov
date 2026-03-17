@@ -365,9 +365,10 @@ class FaselHDProvider : MainAPI() {
                                 if (self.readyState === 4) {
                                     try {
                                         const url = self.__url || '';
+                                        const body = self.responseText || '';
                                         log("xhr_res: [" + self.status + "] " + url);
-                                        if (url.includes('jwplayer.com')) {
-                                            log("xhr_body: [" + self.status + "] " + url + " | body: " + (self.responseText || '').substring(0, 3000));
+                                        if (url.includes('jwplayer.com') || url.includes('videoplayer')) {
+                                            log("XHR_BODY|" + url + "|" + body.substring(0, 5000));
                                         }
                                         if (url.includes('scdns') || url.includes('.m3u8')) {
                                             window.CSBridge && window.CSBridge.onM3u8Intercepted(url);
@@ -439,6 +440,38 @@ class FaselHDProvider : MainAPI() {
                     @android.webkit.JavascriptInterface
                     fun report(value: String?) {
                         if (value.isNullOrBlank()) return
+                        
+                        if (value.startsWith("XHR_BODY|")) {
+                            val parts = value.split("|")
+                            if (parts.size >= 3) {
+                                val url = parts[1]
+                                val body = parts[2]
+                                Log.i("FaselHD", "JSBridge - xhrBody for $url: ${body.take(200)}...")
+                                
+                                // 1. Try regex for m3u8
+                                val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(body)?.value
+                                if (m3u8 != null) {
+                                    Log.i("FaselHD", "JSBridge - m3u8 found in XHR body: $m3u8")
+                                    finish(m3u8)
+                                    return
+                                }
+                                
+                                // 2. Try JSON parsing
+                                try {
+                                    val json = JSONObject(body)
+                                    val file = json.optString("file").ifEmpty { 
+                                        json.optJSONArray("sources")?.optJSONObject(0)?.optString("file") ?: ""
+                                    }
+                                    if (file.isNotEmpty()) {
+                                        Log.i("FaselHD", "JSBridge - file found in XHR JSON: $file")
+                                        finish(file)
+                                        return
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            return
+                        }
+
                         println("FaselHD: JSBridge -> $value")
 
                         // Fix A: Capture from response body if sent by hook
