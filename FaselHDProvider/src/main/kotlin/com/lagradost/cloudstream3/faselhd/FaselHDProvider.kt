@@ -119,6 +119,21 @@ class FaselHDProvider : MainAPI() {
         println("FaselHD: Injecting JS play trigger (Single attempt API call)...")
         val js = """
         (function() {
+            var targets = [
+                document.querySelector('.jw-display'),
+                document.querySelector('.jw-video'),
+                document.querySelector('.jwplayer'),
+                document.querySelector('.jw-wrapper'),
+                document.getElementById('player')
+            ];
+            for (var i = 0; i < targets.length; i++) {
+                if (targets[i]) {
+                    targets[i].dispatchEvent(new MouseEvent('click', {
+                        bubbles: true, cancelable: true, view: window
+                    }));
+                    break;
+                }
+            }
             try {
                 if (typeof jwplayer === 'undefined') return 'no_jw';
                 var p = (typeof jwplayer === 'function') ? jwplayer(0) : null;
@@ -646,6 +661,16 @@ class FaselHDProvider : MainAPI() {
                                         var src = pl[0].sources;
                                         if (src) for (var i=0;i<src.length;i++) if(src[i].file) return src[i].file;
                                     }
+                                    
+                                    var entries = performance.getEntriesByType('resource');
+                                    for (var i = 0; i < entries.length; i++) {
+                                        var n = entries[i].name;
+                                        if (n.includes('scdns.io') && n.includes('.m3u8') 
+                                            && !n.includes('segment') && !n.includes('.ts')) {
+                                            return n;
+                                        }
+                                    }
+                                    
                                     return 'jw_found_no_url';
                                 } catch(e) { return 'err:'+e.message; }
                             })()
@@ -706,8 +731,11 @@ class FaselHDProvider : MainAPI() {
                         
                         // ✅ ALWAYS allow: scdns.io entirely (thumbnails + M3U8)
                         if (u.contains("scdns.io")) {
-                            if (u.contains(".m3u8")) {
-                                Log.i("FaselHD", "INTERCEPT_M3U8: $u")
+                            if (u.contains(".m3u8") 
+                                && !u.contains("segment") 
+                                && !u.contains(".ts")) {
+                                Log.i("FaselHD", "scdns.io M3U8 CAPTURED: $u")
+                                finish(u)
                             }
                             return null
                         }
@@ -1208,67 +1236,102 @@ class FaselHDProvider : MainAPI() {
         val doc = safeGet(pageUrl, pageUrl) ?: return false
         val html = doc.html()
 
+        val allPlayerUrls = mutableListOf<String>()
+
+        // 1. Extract from multi-server tabs
+        doc.select("ul.tabs-ul li").forEach { li ->
+            val onclick = li.attr("onclick")
+            Regex("""(?:playertoken|player_token)=([^'"]+)""", RegexOption.IGNORE_CASE).find(onclick)?.groupValues?.get(1)?.let { token ->
+                allPlayerUrls.add("$host/videoplayer?playertoken=$token")
+            }
+        }
+
+        // 2. Extract from primary iframe (data-src preferred, fallback to src)
         val iframePlayerUrl = doc.selectFirst(
+            "iframe[name=playeriframe], " +
             "iframe[src*=videoplayer], " +
             "iframe[data-src*=videoplayer], " +
             "iframe[src*=video_player], " +
             "iframe[data-src*=video_player]"
         )?.let {
-            it.attr("abs:src").ifEmpty { it.attr("abs:data-src") }
+            it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }
         }?.takeIf { it.isNotBlank() }
-
-        val regexPlayerUrl = sequenceOf(
-            Regex(
-                """(?:src|url)\s*[=:]\s*["'](https?://[^"'\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"']+)["']""",
-                RegexOption.IGNORE_CASE
-            ),
-            Regex(
-                """((?:https?://|//|/)?[^"'\s\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"'\s\\]+)""",
-                RegexOption.IGNORE_CASE
-            )
-        ).mapNotNull { it.find(html)?.groupValues?.getOrNull(1) }
-            .firstOrNull()
-            ?.let { found ->
-                when {
-                    found.startsWith("http://", true) || found.startsWith("https://", true) -> normalizeUrl(found, host)
-                    found.startsWith("//") -> "https:$found"
-                    found.startsWith("/") -> "$host$found"
-                    else -> "$host/${found.removePrefix("/")}"
-                }
-            }
-
-        val rawPlayerUrl = (iframePlayerUrl ?: regexPlayerUrl)?.let { normalizeUrl(it, host) }
-            ?: return rawScan(html, pageUrl, callback)
-
-        val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
-        println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
-
-        Log.i("FaselHD", "Skipping safeGet for videoplayer — loading directly in WebView")
-
-        val resolved = extractM3u8ViaWebView(
-            playerUrl = rawPlayerUrl,
-            playerHost = playerHost,
-            referer = pageUrl
-        )
-        println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
-
-        if (!resolved.isNullOrBlank()) {
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    resolved,
-                    if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    referer = rawPlayerUrl
-                    quality = getVideoQuality(resolved)
-                }
-            )
-            return true
+        
+        if (iframePlayerUrl != null) {
+            allPlayerUrls.add(iframePlayerUrl)
         }
 
-        println("FaselHD: Everything failed, final rawScan of original page")
-        return rawScan(html, pageUrl, callback)
+        // 3. Fallback to JS variables if all else fails
+        if (allPlayerUrls.isEmpty()) {
+            val regexPlayerUrl = sequenceOf(
+                Regex(
+                    """(?:src|url)\s*[=:]\s*["'](https?://[^"'\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                ),
+                Regex(
+                    """((?:https?://|//|/)?[^"'\s\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"'\s\\]+)""",
+                    RegexOption.IGNORE_CASE
+                )
+            ).mapNotNull { it.find(html)?.groupValues?.getOrNull(1) }
+                .firstOrNull()
+                ?.let { found ->
+                    when {
+                        found.startsWith("http://", true) || found.startsWith("https://", true) -> normalizeUrl(found, host)
+                        found.startsWith("//") -> "https:$found"
+                        found.startsWith("/") -> "$host$found"
+                        else -> "$host/${found.removePrefix("/")}"
+                    }
+                }
+            if (regexPlayerUrl != null) {
+                allPlayerUrls.add(regexPlayerUrl)
+            }
+        }
+
+        val uniquePlayerUrls = allPlayerUrls.map { normalizeUrl(it, host) }.distinct()
+
+        if (uniquePlayerUrls.isEmpty()) {
+            println("FaselHD: No player URLs found, final rawScan of original page")
+            return rawScan(html, pageUrl, callback)
+        }
+
+        var foundStream = false
+
+        for ((index, rawPlayerUrl) in uniquePlayerUrls.withIndex()) {
+            val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
+            println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
+
+            Log.i("FaselHD", "Skipping safeGet for videoplayer — loading directly in WebView")
+
+            val resolved = extractM3u8ViaWebView(
+                playerUrl = rawPlayerUrl,
+                playerHost = playerHost,
+                referer = pageUrl
+            )
+            println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
+
+            if (!resolved.isNullOrBlank()) {
+                val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
+                callback(
+                    newExtractorLink(
+                        name,
+                        serverName,
+                        resolved,
+                        if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        referer = rawPlayerUrl
+                        quality = getVideoQuality(resolved)
+                    }
+                )
+                foundStream = true
+            }
+        }
+
+        if (!foundStream) {
+            println("FaselHD: Everything failed, final rawScan of original page")
+            return rawScan(html, pageUrl, callback)
+        }
+        
+        return true
     }
 
     private fun extractFromPlayerHtml(html: String): List<String> {
