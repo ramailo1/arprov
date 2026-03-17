@@ -144,9 +144,9 @@ private class ProbeBridge(
         try {
             val obj = JSONObject(raw)
             when (obj.optString("kind")) {
-                "candidate" -> {
+                "JW-SETUP", "candidate" -> {
                     val url = obj.optString("url")
-                    val via = obj.optString("via")
+                    val via = obj.optString("via").ifBlank { obj.optString("kind") }
                     Log.i("FaselHD", "BRIDGE-CANDIDATE via=$via url=$url")
                     if (looksLikeMediaUrl(url) && completed.compareAndSet(false, true)) {
                         Log.i("FaselHD", "BRIDGE-SUCCESS via=$via resolved=$url")
@@ -154,10 +154,10 @@ private class ProbeBridge(
                     }
                 }
 
-                "body" -> {
+                "JW-SETUP-RAW", "body" -> {
                     val base = obj.optString("baseUrl").ifBlank { pageUrl }
                     val body = obj.optString("text")
-                    val via = obj.optString("via")
+                    val via = obj.optString("via").ifBlank { obj.optString("kind") }
                     val urls = extractMediaUrlsFromText(body, base)
                     val first = urls.firstOrNull() ?: return
                     Log.i("FaselHD", "BRIDGE-BODY-HIT via=$via firstUrl=$first")
@@ -440,10 +440,11 @@ class FaselHDProvider : MainAPI() {
     log("PROBE-INSTALLED href=" + location.href);
     var origFetch = window.fetch;
     if (origFetch) {
-      window.fetch = function() {
+      window.fetch = function(resource) {
+        var fetchUrl = (resource && resource.url) ? resource.url : String(resource || "");
         return origFetch.apply(this, arguments).then(function(resp) {
           try {
-            var url = (resp && resp.url) || (arguments[0] && String(arguments[0])) || location.href;
+            var url = (resp && resp.url) || fetchUrl || location.href;
             log("PROBE-FETCH url=" + url);
             if (looksMedia(url)) once(abs(url, location.href), "fetch.url");
 
@@ -740,6 +741,35 @@ class FaselHDProvider : MainAPI() {
                     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
+                        
+                        // Fix #2: Inject early JW hook before page JS runs
+                        view.evaluateJavascript("""
+                            (function() {
+                                var _jw = window.jwplayer;
+                                Object.defineProperty(window, 'jwplayer', {
+                                    get: function() { return _jw; },
+                                    set: function(val) {
+                                        _jw = function() {
+                                            var inst = val.apply(this, arguments);
+                                            if (inst && inst.setup) {
+                                                var origSetup = inst.setup.bind(inst);
+                                                inst.setup = function(cfg) {
+                                                    try {
+                                                        var src = cfg.file || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file) || '';
+                                                        if (src) window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP', url: src}));
+                                                        else window.FaselProbe.post(JSON.stringify({kind: 'JW-SETUP-RAW', text: JSON.stringify(cfg).substring(0, 500)}));
+                                                    } catch(e) {}
+                                                    return origSetup(cfg);
+                                                };
+                                            }
+                                            return inst;
+                                        };
+                                    },
+                                    configurable: true
+                                });
+                            })();
+                        """.trimIndent(), null)
+
                         if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
                             injectJwProbe(view, session)
                         }
@@ -1122,7 +1152,35 @@ class FaselHDProvider : MainAPI() {
             val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
             println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
-            Log.i("FaselHD", "Skipping safeGet for videoplayer — loading directly in WebView")
+            // Fix #1: Try SafeGet first to avoid single-use token consumption in WebView
+            val videoPageHtml = safeGet(rawPlayerUrl, referer = pageUrl)?.html()
+            if (videoPageHtml != null) {
+                val jwFileRegex = Regex("""(?:["']file["']\s*:\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)""")
+                val jwSrcRegex  = Regex("""https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""", RegexOption.IGNORE_CASE)
+
+                val streamUrl = jwFileRegex.find(videoPageHtml)?.groupValues?.get(1)
+                    ?: jwSrcRegex.find(videoPageHtml)?.value
+
+                if (streamUrl != null) {
+                    Log.i("FaselHD", "SAFEGET-HIT url=$streamUrl")
+                    val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
+                    callback(
+                        newExtractorLink(
+                            name,
+                            serverName,
+                            streamUrl,
+                            if (streamUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            referer = rawPlayerUrl
+                            quality = getVideoQuality(streamUrl)
+                        }
+                    )
+                    foundStream = true
+                    Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.SUCCESS_MEDIA.name} lastPage=$pageUrl lastCandidate=$rawPlayerUrl")
+                    break
+                }
+                Log.i("FaselHD", "SAFEGET-MISS url=$rawPlayerUrl sample=${videoPageHtml.take(500).replace("\n", " ")}")
+            }
 
             val resolved = extractM3u8ViaWebView(
                 playerUrl = rawPlayerUrl,
