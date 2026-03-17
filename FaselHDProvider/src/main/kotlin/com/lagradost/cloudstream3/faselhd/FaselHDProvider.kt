@@ -32,6 +32,128 @@ import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
+import android.webkit.JavascriptInterface
+import java.net.URI
+
+private val EPISODE_IFRAME_RE = Regex(
+    """<iframe[^>]+name=["']playeriframe["'][^>]+(?:data-src|src)=["']([^"']+videoplayer\?playertoken[^"']+)["']""",
+    RegexOption.IGNORE_CASE
+)
+
+private val EPISODE_TAB_RE = Regex(
+    """playeriframe\.location\.href\s*=\s*["']([^"']+videoplayer\?playertoken[^"']+)["']""",
+    RegexOption.IGNORE_CASE
+)
+
+private val ABS_MEDIA_RE = Regex(
+    """https?://[^\s"'<>\\]+?(?:\.m3u8(?:\?[^"'<>\\]*)?|\.mp4(?:\?[^"'<>\\]*)?)""",
+    setOf(RegexOption.IGNORE_CASE)
+)
+
+private val REL_MEDIA_RE = Regex(
+    """(?:"|')((?:/)[^"'<>]+?(?:\.m3u8(?:\?[^"'<>]*)?|\.mp4(?:\?[^"'<>]*)?))(?:"|')""",
+    setOf(RegexOption.IGNORE_CASE)
+)
+
+private val JSON_FILE_RE = Regex(
+    """"(?:file|src)"\s*:\s*"([^"]+?(?:\.m3u8(?:\?[^"\\]*)?|\.mp4(?:\?[^"\\]*)?))""" + "\"",
+    setOf(RegexOption.IGNORE_CASE)
+)
+
+private fun String.cleanJsUrl(): String {
+    return this
+        .replace("\\/", "/")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .trim()
+        .trim('"', '\'')
+}
+
+private fun resolveUrl(baseUrl: String, raw: String): String {
+    val cleaned = raw.cleanJsUrl()
+    return try {
+        URI(baseUrl).resolve(cleaned).toString()
+    } catch (_: Throwable) {
+        cleaned
+    }
+}
+
+private fun looksLikeMediaUrl(url: String): Boolean {
+    val u = url.lowercase()
+    return ".m3u8" in u || ".mp4" in u
+}
+
+private fun extractEpisodePlayerUrls(html: String, baseUrl: String): List<String> {
+    val out = linkedSetOf<String>()
+
+    fun add(raw: String?) {
+        if (raw.isNullOrBlank()) return
+        val resolved = resolveUrl(baseUrl, raw)
+        if ("videoplayer?playertoken" in resolved) out += resolved
+    }
+
+    EPISODE_IFRAME_RE.findAll(html).forEach { add(it.groupValues.getOrNull(1)) }
+    EPISODE_TAB_RE.findAll(html).forEach { add(it.groupValues.getOrNull(1)) }
+
+    return out.toList()
+}
+
+private fun extractMediaUrlsFromText(text: String, baseUrl: String): List<String> {
+    val out = linkedSetOf<String>()
+
+    fun add(raw: String?) {
+        if (raw.isNullOrBlank()) return
+        val resolved = resolveUrl(baseUrl, raw)
+        if (looksLikeMediaUrl(resolved)) out += resolved
+    }
+
+    ABS_MEDIA_RE.findAll(text).forEach { add(it.value) }
+    REL_MEDIA_RE.findAll(text).forEach { add(it.groupValues.getOrNull(1)) }
+    JSON_FILE_RE.findAll(text).forEach { add(it.groupValues.getOrNull(1)) }
+
+    return out.toList()
+}
+
+private class ProbeBridge(
+    private val pageUrl: String,
+    private val completed: AtomicBoolean,
+    private val onMediaUrl: (String) -> Unit,
+    private val log: (String) -> Unit,
+) {
+    @JavascriptInterface
+    fun post(raw: String?) {
+        if (raw.isNullOrBlank() || completed.get()) return
+
+        try {
+            val obj = JSONObject(raw)
+            when (obj.optString("kind")) {
+                "candidate" -> {
+                    val url = obj.optString("url")
+                    if (looksLikeMediaUrl(url) && completed.compareAndSet(false, true)) {
+                        onMediaUrl(url)
+                    }
+                }
+
+                "body" -> {
+                    val base = obj.optString("baseUrl").ifBlank { pageUrl }
+                    val body = obj.optString("text")
+                    val urls = extractMediaUrlsFromText(body, base)
+                    val first = urls.firstOrNull() ?: return
+                    if (completed.compareAndSet(false, true)) {
+                        onMediaUrl(first)
+                    }
+                }
+
+                "log" -> {
+                    log(obj.optString("msg"))
+                }
+            }
+        } catch (t: Throwable) {
+            log("probe parse error: ${t.message}")
+        }
+    }
+}
+
 class FaselHDProvider : MainAPI() {
     override var name = "FaselHD"
     override val usesWebView = true
@@ -137,256 +259,220 @@ class FaselHDProvider : MainAPI() {
     private val activeSession = java.util.concurrent.atomic.AtomicReference<CaptureSession?>(null)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private inner class FaselBridge(private val session: CaptureSession) {
-        @android.webkit.JavascriptInterface
-        fun onLog(msg: String) {
-            Log.i("FaselHD-JS", "gen=${session.gen} $msg")
-        }
+    private fun buildJwProbeJs(): String = """
+(function() {
+  if (window.__faselProbeInstalled) return;
+  window.__faselProbeInstalled = true;
 
-        @android.webkit.JavascriptInterface
-        fun onStreamFound(url: String) {
-            val current = activeSession.get() ?: return
-            if (current.gen != session.gen) return
-            val normalized = normalizeMediaUrl(url) ?: return
-            if (!isUsefulMediaUrl(normalized)) return
-            
-            Log.i("FaselHD", "Gen ${session.gen} JS Found Stream -> ${normalized.take(100)}")
-            session.completeSuccess(normalized)
-        }
-        
-        @android.webkit.JavascriptInterface
-        fun report(msg: String) { onLog(msg) }
+  var BRIDGE = window.FaselProbe;
+  var seen = Object.create(null);
 
-        @android.webkit.JavascriptInterface
-        fun onM3u8Intercepted(url: String) { onStreamFound(url) }
+  function post(obj) {
+    try { BRIDGE.post(JSON.stringify(obj)); } catch (e) {}
+  }
 
-        @android.webkit.JavascriptInterface
-        fun onXhrResponse(url: String?, body: String?) {
-            val safeBody = body ?: ""
-            if (safeBody.isBlank()) return
-            val m3u8 = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""").find(safeBody)?.value
-            if (m3u8 != null) {
-                onStreamFound(m3u8)
-                return
-            }
-            try {
-                val json = JSONObject(safeBody)
-                val file = json.optString("file").ifEmpty {
-                    json.optJSONArray("sources")?.optJSONObject(0)?.optString("file") ?: ""
-                }
-                if (file.isNotEmpty()) {
-                    onStreamFound(file)
-                }
-            } catch (_: Exception) {}
-        }
+  function log(msg) {
+    post({ kind: "log", msg: String(msg || "") });
+  }
+
+  function once(url, via) {
+    if (!url || seen[url]) return false;
+    seen[url] = true;
+    post({ kind: "candidate", url: url, via: via || "" });
+    return true;
+  }
+
+  function abs(raw, base) {
+    try { return new URL(raw, base || location.href).toString(); }
+    catch (e) { return raw; }
+  }
+
+  function looksMedia(raw) {
+    if (!raw) return false;
+    var u = String(raw).toLowerCase();
+    return u.indexOf(".m3u8") !== -1 || u.indexOf(".mp4") !== -1;
+  }
+
+  function scanText(text, base, via) {
+    if (!text) return false;
+    try {
+      var s = String(text);
+
+      var reAbs = /https?:\/\/[^\s"'<>\\]+?(?:\.m3u8(?:\?[^"'<>\\]*)?|\.mp4(?:\?[^"'<>\\]*)?)/ig;
+      var reRel = /["']((?:\/|\\\/)[^"'<>]+?(?:\.m3u8(?:\?[^"'<>]*)?|\.mp4(?:\?[^"'<>]*)?))["']/ig;
+      var reJson = /"(?:file|src)"\s*:\s*"([^"]+?(?:\.m3u8(?:\?[^"\\]*)?|\.mp4(?:\?[^"\\]*)?))"/ig;
+
+      var m, hit = false;
+
+      while ((m = reAbs.exec(s)) !== null) {
+        var u1 = m[0].replace(/\\\//g, "/");
+        if (looksMedia(u1)) hit = once(abs(u1, base), via) || hit;
+      }
+
+      while ((m = reRel.exec(s)) !== null) {
+        var u2 = m[1].replace(/\\\//g, "/");
+        if (looksMedia(u2)) hit = once(abs(u2, base), via) || hit;
+      }
+
+      while ((m = reJson.exec(s)) !== null) {
+        var u3 = m[1].replace(/\\\//g, "/");
+        if (looksMedia(u3)) hit = once(abs(u3, base), via) || hit;
+      }
+
+      if (!hit && (s.indexOf(".m3u8") !== -1 || s.indexOf(".mp4") !== -1)) {
+        post({ kind: "body", text: s.slice(0, 250000), baseUrl: base || location.href, via: via || "" });
+      }
+      return hit;
+    } catch (e) {
+      log("scanText error: " + e);
+      return false;
     }
+  }
 
-    private fun buildJwProbeJs(gen: Int): String = """
-    (function() {
-      const GEN = $gen;
-      if (window.__faselProbeGen === GEN && window.__faselProbeInstalled) return;
-      window.__faselProbeGen = GEN;
-      window.__faselProbeInstalled = true;
+  function scanPlaylist(obj, via) {
+    try {
+      if (!obj) return false;
+      var hit = false;
 
-      const armed = new WeakSet();
-
-      function log(msg) {
-        try { FaselHDBridge.onLog(String(msg)); } catch (e) {}
+      if (typeof obj === "string") {
+        return scanText(obj, location.href, via);
       }
 
-      function emit(url) {
-        if (!url) return;
-        log("emit: " + url);
-        try { FaselHDBridge.onStreamFound(String(url)); } catch (e) {}
+      if (Array.isArray(obj)) {
+        obj.forEach(function(it) { if (scanPlaylist(it, via)) hit = true; });
+        return hit;
       }
 
-      function reportSources(p) {
-        try {
-          const cfg = p && typeof p.getConfig === 'function' ? p.getConfig() : null;
-          log("p.getConfig() returned: " + !!cfg);
-          
-          let sourcesObj = "none";
-          let sourcesCount = 0;
-          let candidateSource = "";
+      if (obj.file && looksMedia(obj.file)) hit = once(abs(obj.file, location.href), via) || hit;
+      if (obj.src && looksMedia(obj.src)) hit = once(abs(obj.src, location.href), via) || hit;
 
-          const playlist = cfg && cfg.playlist && cfg.playlist[0] ? cfg.playlist[0] : null;
-          if (playlist) {
-              log("found playlist[0], keys: " + Object.keys(playlist).join(","));
-          }
-          
-          let sources = [];
-          if (playlist && playlist.sources && playlist.sources.length > 0) {
-              sources = playlist.sources;
-              sourcesObj = "playlist[0].sources";
-          } else if (cfg && cfg.sources && cfg.sources.length > 0) {
-              sources = cfg.sources;
-              sourcesObj = "cfg.sources";
-          } else if (typeof p.getPlaylist === 'function') {
-              const activePlaylist = p.getPlaylist();
-              if (activePlaylist && activePlaylist[0] && activePlaylist[0].sources) {
-                  sources = activePlaylist[0].sources;
-                  sourcesObj = "p.getPlaylist()[0].sources";
-              }
-          }
-          
-          sourcesCount = sources.length;
-          log("JWPlayer sources location: " + sourcesObj + " (count " + sourcesCount + ")");
-
-          for (const s of sources) {
-            const file = s && s.file ? String(s.file) : "";
-            log("candidateSource: " + file);
-            if (file && /(m3u8|mp4|scdns)/i.test(file)) {
-                candidateSource = file;
-                emit(file);
-            }
-          }
-        } catch (e) {
-          log("reportSources error: " + e);
-        }
-      }
-
-      function arm(p, label) {
-        try {
-          if (!p || armed.has(p)) return false;
-          if (typeof p.play !== 'function' || typeof p.getState !== 'function') return false;
-          armed.add(p);
-          log("armed jwplayer instance: " + label);
-
-          try { p.on('ready', function() { log("jw ready: " + label); reportSources(p); try { p.play(true); } catch (e) {} }); } catch (e) {}
-          try { p.on('play', function() { log("jw play: " + label); reportSources(p); }); } catch (e) {}
-          try { p.on('playlist', function() { reportSources(p); }); } catch (e) {}
-          try { p.on('playlistItem', function() { reportSources(p); }); } catch (e) {}
-
-          reportSources(p);
-          try { p.play(true); } catch (e) {}
-
-          const btn = document.querySelector('.jw-display, .jw-icon-playback, .jw-video, video');
-          if (btn) {
-            try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-          }
-          return true;
-        } catch (e) {
-          log("arm error: " + e);
-          return false;
-        }
-      }
-
-      function scan() {
-        try {
-          if (typeof window.jwplayer === 'function') {
-            try { arm(window.jwplayer(), "default"); } catch (e) {}
-            document.querySelectorAll('[id]').forEach(function(el) {
-              if (!el.id) return;
-              try { arm(window.jwplayer(el.id), "id:" + el.id); } catch (e) {}
-            });
-          }
-        } catch (e) {
-          log("scan error: " + e);
-        }
-      }
-
-      function hookFactory() {
-        if (window.__faselJwSetterInstalled) return;
-        window.__faselJwSetterInstalled = true;
-
-        let current = window.jwplayer;
-        Object.defineProperty(window, 'jwplayer', {
-          configurable: true,
-          enumerable: true,
-          get() { return current; },
-          set(v) {
-            current = v;
-            log("jwplayer library detected via setter");
-            setTimeout(scan, 0);
-            setTimeout(scan, 300);
-            setTimeout(scan, 1000);
-          }
+      if (Array.isArray(obj.sources)) {
+        obj.sources.forEach(function(src) {
+          if (!src) return;
+          var u = src.file || src.src;
+          if (looksMedia(u)) hit = once(abs(u, location.href), via) || hit;
         });
-
-        if (typeof current === 'function') {
-          log("jwplayer already present");
-          setTimeout(scan, 0);
-        }
       }
 
-      hookFactory();
-      scan();
+      Object.keys(obj).forEach(function(k) {
+        var v = obj[k];
+        if (v && typeof v === "object") {
+          if (scanPlaylist(v, via)) hit = true;
+        } else if (typeof v === "string" && looksMedia(v)) {
+          hit = once(abs(v, location.href), via) || hit;
+        }
+      });
 
-      const iv = setInterval(scan, 500);
-      setTimeout(function() {
-        clearInterval(iv);
-        log("probe finished");
-      }, 45000);
-    })();
-    """.trimIndent()
-    
+      return hit;
+    } catch (e) {
+      log("scanPlaylist error: " + e);
+      return false;
+    }
+  }
+
+  function probeJw() {
+    try {
+      var jw = window.jwplayer;
+      if (!jw) return false;
+
+      for (var i = 0; i < 8; i++) {
+        try {
+          var p = jw(i);
+          if (!p) continue;
+
+          try {
+            var playlist = p.getPlaylist && p.getPlaylist();
+            if (scanPlaylist(playlist, "jw.getPlaylist")) return true;
+          } catch (e) {}
+
+          try {
+            var cfg = p.getConfig && p.getConfig();
+            if (scanPlaylist(cfg, "jw.getConfig")) return true;
+          } catch (e) {}
+
+          try {
+            var item = p.getPlaylistItem && p.getPlaylistItem();
+            if (scanPlaylist(item, "jw.getPlaylistItem")) return true;
+          } catch (e) {}
+        } catch (e) {}
+      }
+    } catch (e) {
+      log("probeJw error: " + e);
+    }
+    return false;
+  }
+
+  try {
+    var origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function() {
+        return origFetch.apply(this, arguments).then(function(resp) {
+          try {
+            var url = (resp && resp.url) || (arguments[0] && String(arguments[0])) || location.href;
+            if (looksMedia(url)) once(abs(url, location.href), "fetch.url");
+
+            var clone = resp.clone();
+            clone.text().then(function(txt) {
+              scanText(txt, url, "fetch.body");
+            }).catch(function(){});
+          } catch (e) {}
+          return resp;
+        });
+      };
+    }
+  } catch (e) {
+    log("fetch hook error: " + e);
+  }
+
+  try {
+    var XO = XMLHttpRequest.prototype.open;
+    var XS = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this.__faselUrl = url;
+      return XO.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function() {
+      this.addEventListener("load", function() {
+        try {
+          var finalUrl = this.responseURL || this.__faselUrl || location.href;
+          if (looksMedia(finalUrl)) once(abs(finalUrl, location.href), "xhr.url");
+
+          var text = "";
+          try { text = this.responseType === "" || this.responseType === "text" ? this.responseText : ""; } catch (e) {}
+          if (text) scanText(text, finalUrl, "xhr.body");
+        } catch (e) {}
+      });
+      return XS.apply(this, arguments);
+    };
+  } catch (e) {
+    log("xhr hook error: " + e);
+  }
+
+  try { scanText(document.documentElement.outerHTML, location.href, "dom.initial"); } catch (e) {}
+
+  var ticks = 0;
+  var iv = setInterval(function() {
+    ticks++;
+    if (probeJw()) { clearInterval(iv); return; }
+    try { scanText(document.documentElement.outerHTML, location.href, "dom.tick"); } catch (e) {}
+    if (ticks >= 120) clearInterval(iv);
+  }, 1000);
+
+  try {
+    new MutationObserver(function() {
+      probeJw();
+      try { scanText(document.documentElement.outerHTML, location.href, "dom.mutation"); } catch (e) {}
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  } catch (e) {}
+})();
+""".trimIndent()
+
     private fun injectJwProbe(webView: WebView, session: CaptureSession) {
-        val js = buildJwProbeJs(session.gen)
+        val js = buildJwProbeJs()
         webView.evaluateJavascript(js, null)
     }
-
-    private val hookScript = """
-        (function() {
-            try {
-                if (window.__cs_hooked) return;
-                window.__cs_hooked = true;
-
-                function log(msg) {
-                    try { if (window.FaselHDBridge) window.FaselHDBridge.report(msg); } catch(e) {}
-                }
-
-                if (window.XMLHttpRequest && XMLHttpRequest.prototype.open) {
-                    const origOpen = XMLHttpRequest.prototype.open;
-                    XMLHttpRequest.prototype.open = function(method, url) {
-                        this.__url = url;
-                        return origOpen.apply(this, arguments);
-                    };
-                    const origSend = XMLHttpRequest.prototype.send;
-                    XMLHttpRequest.prototype.send = function() {
-                        const self = this;
-                        this.addEventListener('readystatechange', function() {
-                            if (self.readyState === 4) {
-                                try {
-                                    const url = self.__url || '';
-                                    const body = self.responseText || '';
-                                    var bodyLen = body ? body.length : -1;
-                                    
-                                    log("xhr_res: [" + self.status + "] " + url);
-                                    
-                                    if (url.includes('jwplayer.com') || url.includes('videoplayer')) {
-                                        log("FaselHD-JS xhrBody len=" + bodyLen + " for " + url);
-                                        if (window.FaselHDBridge && window.FaselHDBridge.onXhrResponse) {
-                                            window.FaselHDBridge.onXhrResponse(url, body);
-                                        }
-                                    }
-                                    if (url.includes('scdns') || url.includes('.m3u8')) {
-                                        if (window.FaselHDBridge) window.FaselHDBridge.onM3u8Intercepted(url);
-                                    }
-                                } catch(e) { log("xhr_hook_err: " + e); }
-                            }
-                        });
-                        return origSend.apply(this, arguments);
-                    };
-                }
-
-                if (window.fetch) {
-                    var _origFetch = window.fetch;
-                    window.fetch = function(input, init) {
-                        var u = typeof input === 'string' ? input : (input && input.url);
-                        if (u && (u.includes('scdns') || u.includes('.m3u8'))) {
-                            log("fetch_intercepted: " + u);
-                            try { if (window.FaselHDBridge) window.FaselHDBridge.onM3u8Intercepted(u); } catch(e) {}
-                        }
-                        return _origFetch.apply(this, arguments);
-                    };
-                }
-
-                log("Hooks installed");
-            } catch(e) {
-                console.error("FaselHD-JS Hook fatal error: " + e.message);
-            }
-        })();
-    """.trimIndent()
     private suspend fun resolveHost(): String = runCatching {
         println("FaselHD: Resolving host from $mainUrl")
         val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
@@ -598,7 +684,17 @@ class FaselHDProvider : MainAPI() {
                     }
                 }
                 
-                wv.addJavascriptInterface(FaselBridge(session), "FaselHDBridge")
+                val completed = AtomicBoolean(false)
+                val bridge = ProbeBridge(
+                    pageUrl = playerUrl,
+                    completed = completed,
+                    onMediaUrl = { mediaUrl ->
+                        Log.i("FaselHD", "Gen ${session.gen} Resolved media => $mediaUrl")
+                        session.completeSuccess(mediaUrl)
+                    },
+                    log = { msg -> Log.i("FaselHD", "Gen ${session.gen} $msg") }
+                )
+                wv.addJavascriptInterface(bridge, "FaselProbe")
                 
                 var lastChallengeMs = 0L
                 var lastOnPageFinishedMs = 0L
@@ -608,7 +704,6 @@ class FaselHDProvider : MainAPI() {
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
                         if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
-                            view.evaluateJavascript(hookScript, null)
                             injectJwProbe(view, session)
                         }
                     }
@@ -679,8 +774,6 @@ class FaselHDProvider : MainAPI() {
 
                         val isPlayerPage = currentUrl.isPlayerUrl()
                         if (isPlayerPage) {
-                            view.evaluateJavascript(hookScript, null)
-                            
                             val myGen = session.gen
                             lastOnPageFinishedMs = System.currentTimeMillis()
                             
@@ -916,6 +1009,12 @@ class FaselHDProvider : MainAPI() {
         val html = doc.html()
 
         val allPlayerUrls = mutableListOf<String>()
+
+        val episodePlayerUrls = extractEpisodePlayerUrls(html, pageUrl)
+        for (candidate in episodePlayerUrls) {
+            Log.i("FaselHD", "Episode HTML player candidate => $candidate")
+            allPlayerUrls.add(candidate)
+        }
 
         // 1. Extract from multi-server tabs
         doc.select("ul.tabs-ul li").sortedByDescending { it.hasClass("active") }.forEach { li ->
