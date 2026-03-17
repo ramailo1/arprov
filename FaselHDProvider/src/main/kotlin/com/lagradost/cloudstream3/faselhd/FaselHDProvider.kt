@@ -669,16 +669,13 @@ class FaselHDProvider : MainAPI() {
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         val currentUrl = url ?: ""
-                        // Only reset and re-hook for actual videoplayer navigations
-                        if (currentUrl.contains("videoplayer") || currentUrl.startsWith("https://web")) {
+
+                        if (currentUrl.isPlayerUrl() || currentUrl.startsWith("https://web")) {
                             playTriggerStarted.set(false)
                             view?.evaluateJavascript(hookScript, null)
                             Log.i("FaselHD", "onPageStarted $currentUrl")
-                            
-                            // Start Kotlin play trigger 
+
                             startKotlinDrivenPlayTrigger(view, ioScope)
-                            
-                            // Start polling immediately
                             startJWPlayerPolling()
                         } else {
                             Log.i("FaselHD", "onPageStarted IGNORED (non-player URL): $currentUrl")
@@ -767,37 +764,38 @@ class FaselHDProvider : MainAPI() {
                             currentUrl.contains("/cdn-cgi/", true)
                         ) return
 
-                        // ALWAYS re-inject hooks when on the player page
-                        if (currentUrl.contains("video_player", true)) {
+                        val isPlayerPage = currentUrl.isPlayerUrl()
+                        val hasPlayerToken = currentUrl.hasPlayerToken()
+
+                        if (isPlayerPage) {
                             view?.evaluateJavascript(hookScript, null)
                         }
 
-                        // Bug 18 Fix: Query JWPlayer's Runtime Directly
-                        if (currentUrl.contains("video_player", true) || currentUrl.contains("videoplayer", true)) {
+                        if (isPlayerPage) {
                             println("FaselHD: onPageFinished - querying JWPlayer runtime config")
-                            view?.evaluateJavascript("""
+                            view?.evaluateJavascript(
+                                """
                                 (function() {
                                     try {
                                         if (typeof jwplayer === 'undefined') return 'no_jwplayer';
                                         var p = jwplayer();
                                         if (!p) return 'no_instance';
-                    
-                                        // Path 1: getPlaylistItem (most direct, post-setup)
+
                                         var item = p.getPlaylistItem ? p.getPlaylistItem() : null;
                                         if (item && item.file) {
                                             if (item.file.indexOf('blob:') === 0 && item.sources) {
                                                 for (var i = 0; i < item.sources.length; i++) {
-                                                    if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) return item.sources[i].file;
+                                                    if (item.sources[i].file && item.sources[i].file.indexOf('http') === 0) {
+                                                        return item.sources[i].file;
+                                                    }
                                                 }
                                             }
                                             return item.file;
                                         }
-                    
-                                        // Path 2: getConfig
+
                                         var cfg = p.getConfig ? p.getConfig() : null;
                                         if (cfg && cfg.file) return cfg.file;
-                    
-                                        // Path 3: getPlaylist → sources array
+
                                         var pl = p.getPlaylist ? p.getPlaylist() : null;
                                         if (pl && pl.length > 0) {
                                             if (pl[0].file) return pl[0].file;
@@ -807,128 +805,126 @@ class FaselHDProvider : MainAPI() {
                                                 }
                                             }
                                         }
-                    
-                                        // Diagnostic fallback: dump all config keys
+
                                         var keys = cfg ? JSON.stringify(Object.keys(cfg)) : 'no_config';
                                         var itemKeys = item ? JSON.stringify(Object.keys(item)) : 'no_item';
-                                        return 'not_found|cfg_keys:' + keys + '|item_keys:' + itemKeys;
+                                        return 'notfound|cfgkeys=' + keys + '|itemkeys=' + itemKeys;
                                     } catch(e) {
                                         return 'error:' + e.message;
                                     }
-                                })()
-                            """.trimIndent()) { result ->
+                                })();
+                                """.trimIndent()
+                            ) { result ->
                                 val cleaned = result?.trim('"') ?: return@evaluateJavascript
                                 println("FaselHD: JWPlayer runtime query -> $cleaned")
-                                if (cleaned.startsWith("http") && 
-                                   (cleaned.contains(".m3u8") || cleaned.contains("cdn") || cleaned.contains("manifest"))) {
-                                    println("FaselHD: ✅ JWPlayer SUCCESS: $cleaned")
+                                if (
+                                    cleaned.startsWith("http") ||
+                                    cleaned.contains(".m3u8", true) ||
+                                    cleaned.contains("cdn", true) ||
+                                    cleaned.contains("manifest", true)
+                                ) {
+                                    println("FaselHD: JWPlayer SUCCESS -> $cleaned")
                                     finish(cleaned)
                                 }
                             }
 
-                            // Bug 20: DOM fallback scan for rendered configs or tags
-                            view?.evaluateJavascript("""
+                            view?.evaluateJavascript(
+                                """
                                 (function() {
-                                    // 1. Check for data-setup attribute on the player div
                                     var el = document.querySelector('[data-setup]');
                                     if (el) {
                                         var ds = el.getAttribute('data-setup');
-                                        if (ds && ds.includes('http')) return 'dom_setup:' + ds;
+                                        if (ds && ds.includes('http')) return 'domsetup:' + ds;
                                     }
-                                    // 2. Check for video src
+
                                     var v = document.querySelector('video[src]');
-                                    if (v && v.src && v.src.startsWith('http')) return 'dom_video:' + v.src;
-                                    // 3. Check for source tags
+                                    if (v && v.src && v.src.startsWith('http')) return 'domvideo:' + v.src;
+
                                     var s = document.querySelector('source[src*=".m3u8"]');
-                                    if (s && s.src) return 'dom_source:' + s.src;
-                                    return 'dom_not_found';
-                                })()
-                            """.trimIndent()) { result ->
+                                    if (s && s.src) return 'domsource:' + s.src;
+
+                                    return 'domnotfound';
+                                })();
+                                """.trimIndent()
+                            ) { result ->
                                 val cleaned = result?.trim('"') ?: return@evaluateJavascript
-                                if (cleaned.startsWith("dom_") && cleaned != "dom_not_found") {
-                                    Log.i("FaselHD", "DOM scan found stream: $cleaned")
-                                    val url = cleaned.substringAfter(":")
-                                    if (url.startsWith("http")) finish(url)
+                                if (cleaned.startsWith("dom") && cleaned != "domnotfound") {
+                                    Log.i("FaselHD", "DOM scan found stream -> $cleaned")
+                                    val foundUrl = cleaned.substringAfter(":")
+                                    if (foundUrl.startsWith("http")) finish(foundUrl)
                                 }
                             }
                         }
 
-                        if (!currentUrl.contains("video_player", true)) return
-                        
-                        // Bug 2, 4 & 7 Fix: Reset state and increment generation
+                        if (!isPlayerPage) return
+
                         loadGeneration++
                         val myGen = loadGeneration
                         captureCheckScheduled = false
                         captureStarted = false
                         lastChallengeMs = System.currentTimeMillis()
-                        lastOnPageFinishedMs = System.currentTimeMillis() // Bug 9 Fix
+                        lastOnPageFinishedMs = System.currentTimeMillis()
+
                         captureTimeout?.let(handler::removeCallbacks)
-                        
                         setupGlobalTimeout(myGen)
 
                         if (captureCheckScheduled) return
                         captureCheckScheduled = true
 
-                        // Bug 9 Fix: Delay start to see if a challenge request follows immediately
                         handler.postDelayed({
                             if (resolved || loadGeneration != myGen) return@postDelayed
+
                             if (lastChallengeMs > lastOnPageFinishedMs) {
                                 println("FaselHD: Challenge request detected after onPageFinished. Likely interstitial. Skipping capture start for gen $myGen.")
                                 captureCheckScheduled = false
                                 return@postDelayed
                             }
 
-                            println("FaselHD: Starting quiet-check loop for gen $myGen (Passed interstitial gate)")
-                            
-                            // Poll for a CF-quiet window
-                            val checkInterval = 2_000L
+                            println("FaselHD: Starting quiet-check loop for gen $myGen")
+                            val checkInterval = 2000L
                             val maxChecks = 75
 
                             repeat(maxChecks) { i ->
                                 handler.postDelayed({
                                     if (resolved || loadGeneration != myGen) return@postDelayed
-                                    
-                                    val now = System.currentTimeMillis()
-                                    val quiet = now - lastChallengeMs > 3_000
-                                    
-                                    // Bug 10 Fix: Check for actual clearance cookie
-                                    val cookieStr = CookieManager.getInstance().getCookie(playerUrl) ?: ""
-                                    val hasClearance = cookieStr.contains("cf_clearance=", true)
-                                    
-                                    println("FaselHD: CF quiet check #$i (gen $myGen) -> quiet=$quiet, hasClearance=$hasClearance (age=${now - lastChallengeMs}ms)")
 
-                                    val isVideoplayer = currentUrl.contains("videoplayer") || currentUrl.contains("playertoken")
-                                    if (!hasClearance && !isVideoplayer) {
-                                        // log only every few checks to avoid spam
-                                        if (i % 5 == 0) println("FaselHD: Waiting for cfclearance on $playerHost (not a videoplayer URL)...")
+                                    val now = System.currentTimeMillis()
+                                    val quiet = now - lastChallengeMs > 3000
+                                    val cookieStr = CookieManager.getInstance().getCookie(playerUrl) ?: ""
+                                    val hasClearance = cookieStr.contains("cf_clearance", true)
+                                    val looksPlayable = isPlayerPage || hasPlayerToken
+
+                                    println("FaselHD: CF quiet check $i gen $myGen -> quiet=$quiet hasClearance=$hasClearance")
+
+                                    if (!hasClearance || !looksPlayable) {
+                                        if (i % 5 == 0) {
+                                            println("FaselHD: Waiting for cf_clearance or valid player URL...")
+                                        }
                                         return@postDelayed
                                     }
 
-                                    if (!captureStarted) {
+                                    if (!captureStarted && quiet) {
                                         captureStarted = true
-                                        println("FaselHD: Gate passed (hasClearance=$hasClearance isVideoplayer=$isVideoplayer). Starting 45s capture window for gen $myGen.")
-                                        
-                                        // Start play triggers
+                                        println("FaselHD: Gate passed. Starting 45s capture window for gen $myGen.")
+
                                         startKotlinDrivenPlayTrigger(view, ioScope)
                                         triggerJwPlayerPlay(view, 0)
-                                        
+
                                         captureTimeout = Runnable {
                                             if (loadGeneration == myGen) {
-                                                println("FaselHD: Player capture timed out after final page load (gen $myGen)")
+                                                println("FaselHD: Player capture timed out after final page load gen $myGen")
                                                 finish(null)
                                             }
                                         }
                                         handler.postDelayed(captureTimeout!!, 45_000)
 
                                         startPolling(view, myGen)
-                                    } else if (quiet && !hasClearance) {
-                                        // log only every few checks to avoid spam
-                                        if (i % 5 == 0) println("FaselHD: Window is quiet but cf_clearance is missing for $playerHost. Waiting...")
+                                    } else if (quiet && !hasClearance && i % 5 == 0) {
+                                        println("FaselHD: Window is quiet but cf_clearance is missing for playerHost. Waiting...")
                                     }
-                                    
-                                    // Bug 14 Fix: Retry play trigger at check #1
+
                                     if (i == 1 && view != null) {
-                                        println("FaselHD: Quiet check #1 - retry play trigger")
+                                        println("FaselHD: Quiet check 1 - retry play trigger")
                                         triggerJwPlayerPlay(view, 1)
                                     }
                                 }, i * checkInterval)
@@ -1189,6 +1185,14 @@ class FaselHDProvider : MainAPI() {
         }
     }
 
+    private fun String.isPlayerUrl(): Boolean {
+        return contains("videoplayer", true) || contains("video_player", true)
+    }
+
+    private fun String.hasPlayerToken(): Boolean {
+        return contains("playertoken", true) || contains("player_token", true)
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -1196,6 +1200,7 @@ class FaselHDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         println("FaselHD: loadLinks for data -> $data")
+
         val host = resolveHost()
         val pageUrl = normalizeUrl(data, host)
         println("FaselHD: Normalized loadLinks URL -> $pageUrl")
@@ -1203,34 +1208,51 @@ class FaselHDProvider : MainAPI() {
         val doc = safeGet(pageUrl, pageUrl) ?: return false
         val html = doc.html()
 
-        val playerUrl = doc.selectFirst(
-            "iframe[src*=video_player], iframe[data-src*=video_player]"
+        val iframePlayerUrl = doc.selectFirst(
+            "iframe[src*=videoplayer], " +
+            "iframe[data-src*=videoplayer], " +
+            "iframe[src*=video_player], " +
+            "iframe[data-src*=video_player]"
         )?.let {
             it.attr("abs:src").ifEmpty { it.attr("abs:data-src") }
-        }?.takeIf { it.isNotEmpty() }
-            ?: Regex("""(?:src|url)\s*[=:]\s*["'](https?://[^"']+video_player\?player_token=[^"']+)["']""")
-                .find(html)?.groupValues?.get(1)
-            ?: Regex("""video_player\?player_token=[^\s"'\\]+""")
-                .find(html)?.value?.let {
-                    if (it.startsWith("http")) it else "$host/$it"
+        }?.takeIf { it.isNotBlank() }
+
+        val regexPlayerUrl = sequenceOf(
+            Regex(
+                """(?:src|url)\s*[=:]\s*["'](https?://[^"'\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"']+)["']""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """((?:https?://|//|/)?[^"'\s\\]*(?:videoplayer|video_player)\?(?:playertoken|player_token)=[^"'\s\\]+)""",
+                RegexOption.IGNORE_CASE
+            )
+        ).mapNotNull { it.find(html)?.groupValues?.getOrNull(1) }
+            .firstOrNull()
+            ?.let { found ->
+                when {
+                    found.startsWith("http://", true) || found.startsWith("https://", true) -> normalizeUrl(found, host)
+                    found.startsWith("//") -> "https:$found"
+                    found.startsWith("/") -> "$host$found"
+                    else -> "$host/${found.removePrefix("/")}"
                 }
+            }
 
-        val rawPlayerUrl = playerUrl ?: return rawScan(html, pageUrl, callback)
+        val rawPlayerUrl = (iframePlayerUrl ?: regexPlayerUrl)?.let { normalizeUrl(it, host) }
+            ?: return rawScan(html, pageUrl, callback)
+
         val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
-
         println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
         Log.i("FaselHD", "Skipping safeGet for videoplayer — loading directly in WebView")
-        // Go straight to WebView extraction
-        val resolved = extractM3u8ViaWebView(
 
+        val resolved = extractM3u8ViaWebView(
             playerUrl = rawPlayerUrl,
             playerHost = playerHost,
             referer = pageUrl
         )
         println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
-        if (resolved != null) {
+        if (!resolved.isNullOrBlank()) {
             callback(
                 newExtractorLink(
                     name,
