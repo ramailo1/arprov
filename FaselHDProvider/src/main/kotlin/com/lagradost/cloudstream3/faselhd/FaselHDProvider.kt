@@ -46,7 +46,7 @@ class FaselHDProvider : MainAPI() {
     )
 
     private val baseDomain = "faselhdx.bid"
-    override var mainUrl = "https://web31612x.$baseDomain"
+    override var mainUrl = "https://web31712x.$baseDomain"
 
     private var userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
@@ -86,6 +86,24 @@ class FaselHDProvider : MainAPI() {
                u.contains("scdns")
     }
 
+    private fun String.normalizeHttpUrl(): String {
+        var s = trim()
+        s = s.replace(Regex("^(https?:/)(?!/)"), "$1/")
+        if (!s.startsWith("http://") && !s.startsWith("https://")) {
+            s = "https://$s"
+        }
+        s = s.replace("https://https://", "https://")
+        s = s.replace("http://http://", "http://")
+        return s
+    }
+
+    private fun String.hostOrigin(): String {
+        return runCatching {
+            val u = android.net.Uri.parse(this.normalizeHttpUrl())
+            "${u.scheme}://${u.host}"
+        }.getOrDefault(this)
+    }
+
     private fun normalizeMediaUrl(url: String): String? {
         return url.trim()
             .takeIf { it.startsWith("http://") || it.startsWith("https://") }
@@ -99,7 +117,21 @@ class FaselHDProvider : MainAPI() {
         val quietGateStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val captureWindowStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
-    )
+    ) {
+        fun completeSuccess(url: String) {
+            if (streamFound.compareAndSet(false, true)) {
+                Log.i("FaselHD", "Gen $gen completing SUCCESS with $url")
+                result.complete(url)
+            }
+        }
+        
+        fun completeFailure(reason: String) {
+            if (!streamFound.get() && closed.compareAndSet(false, true)) {
+                Log.i("FaselHD", "Gen $gen completing FAILURE: $reason")
+                result.complete(null)
+            }
+        }
+    }
 
     private val captureGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val activeSession = java.util.concurrent.atomic.AtomicReference<CaptureSession?>(null)
@@ -117,10 +149,9 @@ class FaselHDProvider : MainAPI() {
             if (current.gen != session.gen) return
             val normalized = normalizeMediaUrl(url) ?: return
             if (!isUsefulMediaUrl(normalized)) return
-            if (!session.streamFound.compareAndSet(false, true)) return
             
-            Log.i("FaselHD", "Gen ${session.gen} Found Stream -> ${normalized.take(100)}")
-            session.result.complete(normalized)
+            Log.i("FaselHD", "Gen ${session.gen} JS Found Stream -> ${normalized.take(100)}")
+            session.completeSuccess(normalized)
         }
         
         @android.webkit.JavascriptInterface
@@ -172,11 +203,42 @@ class FaselHDProvider : MainAPI() {
       function reportSources(p) {
         try {
           const cfg = p && typeof p.getConfig === 'function' ? p.getConfig() : null;
+          log("p.getConfig() returned: " + !!cfg);
+          
+          let sourcesObj = "none";
+          let sourcesCount = 0;
+          let candidateSource = "";
+
           const playlist = cfg && cfg.playlist && cfg.playlist[0] ? cfg.playlist[0] : null;
-          const sources = (playlist && playlist.sources) || cfg?.sources || [];
+          if (playlist) {
+              log("found playlist[0], keys: " + Object.keys(playlist).join(","));
+          }
+          
+          let sources = [];
+          if (playlist && playlist.sources && playlist.sources.length > 0) {
+              sources = playlist.sources;
+              sourcesObj = "playlist[0].sources";
+          } else if (cfg && cfg.sources && cfg.sources.length > 0) {
+              sources = cfg.sources;
+              sourcesObj = "cfg.sources";
+          } else if (typeof p.getPlaylist === 'function') {
+              const activePlaylist = p.getPlaylist();
+              if (activePlaylist && activePlaylist[0] && activePlaylist[0].sources) {
+                  sources = activePlaylist[0].sources;
+                  sourcesObj = "p.getPlaylist()[0].sources";
+              }
+          }
+          
+          sourcesCount = sources.length;
+          log("JWPlayer sources location: " + sourcesObj + " (count " + sourcesCount + ")");
+
           for (const s of sources) {
             const file = s && s.file ? String(s.file) : "";
-            if (file && /(m3u8|mp4|scdns)/i.test(file)) emit(file);
+            log("candidateSource: " + file);
+            if (file && /(m3u8|mp4|scdns)/i.test(file)) {
+                candidateSource = file;
+                emit(file);
+            }
           }
         } catch (e) {
           log("reportSources error: " + e);
@@ -399,22 +461,25 @@ class FaselHDProvider : MainAPI() {
         )
     }
 
-    private fun syncCookiesToWebView(mainHost: String) {
+    private fun syncCookiesToWebView(targetOrigin: String) {
         try {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
 
             val skipNames = setOf("cf_clearance", "__cf_bm", "cfchlrcni5", "__cflb", "__cfruid")
             var count = 0
+            val normalizedTarget = targetOrigin.hostOrigin()
+            
             cfKiller.savedCookies.forEach { (host, cookies) ->
                 cookies.forEach { (name, value) ->
                     if (name !in skipNames) {
                         val cookieString = "$name=$value"
-                        cookieManager.setCookie("https://$host", cookieString)
+                        val cookieHost = host.hostOrigin()
+                        cookieManager.setCookie(cookieHost, cookieString)
                         
                         // Also mirror to mainHost if it's a domain cookie or on same base
-                        if (host.endsWith(baseDomain) && host != mainHost) {
-                            cookieManager.setCookie("https://$mainHost", cookieString)
+                        if (host.endsWith(baseDomain) && cookieHost != normalizedTarget) {
+                            cookieManager.setCookie(normalizedTarget, cookieString)
                         }
                         count++
                     }
@@ -423,21 +488,23 @@ class FaselHDProvider : MainAPI() {
 
             cookieManager.flush()
             println("FaselHD: Synced $count non-CF cookies to WebView across all hosts")
-            println("FaselHD: WebView cookies for https://$mainHost: ${cookieManager.getCookie("https://$mainHost")}")
+            println("FaselHD: WebView cookies for $normalizedTarget: ${cookieManager.getCookie(normalizedTarget)}")
         } catch (e: Exception) {
             println("FaselHD: Cookie sync failed: ${e.message}")
         }
     }
 
-    private fun harvestWebViewCookies(host: String) {
+    private fun harvestWebViewCookies(hostUrl: String) {
         try {
-            val raw = CookieManager.getInstance().getCookie("https://$host") ?: return
+            val normalizedHost = hostUrl.hostOrigin()
+            val raw = CookieManager.getInstance().getCookie(normalizedHost) ?: return
             raw.split(";").forEach { part ->
                 val kv = part.trim()
                 if (kv.startsWith("cf_clearance=")) {
                     val value = kv.removePrefix("cf_clearance=")
                     println("FaselHD: Harvested WebView cf_clearance -> ${value.take(30)}...")
                     
+                    val host = normalizedHost.removePrefix("https://").removePrefix("http://")
                     val cookies = cfKiller.savedCookies[host]?.toMutableMap() ?: mutableMapOf<String, String>()
                     cookies["cf_clearance"] = value
                     cfKiller.savedCookies[host] = cookies
@@ -448,27 +515,30 @@ class FaselHDProvider : MainAPI() {
         }
     }
     
-    private fun clearCfCookiesFromWebView(host: String) {
+    private fun clearCfCookiesFromWebView(hostUrl: String) {
         try {
             val cookieManager = CookieManager.getInstance()
+            val normalizedHost = hostUrl.hostOrigin()
             listOf("cf_clearance", "__cf_bm", "cfchlrcni5", "__cflb", "__cfruid", "cf_ob_info").forEach { name ->
-                cookieManager.setCookie("https://$host", "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                cookieManager.setCookie(normalizedHost, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
             }
             cookieManager.flush()
-            println("FaselHD: Purged stale CF cookies for $host")
+            println("FaselHD: Purged stale CF cookies for $normalizedHost")
         } catch (e: Exception) {
-            println("FaselHD: Cookie purge failed: ${e.message}")
+            println("FaselHD: Stale CF cookie purge failed: ${e.message}")
         }
     }
 
-    private fun syncCfClearanceToWebView(host: String) {
+    private fun syncCfClearanceToWebView(hostUrl: String) {
         try {
+            val normalizedHost = hostUrl.hostOrigin()
+            val host = normalizedHost.removePrefix("https://").removePrefix("http://")
             val clearance = cfKiller.savedCookies[host]?.get("cf_clearance") ?: return
             CookieManager.getInstance().apply {
-                setCookie("https://$host", "cf_clearance=$clearance")
+                setCookie(normalizedHost, "cf_clearance=$clearance")
                 flush()
             }
-            println("FaselHD: Synced fresh cf_clearance to WebView for $host")
+            println("FaselHD: Synced fresh cf_clearance to WebView for $normalizedHost")
         } catch (e: Exception) {
             println("FaselHD: CF clearance sync failed: ${e.message}")
         }
@@ -558,8 +628,8 @@ class FaselHDProvider : MainAPI() {
                     ) {
                         super.onReceivedHttpError(view, request, errorResponse)
                         if (request?.isForMainFrame == true && errorResponse?.statusCode == 404) {
-                            println("FaselHD: 404 encountered for target URL, aborting session.")
-                            session.result.complete(null)
+                            println("FaselHD: [Gen ${session.gen}] 404 encountered for target URL, aborting session.")
+                            session.completeFailure("HTTP 404 Target Not Found")
                         }
                     }
                     
@@ -575,10 +645,8 @@ class FaselHDProvider : MainAPI() {
                         
                         if (u.contains("scdns.io")) {
                             if (u.contains(".m3u8") && !u.contains("segment") && !u.contains(".ts")) {
-                                Log.i("FaselHD", "scdns.io M3U8 CAPTURED: $u")
-                                if (session.streamFound.compareAndSet(false, true)) {
-                                    session.result.complete(u)
-                                }
+                                Log.i("FaselHD", "[Gen ${session.gen}] scdns.io M3U8 CAPTURED: $u")
+                                session.completeSuccess(u)
                             }
                             return null
                         }
@@ -593,16 +661,12 @@ class FaselHDProvider : MainAPI() {
                         }
 
                         if (isVideoMediaUrl(u) && !u.contains("challenges.cloudflare.com", true) && !u.contains("cdn-cgi", true)) {
-                            if (session.streamFound.compareAndSet(false, true)) {
-                                session.result.complete(u)
-                            }
+                            session.completeSuccess(u)
                         }
 
                         if ((u.contains(".m3u8") || u.contains("/hls/") || u.contains("/manifest")) 
                              && !u.contains("chunk") && !u.contains("segment")) {
-                            if (session.streamFound.compareAndSet(false, true)) {
-                                session.result.complete(u)
-                            }
+                            session.completeSuccess(u)
                         }
 
                         return super.shouldInterceptRequest(view, request)
@@ -634,7 +698,7 @@ class FaselHDProvider : MainAPI() {
                                         
                                         val quiet = System.currentTimeMillis() - lastChallengeMs > 3000
                                         if (quiet && session.captureWindowStarted.compareAndSet(false, true)) {
-                                            println("FaselHD: Gate passed. Re-injecting probe.")
+                                            println("FaselHD: [Gen ${session.gen}] Gate passed. Re-injecting probe.")
                                             injectJwProbe(view, session)
                                         }
                                     }, i * checkInterval)
