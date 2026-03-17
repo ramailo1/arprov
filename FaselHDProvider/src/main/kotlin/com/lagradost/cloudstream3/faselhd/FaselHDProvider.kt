@@ -359,17 +359,20 @@ class FaselHDProvider : MainAPI() {
                         };
                         const origSend = XMLHttpRequest.prototype.send;
                         XMLHttpRequest.prototype.send = function() {
-                            this.addEventListener('load', function() {
-                                try {
-                                    const url = this.__url || '';
-                                    log("xhr_res: [" + this.status + "] " + url);
-                                    if (url.includes('jwplayer.com')) {
-                                        log("xhr_body: [" + this.status + "] " + url + " | body: " + (this.responseText || '').substring(0, 3000));
-                                    }
-                                    if (url.includes('scdns') || url.includes('.m3u8')) {
-                                        window.CSBridge && window.CSBridge.onM3u8Intercepted(url);
-                                    }
-                                } catch(e) { log("xhr_hook_err: " + e); }
+                            const self = this;
+                            this.addEventListener('readystatechange', function() {
+                                if (self.readyState === 4) {
+                                    try {
+                                        const url = self.__url || '';
+                                        log("xhr_res: [" + self.status + "] " + url);
+                                        if (url.includes('jwplayer.com')) {
+                                            log("xhr_body: [" + self.status + "] " + url + " | body: " + (self.responseText || '').substring(0, 3000));
+                                        }
+                                        if (url.includes('scdns') || url.includes('.m3u8')) {
+                                            window.CSBridge && window.CSBridge.onM3u8Intercepted(url);
+                                        }
+                                    } catch(e) { log("xhr_hook_err: " + e); }
+                                }
                             });
                             return origSend.apply(this, arguments);
                         };
