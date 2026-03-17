@@ -627,20 +627,30 @@ class FaselHDProvider : MainAPI() {
 
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         super.onPageStarted(view, url, favicon)
-                        Log.i("FaselHD", "onPageStarted: $url")
-                        playTriggerStarted.set(false)
-
-                        if (url?.contains("video_player", true) == true || url?.contains("videoplayer", true) == true || url?.contains("faselhdx") == true) {
-                            // Bug 16 Fix A: Inject initial hookScript as well
+                        val currentUrl = url ?: ""
+                        // Only reset and re-hook for actual videoplayer navigations
+                        if (currentUrl.contains("videoplayer") || currentUrl.startsWith("https://web")) {
+                            playTriggerStarted.set(false)
                             view?.evaluateJavascript(hookScript, null)
-                            println("FaselHD: Hooks injected early in onPageStarted for $url")
+                            Log.i("FaselHD", "onPageStarted $currentUrl")
                             
-                            // Bug 19 & Fix: Start Kotlin play trigger 
+                            // Start Kotlin play trigger 
                             startKotlinDrivenPlayTrigger(view, ioScope)
                             
                             // Start polling immediately
                             startJWPlayerPolling()
+                        } else {
+                            Log.i("FaselHD", "onPageStarted IGNORED (non-player URL): $currentUrl")
                         }
+                    }
+
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        val url = request.url.toString()
+                        if (url.startsWith("intent://") || url.startsWith("market://")) {
+                            Log.i("FaselHD", "Blocked intent redirect: $url")
+                            return true  // swallow — do not navigate
+                        }
+                        return false
                     }
 
                     override fun shouldInterceptRequest(
@@ -650,8 +660,11 @@ class FaselHDProvider : MainAPI() {
                         val u = request.url.toString()
                         Log.i("FaselHD-Intercept", "shouldInterceptRequest: ${u.take(200)}")
 
-                        // ✅ ALWAYS allow: JS from JWPlayer CDN (jwpcdn.com covers all versions/paths)
-                        if (u.contains("jwpcdn.com") || u.contains("jwplayer")) return null
+                        // CRITICAL: must not intercept jwplayer — null = WebView fetches it from CDN normally
+                        if (u.contains("jwpcdn.com") || u.contains("jwplayer")) {
+                            Log.i("FaselHD-Intercept", "$u → PASS THROUGH (returning null)")
+                            return null
+                        }
                         
                         // ✅ ALWAYS allow: scdns.io entirely (thumbnails + M3U8)
                         if (u.contains("scdns.io")) {
