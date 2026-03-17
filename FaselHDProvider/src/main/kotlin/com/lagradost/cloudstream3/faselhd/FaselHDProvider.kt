@@ -83,18 +83,35 @@ private fun looksLikeMediaUrl(url: String): Boolean {
     return ".m3u8" in u || ".mp4" in u
 }
 
+private val EPISODE_IFRAME_BROAD_RE = Regex(
+    """<iframe[^>]+(?:data-src|src)=["']([^"']+(?:videoplayer|video_player)[^"']+)["']""",
+    RegexOption.IGNORE_CASE
+)
+
 private fun extractEpisodePlayerUrls(html: String, baseUrl: String): List<String> {
     val out = linkedSetOf<String>()
 
     fun add(raw: String?) {
         if (raw.isNullOrBlank()) return
         val resolved = resolveUrl(baseUrl, raw)
-        if ("videoplayer?playertoken" in resolved) out += resolved
+        if ("videoplayer" in resolved || "video_player" in resolved) out += resolved
     }
 
-    EPISODE_IFRAME_RE.findAll(html).forEach { add(it.groupValues.getOrNull(1)) }
-    EPISODE_TAB_RE.findAll(html).forEach { add(it.groupValues.getOrNull(1)) }
+    val iframeMatches = EPISODE_IFRAME_RE.findAll(html).toList()
+    iframeMatches.forEach { add(it.groupValues.getOrNull(1)) }
+    
+    val broadIframeMatches = EPISODE_IFRAME_BROAD_RE.findAll(html).toList()
+    broadIframeMatches.forEach { add(it.groupValues.getOrNull(1)) }
 
+    val tabHrefMatches = EPISODE_TAB_RE.findAll(html).toList()
+    tabHrefMatches.forEach { add(it.groupValues.getOrNull(1)) }
+
+    Log.i("FaselHD", "PARSE-IFRAME matches=${iframeMatches.size}")
+    Log.i("FaselHD", "PARSE-IFRAME-BROAD matches=${broadIframeMatches.size}")
+    Log.i("FaselHD", "PARSE-TAB-HREF matches=${tabHrefMatches.size}")
+    Log.i("FaselHD", "PARSE-FINAL candidates=${out.size}")
+    Log.i("FaselHD", "PARSE-SAMPLE html=${html.take(1200).replace("\n", " ")}")
+    
     return out.toList()
 }
 
@@ -129,7 +146,10 @@ private class ProbeBridge(
             when (obj.optString("kind")) {
                 "candidate" -> {
                     val url = obj.optString("url")
+                    val via = obj.optString("via")
+                    Log.i("FaselHD", "BRIDGE-CANDIDATE via=$via url=$url")
                     if (looksLikeMediaUrl(url) && completed.compareAndSet(false, true)) {
+                        Log.i("FaselHD", "BRIDGE-SUCCESS via=$via resolved=$url")
                         onMediaUrl(url)
                     }
                 }
@@ -137,15 +157,20 @@ private class ProbeBridge(
                 "body" -> {
                     val base = obj.optString("baseUrl").ifBlank { pageUrl }
                     val body = obj.optString("text")
+                    val via = obj.optString("via")
                     val urls = extractMediaUrlsFromText(body, base)
                     val first = urls.firstOrNull() ?: return
+                    Log.i("FaselHD", "BRIDGE-BODY-HIT via=$via firstUrl=$first")
                     if (completed.compareAndSet(false, true)) {
+                        Log.i("FaselHD", "BRIDGE-SUCCESS via=$via resolved=$first")
                         onMediaUrl(first)
                     }
                 }
 
                 "log" -> {
-                    log(obj.optString("msg"))
+                    val msg = obj.optString("msg")
+                    Log.i("FaselHD", "BRIDGE-RAW kind=log url=none len=0 msg=$msg")
+                    log(msg)
                 }
             }
         } catch (t: Throwable) {
@@ -231,6 +256,14 @@ class FaselHDProvider : MainAPI() {
             .takeIf { it.startsWith("http://") || it.startsWith("https://") }
     }
 
+    private enum class ResolveExit {
+        SUCCESS_MEDIA,
+        FAIL_HTTP_404,
+        FAIL_NO_PLAYER_URL,
+        FAIL_PROBE_NO_HIT,
+        FAIL_TIMEOUT
+    }
+
     private data class CaptureSession(
         val gen: Int,
         val targetUrl: String,
@@ -250,7 +283,7 @@ class FaselHDProvider : MainAPI() {
         fun completeFailure(reason: String) {
             if (!streamFound.get() && closed.compareAndSet(false, true)) {
                 Log.i("FaselHD", "Gen $gen completing FAILURE: $reason")
-                result.complete(null)
+                result.complete("FAIL_$reason")
             }
         }
     }
@@ -278,6 +311,7 @@ class FaselHDProvider : MainAPI() {
   function once(url, via) {
     if (!url || seen[url]) return false;
     seen[url] = true;
+    log("PROBE-SCAN-HIT via=" + via + " url=" + url);
     post({ kind: "candidate", url: url, via: via || "" });
     return true;
   }
@@ -403,12 +437,14 @@ class FaselHDProvider : MainAPI() {
   }
 
   try {
+    log("PROBE-INSTALLED href=" + location.href);
     var origFetch = window.fetch;
     if (origFetch) {
       window.fetch = function() {
         return origFetch.apply(this, arguments).then(function(resp) {
           try {
             var url = (resp && resp.url) || (arguments[0] && String(arguments[0])) || location.href;
+            log("PROBE-FETCH url=" + url);
             if (looksMedia(url)) once(abs(url, location.href), "fetch.url");
 
             var clone = resp.clone();
@@ -437,6 +473,7 @@ class FaselHDProvider : MainAPI() {
       this.addEventListener("load", function() {
         try {
           var finalUrl = this.responseURL || this.__faselUrl || location.href;
+          log("PROBE-XHR url=" + finalUrl);
           if (looksMedia(finalUrl)) once(abs(finalUrl, location.href), "xhr.url");
 
           var text = "";
@@ -722,9 +759,10 @@ class FaselHDProvider : MainAPI() {
                         errorResponse: WebResourceResponse?
                     ) {
                         super.onReceivedHttpError(view, request, errorResponse)
+                        Log.i("FaselHD", "WV-HTTP-ERR generation=${session.gen} status=${errorResponse?.statusCode} url=${request?.url} main=${request?.isForMainFrame}")
                         if (request?.isForMainFrame == true && errorResponse?.statusCode == 404) {
-                            println("FaselHD: [Gen ${session.gen}] 404 encountered for target URL, aborting session.")
-                            session.completeFailure("HTTP 404 Target Not Found")
+                            println("FaselHD: [Gen ${session.gen}] 404 encountered for target URL, aborting sequence.")
+                            session.completeFailure(ResolveExit.FAIL_HTTP_404.name)
                         }
                     }
                     
@@ -732,6 +770,7 @@ class FaselHDProvider : MainAPI() {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
+                        Log.i("FaselHD", "WV-LOAD generation=${session.gen} url=${request.url} isMainFrame=${request.isForMainFrame}")
                         val u = request.url.toString()
 
                         if (u.contains("jwpcdn.com") || u.contains("jwplayer")) {
@@ -806,12 +845,14 @@ class FaselHDProvider : MainAPI() {
         } ?: return@withTimeoutOrNull null
         
         mainHandler.post {
+            Log.i("FaselHD", "WV-START generation=$gen url=$playerUrl referer=$referer")
             webView.loadUrl(playerUrl, mapOf("Referer" to referer, "Origin" to playerHost, "User-Agent" to userAgent))
         }
 
         try {
             session.result.await()
         } finally {
+            Log.i("FaselHD", "WV-FINAL-URL generation=$gen url=${webView.url}")
             if (session.closed.compareAndSet(false, true)) {
                 activeSession.compareAndSet(session, null)
                 mainHandler.post {
@@ -1069,12 +1110,15 @@ class FaselHDProvider : MainAPI() {
 
         if (uniquePlayerUrls.isEmpty()) {
             println("FaselHD: No player URLs found, final rawScan of original page")
+            Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.FAIL_NO_PLAYER_URL.name} lastPage=$pageUrl lastCandidate=none")
             return rawScan(html, pageUrl, callback)
         }
 
         var foundStream = false
+        var lastCandidate = "none"
 
         for ((index, rawPlayerUrl) in uniquePlayerUrls.withIndex()) {
+            lastCandidate = rawPlayerUrl
             val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
             println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
@@ -1087,7 +1131,7 @@ class FaselHDProvider : MainAPI() {
             )
             println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
 
-            if (!resolved.isNullOrBlank()) {
+            if (!resolved.isNullOrBlank() && !resolved.startsWith("FAIL_")) {
                 val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
                 callback(
                     newExtractorLink(
@@ -1101,11 +1145,17 @@ class FaselHDProvider : MainAPI() {
                     }
                 )
                 foundStream = true
+                Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.SUCCESS_MEDIA.name} lastPage=$pageUrl lastCandidate=$rawPlayerUrl")
+                break
+            } else {
+                Log.i("FaselHD", "CANDIDATE-FAIL reason=${resolved ?: "TIMEOUT"} url=$rawPlayerUrl")
+                Log.i("FaselHD", "CANDIDATE-NEXT remaining=${uniquePlayerUrls.size - index - 1}")
             }
         }
 
         if (!foundStream) {
             println("FaselHD: Everything failed, final rawScan of original page")
+            Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${if(lastCandidate=="none") ResolveExit.FAIL_NO_PLAYER_URL.name else ResolveExit.FAIL_PROBE_NO_HIT.name} lastPage=$pageUrl lastCandidate=$lastCandidate")
             return rawScan(html, pageUrl, callback)
         }
         
