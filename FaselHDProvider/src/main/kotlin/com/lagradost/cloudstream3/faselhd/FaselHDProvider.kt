@@ -228,6 +228,7 @@ class FaselHDProvider : MainAPI() {
 
     // Add at class level — thread-safe set of burned token URLs
     private val failedTokenUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val tokenClaimed = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
@@ -298,7 +299,8 @@ class FaselHDProvider : MainAPI() {
         val streamFound: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val quietGateStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val captureWindowStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
-        val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
+        val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+        @Volatile var gatePassedAt: Long = 0L
     ) {
         fun completeSuccess(url: String) {
             if (streamFound.compareAndSet(false, true)) {
@@ -848,8 +850,6 @@ class FaselHDProvider : MainAPI() {
                 
                 var lastChallengeMs = 0L
                 var lastOnPageFinishedMs = 0L
-                var subResource403Count = 0
-                val CF_BLOCK_ABORT_THRESHOLD = 5
 
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
@@ -885,13 +885,6 @@ class FaselHDProvider : MainAPI() {
                             println("FaselHD: [Gen ${session.gen}] $status encountered for target URL, aborting sequence.")
                             failedTokenUrls.add(playerUrl)
                             session.completeFailure("FAILHTTP$status")
-                        } else if (status == 403 && !isMainFrame) {
-                            subResource403Count++
-                            if (subResource403Count >= CF_BLOCK_ABORT_THRESHOLD) {
-                                Log.i("FaselHD", "Gen ${session.gen} CF-BLOCK-THRESHOLD hit, aborting")
-                                failedTokenUrls.add(playerUrl)
-                                session.completeFailure("CF_BLOCK")
-                            }
                         }
                     }
                     
@@ -1029,7 +1022,15 @@ class FaselHDProvider : MainAPI() {
                                         val quiet = System.currentTimeMillis() - lastChallengeMs > 3000
                                         if (quiet && session.captureWindowStarted.compareAndSet(false, true)) {
                                             println("FaselHD: [Gen ${session.gen}] Gate passed. Re-injecting probe.")
+                                            session.gatePassedAt = System.currentTimeMillis()
                                             injectJwProbe(view, session)
+                                        }
+
+                                        val sinceGate = if (session.gatePassedAt > 0) System.currentTimeMillis() - session.gatePassedAt else 0L
+                                        if (sinceGate > 8000L && !session.streamFound.get()) {
+                                            Log.i("FaselHD", "Gen ${session.gen} POST-GATE-TIMEOUT after ${sinceGate}ms, aborting")
+                                            failedTokenUrls.add(playerUrl)
+                                            session.completeFailure("POST_GATE_TIMEOUT")
                                         }
                                     }, i * checkInterval)
                                 }
@@ -1244,6 +1245,7 @@ class FaselHDProvider : MainAPI() {
     ): Boolean {
         println("FaselHD: loadLinks for data -> $data")
         failedTokenUrls.clear()
+        tokenClaimed.clear()
 
         val host = resolveHost()
         val pageUrl = normalizeUrl(data, host)
@@ -1329,6 +1331,13 @@ class FaselHDProvider : MainAPI() {
 
             if (failedTokenUrls.contains(rawPlayerUrl)) {
                 Log.i("FaselHD", "CANDIDATE-SKIP already dead: ${rawPlayerUrl.take(60)}")
+                continue
+            }
+
+            // Fix Mutex: Ensure each token is only handled by ONE path (DIRECT/XHR or SAFEGET-NULL)
+            val wasClaimed = tokenClaimed.putIfAbsent(rawPlayerUrl, "DIRECT")
+            if (wasClaimed != null) {
+                Log.i("FaselHD", "DIRECT-SKIP token already claimed by $wasClaimed: ${rawPlayerUrl.take(60)}")
                 continue
             }
 
