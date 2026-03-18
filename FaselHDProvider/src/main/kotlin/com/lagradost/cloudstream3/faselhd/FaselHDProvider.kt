@@ -785,6 +785,11 @@ class FaselHDProvider : MainAPI() {
         referer: String,
         cachedHtml: String? = null
     ): String? = kotlinx.coroutines.withTimeoutOrNull(35000) {
+        val prior = tokenClaimed.putIfAbsent(playerUrl, "gen$captureGeneration")
+        if (prior != null) {
+            Log.i("FaselHD", "WV-SKIP gen$captureGeneration already claimed by $prior: ${playerUrl.take(60)}")
+            return@withTimeoutOrNull "SKIP:ALREADY_CLAIMED"
+        }
         val gen = captureGeneration.incrementAndGet()
         val session = CaptureSession(gen = gen, targetUrl = playerUrl)
         activeSession.set(session)
@@ -896,6 +901,13 @@ class FaselHDProvider : MainAPI() {
                         val isMain = request.isForMainFrame
                         val activeUrl = view.tag as? String
                         Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=$isMain")
+
+                        // Fix C: For the player URL itself: skip OkHttp → let WebView handle natively
+                        // The WebView's TLS fingerprint already passes CF; OkHttp's doesn't.
+                        if (activeUrl != null && u.startsWith(activeUrl.substringBefore("?").take(80))) {
+                            Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} playerUrl — skipping OkHttp")
+                            return null
+                        }
 
                         if (!isMain && u.contains("playertoken")) {
                             Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activeUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
@@ -1027,7 +1039,7 @@ class FaselHDProvider : MainAPI() {
                                         }
 
                                         val sinceGate = if (session.gatePassedAt > 0) System.currentTimeMillis() - session.gatePassedAt else 0L
-                                        if (sinceGate > 8000L && !session.streamFound.get()) {
+                                        if (sinceGate > 4000L && !session.streamFound.get()) {
                                             Log.i("FaselHD", "Gen ${session.gen} POST-GATE-TIMEOUT after ${sinceGate}ms, aborting")
                                             failedTokenUrls.add(playerUrl)
                                             session.completeFailure("POST_GATE_TIMEOUT")
@@ -1331,13 +1343,6 @@ class FaselHDProvider : MainAPI() {
 
             if (failedTokenUrls.contains(rawPlayerUrl)) {
                 Log.i("FaselHD", "CANDIDATE-SKIP already dead: ${rawPlayerUrl.take(60)}")
-                continue
-            }
-
-            // Fix Mutex: Ensure each token is only handled by ONE path (DIRECT/XHR or SAFEGET-NULL)
-            val wasClaimed = tokenClaimed.putIfAbsent(rawPlayerUrl, "DIRECT")
-            if (wasClaimed != null) {
-                Log.i("FaselHD", "DIRECT-SKIP token already claimed by $wasClaimed: ${rawPlayerUrl.take(60)}")
                 continue
             }
 
