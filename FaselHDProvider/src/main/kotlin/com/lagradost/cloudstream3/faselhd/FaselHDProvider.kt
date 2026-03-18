@@ -955,9 +955,50 @@ class FaselHDProvider : MainAPI() {
                             return null
                         }
 
-                        if (u.contains("071kk.com/500")) {
-                            Log.i("FaselHD", "WV-NATIVE-XHR gen=${session.gen} 071kk/5007 — letting WebView handle natively")
-                            return null
+                        if (u.contains("071kk.com/5007")) {
+                            Log.i("FaselHD", "WV-5007-INTERCEPT gen=${session.gen} making native OkHttp call")
+                            return try {
+                                val nativeRequest = okhttp3.Request.Builder()
+                                    .url(u)
+                                    .apply {
+                                        request.requestHeaders.forEach { (k, v) -> addHeader(k, v) }
+                                        val cookies = CookieManager.getInstance().getCookie("https://071kk.com")
+                                        if (!cookies.isNullOrBlank()) addHeader("Cookie", cookies)
+                                    }
+                                    .build()
+
+                                val response = app.baseClient.newCall(nativeRequest).execute()
+                                val bodyBytes = response.body?.bytes() ?: byteArrayOf()
+                                val bodyText = String(bodyBytes, Charsets.UTF_8)
+
+                                Log.i("FaselHD", "WV-5007-BODY gen=${session.gen} len=${bodyBytes.size} sample=${bodyText.take(300)}")
+
+                                val m3u8 = Regex(""""file"\s*:\s*"(https?://[^"]*\.m3u8[^"]*)"""")
+                                    .find(bodyText)?.groupValues?.get(1)
+                                    ?: Regex(""""src"\s*:\s*"(https?://[^"]*\.m3u8[^"]*)"""")
+                                    .find(bodyText)?.groupValues?.get(1)
+
+                                if (m3u8 != null) {
+                                    Log.i("FaselHD", "WV-5007-M3U8 gen=${session.gen} FOUND url=$m3u8")
+                                    session.completeSuccess(m3u8)
+                                } else {
+                                    Log.w("FaselHD", "WV-5007-BODY gen=${session.gen} no m3u8 in response, body=$bodyText")
+                                }
+
+                                val ct = response.header("Content-Type") ?: "application/json"
+                                val enc = response.header("Content-Encoding") ?: "utf-8"
+                                WebResourceResponse(
+                                    ct.substringBefore(";"),
+                                    enc,
+                                    response.code,
+                                    "OK",
+                                    response.headers.toMap().mapValues { it.value },
+                                    bodyBytes.inputStream()
+                                )
+                            } catch (e: Exception) {
+                                Log.e("FaselHD", "WV-5007-FAIL gen=${session.gen}: ${e.message}")
+                                null
+                            }
                         }
 
                         if (!isMain && u.contains("playertoken")) {
