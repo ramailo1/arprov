@@ -168,6 +168,20 @@ private class ProbeBridge(
                     val text = obj.optString("text")
                     log("XHR-BODY from $url: $text")
                 }
+                "xhr-response" -> {
+                    val url = obj.optString("url")
+                    val body = obj.optString("body")
+                    log("BRIDGE-RAW kind=xhr-response url=${url.take(80)}")
+                    val streamUrl = Regex(
+                        """https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""",
+                        RegexOption.IGNORE_CASE
+                    ).find(body)?.value
+                    
+                    if (streamUrl != null && completed.compareAndSet(false, true)) {
+                        Log.i("FaselHD", "BRIDGE-XHR-HIT via=xhr-response resolved=$streamUrl")
+                        onMediaUrl(streamUrl)
+                    }
+                }
                 "candidate" -> {
                     val url = obj.optString("url")
                     val via = obj.optString("via").ifBlank { obj.optString("kind") }
@@ -518,9 +532,13 @@ class FaselHDProvider : MainAPI() {
           var text = "";
           try { text = this.responseType === "" || this.responseType === "text" ? this.responseText : ""; } catch (e) {}
           if (text) {
-             if (text.includes('.m3u8') || text.includes('.mp4')) {
+             if (text.indexOf(".m3u8") !== -1 || text.indexOf(".mp4") !== -1 || text.indexOf("sources") !== -1 || text.indexOf("file") !== -1) {
                 var m = text.match(/https?:\/\/[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*/i);
-                if (m) post({ kind: "XHR-STREAM", url: finalUrl, text: m[0] });
+                if (m) {
+                    post({ kind: "XHR-STREAM", url: finalUrl, text: m[0] });
+                } else {
+                    post({ kind: "xhr-response", url: finalUrl, body: text });
+                }
              } else if (text.length > 0 && text.length < 5000) {
                 post({ kind: "XHR-BODY", url: finalUrl, text: text.substring(0, 500) });
              }
@@ -909,6 +927,11 @@ class FaselHDProvider : MainAPI() {
                             return null
                         }
 
+                        if (u.contains("071kk.com/500")) {
+                            Log.i("FaselHD", "WV-NATIVE-XHR gen=${session.gen} 071kk/5007 — letting WebView handle natively")
+                            return null
+                        }
+
                         if (!isMain && u.contains("playertoken")) {
                             Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activeUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
                         }
@@ -1039,7 +1062,7 @@ class FaselHDProvider : MainAPI() {
                                         }
 
                                         val sinceGate = if (session.gatePassedAt > 0) System.currentTimeMillis() - session.gatePassedAt else 0L
-                                        if (sinceGate > 4000L && !session.streamFound.get()) {
+                                        if (sinceGate > 2000L && !session.streamFound.get()) {
                                             Log.i("FaselHD", "Gen ${session.gen} POST-GATE-TIMEOUT after ${sinceGate}ms, aborting")
                                             failedTokenUrls.add(playerUrl)
                                             session.completeFailure("POST_GATE_TIMEOUT")
@@ -1334,7 +1357,26 @@ class FaselHDProvider : MainAPI() {
         var foundStream = false
         var lastCandidate = "none"
 
-        for ((index, rawPlayerUrl) in uniquePlayerUrls.withIndex()) {
+        for (index in uniquePlayerUrls.indices) {
+            val rawPlayerUrl = if (index > 0) {
+                Log.i("FaselHD", "CANDIDATE-REFRESH fetching fresh HTML for candidate $index")
+                val freshHtml = runBlocking { safeGet(pageUrl, pageUrl)?.html() } ?: ""
+                val freshUrls = extractEpisodePlayerUrls(freshHtml, pageUrl).toMutableList()
+                
+                // Also extract from multi-tabs in case first extraction missed them
+                val host2 = resolveHost()
+                org.jsoup.Jsoup.parse(freshHtml).select("ul.tabs-ul li").sortedByDescending { it.hasClass("active") }.forEach { li ->
+                    Regex("""(?:playertoken|player_token)=([^'"]+)""", RegexOption.IGNORE_CASE).find(li.attr("onclick"))?.groupValues?.get(1)?.let { token ->
+                        freshUrls.add("$host2/videoplayer?playertoken=$token")
+                    }
+                }
+                
+                val distinctFresh = freshUrls.map { normalizeUrl(it, host2) }.distinct()
+                distinctFresh.getOrNull(index) ?: uniquePlayerUrls[index]
+            } else {
+                uniquePlayerUrls[index]
+            }
+
             if (index > 0) {
                 val delayMs = if (index == 1) 1_500L else 3_000L
                 Log.i("FaselHD", "CANDIDATE-DELAY ${delayMs}ms before candidate $index")
