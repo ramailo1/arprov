@@ -233,7 +233,7 @@ class FaselHDProvider : MainAPI() {
     )
 
     private val baseDomain = "faselhdx.bid"
-    override var mainUrl = "https://web31712x.$baseDomain"
+    override var mainUrl = "https://web31818x.$baseDomain"
 
     private var userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
@@ -934,8 +934,15 @@ class FaselHDProvider : MainAPI() {
                         
                         if (status == 404 || (status == 403 && isMainFrame)) {
                             println("FaselHD: [Gen ${session.gen}] $status encountered for target URL, aborting sequence.")
-                            failedTokenUrls.add(playerUrl)
-                            session.completeFailure("FAILHTTP$status")
+                            val activeUrl = view?.tag as? String
+                            val isMainPlayerUrl = isMainFrame && activeUrl != null && request?.url?.toString()?.normalizeHttpUrl()?.substringBefore("#") == activeUrl.normalizeHttpUrl().substringBefore("#")
+                            if (isMainPlayerUrl) {
+                                // DO NOT ABORT on main frame failure — let probe/watchdog handle it
+                                Log.w("FaselHD", "WV-HTTP-ERR gen=${session.gen} status=${errorResponse?.statusCode} on playerUrl — keeping session alive")
+                            } else {
+                                failedTokenUrls.add(playerUrl)
+                                session.completeFailure("FAILHTTP$status")
+                            }
                         }
                     }
                     
@@ -1009,25 +1016,23 @@ class FaselHDProvider : MainAPI() {
                             }
                         }
 
-                        // New Fix A: Synchronous Hook Injection via cached HTML
-                        if (isMain && u.contains("videoplayer") && u.contains("playertoken") && cachedPlayerHtml != null) {
-                            val hookScript = buildJwHookScript()
-                            val html = cachedPlayerHtml!!
-                            cachedPlayerHtml = null
-
-                            val injected = html.replace(
-                                "<head>",
-                                "<head><script type=\"text/javascript\">$hookScript</script>",
-                                ignoreCase = true
-                            )
-                            Log.i("FaselHD", "WV-INJECT-HTML gen=${session.gen} url=$u")
-                            return WebResourceResponse(
-                                "text/html", "UTF-8",
-                                injected.byteInputStream(Charsets.UTF_8)
-                            )
-                        }
-
                         if (sameMainPlayer) {
+                            if (cachedPlayerHtml != null) {
+                                val hookScript = buildJwHookScript()
+                                val html = cachedPlayerHtml!!
+                                cachedPlayerHtml = null
+
+                                val injected = html.replace(
+                                    "<head>",
+                                    "<head><script type=\"text/javascript\">$hookScript</script>",
+                                    ignoreCase = true
+                                )
+                                Log.i("FaselHD", "WV-INJECT-HTML gen=${session.gen} url=$u")
+                                return WebResourceResponse(
+                                    "text/html", "UTF-8",
+                                    injected.byteInputStream(Charsets.UTF_8)
+                                )
+                            }
                             Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} exact main-frame playerUrl")
                             return null
                         }
