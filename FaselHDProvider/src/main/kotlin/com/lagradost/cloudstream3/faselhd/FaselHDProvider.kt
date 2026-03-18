@@ -529,7 +529,11 @@ class FaselHDProvider : MainAPI() {
       this.addEventListener("load", function() {
         try {
           var finalUrl = this.responseURL || this.__faselUrl || location.href;
-          log("PROBE-XHR url=" + finalUrl);
+          var isNoisy = finalUrl.indexOf("oyo4d.com") !== -1 || finalUrl.indexOf("fleraprt.com") !== -1 || 
+                        finalUrl.indexOf("tzegilo.com") !== -1 || (finalUrl.indexOf("071kk.com") !== -1 && finalUrl.indexOf("5007") === -1);
+          if (!isNoisy) {
+            log("PROBE-XHR url=" + finalUrl);
+          }
           if (looksMedia(finalUrl)) once(abs(finalUrl, location.href), "xhr.url");
 
           var text = "";
@@ -891,11 +895,18 @@ class FaselHDProvider : MainAPI() {
                     pageUrl = playerUrl,
                     completed = completed,
                     onMediaUrl = { mediaUrl ->
+                        if (activeSession.get()?.gen != session.gen) return@ProbeBridge
                         Log.i("FaselHD", "Gen ${session.gen} Resolved media => $mediaUrl")
                         session.completeSuccess(mediaUrl)
                     },
-                    log = { msg -> Log.i("FaselHD", "Gen ${session.gen} $msg") },
-                    onActivity = { session.lastXhrAt = System.currentTimeMillis() }
+                    log = { msg -> 
+                        if (activeSession.get()?.gen != session.gen) return@ProbeBridge
+                        Log.i("FaselHD", "Gen ${session.gen} $msg") 
+                    },
+                    onActivity = { 
+                        if (activeSession.get()?.gen != session.gen) return@ProbeBridge
+                        session.lastXhrAt = System.currentTimeMillis() 
+                    }
                 )
                 wv.addJavascriptInterface(bridge, "FaselProbe")
                 
@@ -932,7 +943,7 @@ class FaselHDProvider : MainAPI() {
                         val status = errorResponse?.statusCode ?: 0
                         val isMainFrame = request?.isForMainFrame == true
                         
-                        if (status == 404 || (status == 403 && isMainFrame)) {
+                        if ((status == 404 || status == 403) && isMainFrame) {
                             println("FaselHD: [Gen ${session.gen}] $status encountered for target URL, aborting sequence.")
                             val activeUrl = view?.tag as? String
                             val isMainPlayerUrl = isMainFrame && activeUrl != null && request?.url?.toString()?.normalizeHttpUrl()?.substringBefore("#") == activeUrl.normalizeHttpUrl().substringBefore("#")
@@ -1020,7 +1031,6 @@ class FaselHDProvider : MainAPI() {
                             if (cachedPlayerHtml != null) {
                                 val hookScript = buildJwHookScript()
                                 val html = cachedPlayerHtml!!
-                                cachedPlayerHtml = null
 
                                 val injected = html.replace(
                                     "<head>",
@@ -1310,6 +1320,7 @@ class FaselHDProvider : MainAPI() {
         println("FaselHD: loadLinks for data -> $data")
         failedTokenUrls.clear()
         tokenClaimed.clear()
+        val attemptedPlayerUrls = mutableSetOf<String>()
 
         val host = resolveHost()
         val pageUrl = normalizeUrl(data, host)
@@ -1411,9 +1422,21 @@ class FaselHDProvider : MainAPI() {
                 }
                 
                 val distinctFresh = freshUrls.map { normalizeUrl(it, host2) }.distinct()
-                distinctFresh.getOrNull(index) ?: uniquePlayerUrls[index]
+                var newRawUrl: String? = null
+                for (candidate in distinctFresh) {
+                    if (candidate !in attemptedPlayerUrls) {
+                        newRawUrl = candidate
+                        break
+                    }
+                }
+                newRawUrl ?: uniquePlayerUrls.getOrNull(index) ?: continue
             } else {
                 uniquePlayerUrls[index]
+            }
+
+            if (!attemptedPlayerUrls.add(rawPlayerUrl)) {
+                Log.i("FaselHD", "CANDIDATE-SKIP already attempted: ${rawPlayerUrl.take(60)}")
+                continue
             }
 
             if (index > 0) {
