@@ -966,9 +966,18 @@ class FaselHDProvider : MainAPI() {
 
                                 val response = app.baseClient.newCall(nativeRequest).execute()
                                 val bodyBytes = response.body?.bytes() ?: byteArrayOf()
-                                val bodyText = String(bodyBytes, Charsets.UTF_8)
+                                val contentTypeHeader = response.header("Content-Type").orEmpty()
+                                val mime = contentTypeHeader.substringBefore(";").ifBlank { "application/json" }
+                                val charset = Regex("charset=([^;]+)", RegexOption.IGNORE_CASE)
+                                    .find(contentTypeHeader)?.groupValues?.get(1) ?: "UTF-8"
 
-                                Log.i("FaselHD", "WV-5007-BODY gen=${session.gen} len=${bodyBytes.size} sample=${bodyText.take(300)}")
+                                val bodyText = try {
+                                    String(bodyBytes, charset(charset))
+                                } catch (e: Exception) {
+                                    String(bodyBytes, Charsets.UTF_8)
+                                }
+
+                                Log.i("FaselHD", "WV-5007-BODY gen=${session.gen} len=${bodyBytes.size} mime=$mime charset=$charset sample=${bodyText.take(300)}")
 
                                 val m3u8 = Regex(""""file"\s*:\s*"(https?://[^"]*\.m3u8[^"]*)"""")
                                     .find(bodyText)?.groupValues?.get(1)
@@ -981,11 +990,6 @@ class FaselHDProvider : MainAPI() {
                                 } else {
                                     Log.w("FaselHD", "WV-5007-BODY gen=${session.gen} no m3u8 in response, body=$bodyText")
                                 }
-
-                                val contentTypeHeader = response.header("Content-Type").orEmpty()
-                                val mime = contentTypeHeader.substringBefore(";").ifBlank { "application/json" }
-                                val charset = Regex("charset=([^;]+)", RegexOption.IGNORE_CASE)
-                                    .find(contentTypeHeader)?.groupValues?.get(1) ?: "UTF-8"
 
                                 val respHeaders = response.headers.names()
                                     .filterNot { it.equals("Content-Encoding", true) || it.equals("Content-Length", true) }
@@ -1005,11 +1009,6 @@ class FaselHDProvider : MainAPI() {
                             }
                         }
 
-                        if (sameMainPlayer) {
-                            Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} exact main-frame playerUrl")
-                            return null
-                        }
-
                         // New Fix A: Synchronous Hook Injection via cached HTML
                         if (isMain && u.contains("videoplayer") && u.contains("playertoken") && cachedPlayerHtml != null) {
                             val hookScript = buildJwHookScript()
@@ -1026,6 +1025,11 @@ class FaselHDProvider : MainAPI() {
                                 "text/html", "UTF-8",
                                 injected.byteInputStream(Charsets.UTF_8)
                             )
+                        }
+
+                        if (sameMainPlayer) {
+                            Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} exact main-frame playerUrl")
+                            return null
                         }
 
                         // Native interception is the primary path for nested iframe players
