@@ -137,10 +137,12 @@ private class ProbeBridge(
     private val completed: AtomicBoolean,
     private val onMediaUrl: (String) -> Unit,
     private val log: (String) -> Unit,
+    private val onActivity: () -> Unit = {}
 ) {
     @JavascriptInterface
     fun post(raw: String?) {
         if (raw.isNullOrBlank() || completed.get()) return
+        onActivity()
 
         try {
             val obj = JSONObject(raw)
@@ -314,7 +316,8 @@ class FaselHDProvider : MainAPI() {
         val quietGateStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val captureWindowStarted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
         val closed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
-        @Volatile var gatePassedAt: Long = 0L
+        @Volatile var gatePassedAt: Long = 0L,
+        @Volatile var lastXhrAt: Long = System.currentTimeMillis()
     ) {
         fun completeSuccess(url: String) {
             if (streamFound.compareAndSet(false, true)) {
@@ -811,8 +814,32 @@ class FaselHDProvider : MainAPI() {
         val gen = captureGeneration.incrementAndGet()
         val session = CaptureSession(gen = gen, targetUrl = playerUrl)
         activeSession.set(session)
+        val startTime = System.currentTimeMillis()
         
         this@FaselHDProvider.cachedPlayerHtml = cachedHtml
+
+        // Rolling Watchdog
+        val watchdog = ioScope.launch {
+            while (!session.streamFound.get() && !session.closed.get()) {
+                delay(1000)
+                val now = System.currentTimeMillis()
+                val sinceLastXhr = now - session.lastXhrAt
+                val sinceGate = if (session.gatePassedAt > 0) now - session.gatePassedAt else -1L
+                
+                if (session.gatePassedAt > 0) {
+                    if (sinceLastXhr > 3000L) {
+                        Log.i("FaselHD", "Gen $gen WATCHDOG idle ${sinceLastXhr}ms, aborting")
+                        session.completeFailure("WATCHDOG_IDLE")
+                        break
+                    }
+                } else if ((now - startTime) > 28000L) {
+                    Log.i("FaselHD", "Gen $gen WATCHDOG gate never passed, aborting")
+                    session.completeFailure("GATE_NEVER_PASSED")
+                    break
+                }
+            }
+        }
+        session.result.invokeOnCompletion { watchdog.cancel() }
 
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
@@ -867,7 +894,8 @@ class FaselHDProvider : MainAPI() {
                         Log.i("FaselHD", "Gen ${session.gen} Resolved media => $mediaUrl")
                         session.completeSuccess(mediaUrl)
                     },
-                    log = { msg -> Log.i("FaselHD", "Gen ${session.gen} $msg") }
+                    log = { msg -> Log.i("FaselHD", "Gen ${session.gen} $msg") },
+                    onActivity = { session.lastXhrAt = System.currentTimeMillis() }
                 )
                 wv.addJavascriptInterface(bridge, "FaselProbe")
                 
@@ -1053,19 +1081,11 @@ class FaselHDProvider : MainAPI() {
                                         if (lastChallengeMs > lastOnPageFinishedMs) {
                                             return@postDelayed
                                         }
-                                        
-                                        val quiet = System.currentTimeMillis() - lastChallengeMs > 3000
+                                                                          val quiet = System.currentTimeMillis() - lastChallengeMs > 3000
                                         if (quiet && session.captureWindowStarted.compareAndSet(false, true)) {
                                             println("FaselHD: [Gen ${session.gen}] Gate passed. Re-injecting probe.")
                                             session.gatePassedAt = System.currentTimeMillis()
                                             injectJwProbe(view, session)
-                                        }
-
-                                        val sinceGate = if (session.gatePassedAt > 0) System.currentTimeMillis() - session.gatePassedAt else 0L
-                                        if (sinceGate > 2000L && !session.streamFound.get()) {
-                                            Log.i("FaselHD", "Gen ${session.gen} POST-GATE-TIMEOUT after ${sinceGate}ms, aborting")
-                                            failedTokenUrls.add(playerUrl)
-                                            session.completeFailure("POST_GATE_TIMEOUT")
                                         }
                                     }, i * checkInterval)
                                 }
@@ -1093,6 +1113,8 @@ class FaselHDProvider : MainAPI() {
             cachedPlayerHtml = null
             if (session.closed.compareAndSet(false, true)) {
                 activeSession.compareAndSet(session, null)
+                // Mutex removal moved to loadLinks to prevent race re-entry
+                // tokenClaimed.remove(playerUrl)
                 mainHandler.post {
                     runCatching { webView.stopLoading() }
                     runCatching { webView.destroy() }
@@ -1358,6 +1380,16 @@ class FaselHDProvider : MainAPI() {
         var lastCandidate = "none"
 
         for (index in uniquePlayerUrls.indices) {
+            if (index > 0) {
+                Log.i("FaselHD", "CANDIDATE-REFRESH clearing CF cookies before refetch")
+                withContext(Dispatchers.Main) {
+                    val cm = android.webkit.CookieManager.getInstance()
+                    val host = pageUrl.hostOrigin()
+                    cm.setCookie(host, "cf_clearance=; Max-Age=0; Path=/")
+                    cm.flush()
+                }
+            }
+
             val rawPlayerUrl = if (index > 0) {
                 Log.i("FaselHD", "CANDIDATE-REFRESH fetching fresh HTML for candidate $index")
                 val freshHtml = runBlocking { safeGet(pageUrl, pageUrl)?.html() } ?: ""
@@ -1388,74 +1420,81 @@ class FaselHDProvider : MainAPI() {
                 continue
             }
 
-            lastCandidate = rawPlayerUrl
-            val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
-            println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
+            try {
+                lastCandidate = rawPlayerUrl
+                val playerHost = java.net.URI(rawPlayerUrl).let { "${it.scheme}://${it.host}" }
+                println("FaselHD: Extracted playerUrl -> $rawPlayerUrl, playerHost -> $playerHost")
 
-            // Fix #1: Try SafeGet first to avoid single-use token consumption in WebView
-            val videoPageHtml = safeGet(
-                rawPlayerUrl, 
-                referer = pageUrl,
-                headers = mapOf("User-Agent" to USER_AGENT)
-            )?.html() ?: run {
-                Log.i("FaselHD", "SAFEGET-NULL falling back to WebView")
-                null
-            }
-            if (videoPageHtml != null) {
-                val jwFileRegex = Regex("""(?:["']file["']\s*:\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)""")
-                val jwSrcRegex  = Regex("""https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""", RegexOption.IGNORE_CASE)
+                // Fix #1: Try SafeGet first to avoid single-use token consumption in WebView
+                val videoPageHtml = safeGet(
+                    rawPlayerUrl, 
+                    referer = pageUrl,
+                    headers = mapOf("User-Agent" to USER_AGENT)
+                )?.html() ?: run {
+                    Log.i("FaselHD", "SAFEGET-NULL falling back to WebView")
+                    null
+                }
+                if (videoPageHtml != null) {
+                    val jwFileRegex = Regex("""(?:["']file["']\s*:\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)""")
+                    val jwSrcRegex  = Regex("""https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""", RegexOption.IGNORE_CASE)
 
-                val streamUrl = jwFileRegex.find(videoPageHtml)?.groupValues?.get(1)
-                    ?: jwSrcRegex.find(videoPageHtml)?.value
+                    val streamUrl = jwFileRegex.find(videoPageHtml)?.groupValues?.get(1)
+                        ?: jwSrcRegex.find(videoPageHtml)?.value
 
-                if (streamUrl != null) {
-                    Log.i("FaselHD", "SAFEGET-HIT url=$streamUrl")
+                    if (streamUrl != null) {
+                        Log.i("FaselHD", "SAFEGET-HIT url=$streamUrl")
+                        val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
+                        callback(
+                            newExtractorLink(
+                                name,
+                                serverName,
+                                streamUrl,
+                                if (streamUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                referer = rawPlayerUrl
+                                quality = getVideoQuality(streamUrl)
+                            }
+                        )
+                        foundStream = true
+                        Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.SUCCESS_MEDIA.name} lastPage=$pageUrl lastCandidate=$rawPlayerUrl")
+                        break
+                    }
+                    Log.i("FaselHD", "SAFEGET-MISS url=$rawPlayerUrl sample=${videoPageHtml.take(500).replace("\n", " ")}")
+                }
+
+                val resolved = extractM3u8ViaWebView(
+                    playerUrl = rawPlayerUrl,
+                    playerHost = playerHost,
+                    referer = pageUrl,
+                    cachedHtml = videoPageHtml
+                )
+                println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
+
+                if (!resolved.isNullOrBlank() && !resolved.startsWith("FAIL_")) {
                     val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
                     callback(
                         newExtractorLink(
                             name,
                             serverName,
-                            streamUrl,
-                            if (streamUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            resolved,
+                            if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
                             referer = rawPlayerUrl
-                            quality = getVideoQuality(streamUrl)
+                            quality = getVideoQuality(resolved)
                         }
                     )
                     foundStream = true
                     Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.SUCCESS_MEDIA.name} lastPage=$pageUrl lastCandidate=$rawPlayerUrl")
                     break
+                } else {
+                    Log.i("FaselHD", "CANDIDATE-FAIL reason=${resolved ?: "TIMEOUT"} url=$rawPlayerUrl")
+                    Log.i("FaselHD", "CANDIDATE-NEXT remaining=${uniquePlayerUrls.size - index - 1}")
                 }
-                Log.i("FaselHD", "SAFEGET-MISS url=$rawPlayerUrl sample=${videoPageHtml.take(500).replace("\n", " ")}")
-            }
-
-            val resolved = extractM3u8ViaWebView(
-                playerUrl = rawPlayerUrl,
-                playerHost = playerHost,
-                referer = pageUrl,
-                cachedHtml = videoPageHtml
-            )
-            println("FaselHD: extractM3u8ViaWebView returned -> $resolved")
-
-            if (!resolved.isNullOrBlank() && !resolved.startsWith("FAIL_")) {
-                val serverName = if (uniquePlayerUrls.size > 1) "$name Server ${index + 1}" else name
-                callback(
-                    newExtractorLink(
-                        name,
-                        serverName,
-                        resolved,
-                        if (resolved.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        referer = rawPlayerUrl
-                        quality = getVideoQuality(resolved)
-                    }
-                )
-                foundStream = true
-                Log.i("FaselHD", "RESOLVE-EXIT generation=-1 exit=${ResolveExit.SUCCESS_MEDIA.name} lastPage=$pageUrl lastCandidate=$rawPlayerUrl")
-                break
-            } else {
-                Log.i("FaselHD", "CANDIDATE-FAIL reason=${resolved ?: "TIMEOUT"} url=$rawPlayerUrl")
-                Log.i("FaselHD", "CANDIDATE-NEXT remaining=${uniquePlayerUrls.size - index - 1}")
+            } catch (e: Throwable) {
+                Log.e("FaselHD", "Candidate $index extraction failed: ${e.message}")
+            } finally {
+                // Remove from claim ONLY when entire candidate slot is finished
+                tokenClaimed.remove(rawPlayerUrl)
             }
         }
 
