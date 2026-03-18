@@ -946,14 +946,11 @@ class FaselHDProvider : MainAPI() {
                         val u = request.url.toString()
                         val isMain = request.isForMainFrame
                         val activeUrl = view.tag as? String
-                        Log.i("FaselHD", "WV-INTERCEPT gen=${session.gen} url=$u main=$isMain")
-
-                        // Fix C: For the player URL itself: skip OkHttp → let WebView handle natively
-                        // The WebView's TLS fingerprint already passes CF; OkHttp's doesn't.
-                        if (activeUrl != null && u.startsWith(activeUrl.substringBefore("?").take(80))) {
-                            Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} playerUrl — skipping OkHttp")
-                            return null
-                        }
+                        val sameMainPlayer =
+                            isMain &&
+                            activeUrl != null &&
+                            u.normalizeHttpUrl().substringBefore("#") ==
+                            activeUrl.normalizeHttpUrl().substringBefore("#")
 
                         if (u.contains("071kk.com/5007")) {
                             Log.i("FaselHD", "WV-5007-INTERCEPT gen=${session.gen} making native OkHttp call")
@@ -985,14 +982,21 @@ class FaselHDProvider : MainAPI() {
                                     Log.w("FaselHD", "WV-5007-BODY gen=${session.gen} no m3u8 in response, body=$bodyText")
                                 }
 
-                                val ct = response.header("Content-Type") ?: "application/json"
-                                val enc = response.header("Content-Encoding") ?: "utf-8"
+                                val contentTypeHeader = response.header("Content-Type").orEmpty()
+                                val mime = contentTypeHeader.substringBefore(";").ifBlank { "application/json" }
+                                val charset = Regex("charset=([^;]+)", RegexOption.IGNORE_CASE)
+                                    .find(contentTypeHeader)?.groupValues?.get(1) ?: "UTF-8"
+
+                                val respHeaders = response.headers.names()
+                                    .filterNot { it.equals("Content-Encoding", true) || it.equals("Content-Length", true) }
+                                    .associateWith { name -> response.header(name).orEmpty() }
+
                                 WebResourceResponse(
-                                    ct.substringBefore(";"),
-                                    enc,
+                                    mime,
+                                    charset,
                                     response.code,
-                                    "OK",
-                                    response.headers.toMap().mapValues { it.value },
+                                    response.message.ifBlank { "OK" },
+                                    respHeaders,
                                     bodyBytes.inputStream()
                                 )
                             } catch (e: Exception) {
@@ -1001,56 +1005,9 @@ class FaselHDProvider : MainAPI() {
                             }
                         }
 
-                        if (!isMain && u.contains("playertoken")) {
-                            Log.i("FaselHD", "WV-SUB-DEBUG gen=${session.gen} activeUrl=${activeUrl != null} cachedHtml=${cachedPlayerHtml != null} url=${u.take(80)}")
-                        }
-
-                        // Fix 2: Intercept JW Player XHR at Native Layer to bypass 403
-                        if (!isMain
-                            && activeUrl != null
-                            && "videoplayer" in u
-                            && "playertoken" in u
-                        ) {
-                            Log.i("FaselHD", "WV-XHR-INTERCEPT gen=${session.gen} url=$u")
-                            val currentCfClearance = cfKiller.savedCookies[playerHost.removePrefix("https://").removePrefix("http://")]?.get("cf_clearance") ?: ""
-                            
-                            val okhttpResponse = runBlocking {
-                                app.get(u,
-                                    headers = mapOf(
-                                        "Accept"           to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                                        "Accept-Language"  to "en-US,en;q=0.9,ar;q=0.8",
-                                        "Referer"          to (activeUrl ?: playerUrl),
-                                        "User-Agent"       to userAgent,
-                                        "Cache-Control"    to "no-cache"
-                                    ),
-                                    cookies = mapOf("cf_clearance" to currentCfClearance)
-                                )
-                            }
-
-                            val body = okhttpResponse.text
-                            Log.i("FaselHD", "WV-XHR-OHTTP gen=${session.gen} status=${okhttpResponse.code} bodyLen=${body.length}")
-
-                            val streamUrl = Regex(
-                                """https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""",
-                                RegexOption.IGNORE_CASE
-                            ).find(body)?.value
-
-                            if (streamUrl != null) {
-                                Log.i("FaselHD", "WV-XHR-HIT gen=${session.gen} url=$streamUrl")
-                                session.completeSuccess(streamUrl)
-                            } else {
-                                Log.i("FaselHD", "WV-XHR-MISS gen=${session.gen} body=${body.take(300)}")
-                            }
-
-                            val contentType = okhttpResponse.headers["content-type"] ?: "application/json"
-                            return WebResourceResponse(
-                                contentType.substringBefore(";").trim(),
-                                "UTF-8",
-                                200,
-                                "OK",
-                                mapOf("Access-Control-Allow-Origin" to "*"),
-                                body.byteInputStream(Charsets.UTF_8)
-                            )
+                        if (sameMainPlayer) {
+                            Log.i("FaselHD", "WV-NATIVE-PASS gen=${session.gen} exact main-frame playerUrl")
+                            return null
                         }
 
                         // New Fix A: Synchronous Hook Injection via cached HTML
