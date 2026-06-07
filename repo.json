@@ -1,81 +1,8 @@
 {
-  "name": "CloudStream Extensions Arabic - نظيف ومنظم",
-  "description": "إضافات عربية متقدمة لـ CloudStream - بشكل نظيف ومنظم مع دعم 21+ موقع",
-  "author": "ramailo1",
-  "version": "2.1.0",
-  "language": "ar",
-  "repository": {
-    "url": "https://github.com/ramailo1/arprov",
-    "type": "git"
-  },
+  "name": "Arabic CloudStream Repo",
+  "description": "Arabic CloudStream extensions - FaselHD, Akwam, Anime4up and more",
+  "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/ramailo1/arprov/builds/plugins.json"
-  ],
-  "explanation": "Official Arabic repository for CloudStream",
-  "supportedSites": [
-    "Akwam",
-    "Anime4up",
-    "AnimeBlkom",
-    "Animeiat",
-    "ArabSeed",
-    "Cima4u",
-    "CimaClub",
-    "CimaLeek",
-    "CimaNow",
-    "EgyBest",
-    "FajerShow",
-    "FaselHD",
-    "Fushaar",
-    "MovizLands",
-    "Movizland",
-    "MyCima",
-    "QisatTv",
-    "Shahid4u",
-    "ShahidMBC",
-    "Tuk",
-    "TopCinema"
-  ],
-  "extractors": [
-    "StreamTape",
-    "Aflamy",
-    "DoodStream",
-    "MixDrop",
-    "MegaUp",
-    "FileMoon",
-    "GoStream",
-    "Govad",
-    "JWPlayer",
-    "LinkBox",
-    "Moshahda",
-    "MyVid",
-    "VidHD",
-    "Vidmoly",
-    "VoeSx"
-  ],
-  "features": [
-    "دعم 21+ موقع عربي ودولي",
-    "مستخرجات فيديو متقدمة",
-    "توثيق شامل بالعربية",
-    "بنية منظمة وسهلة التوسعة",
-    "اختبارات جودة مدمجة",
-    "تحديثات دورية"
-  ],
-  "installation": {
-    "primary": "https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json",
-    "fallback": "https://raw.githubusercontent.com/ramailo1/arprov/main/repo.json",
-    "manual": "https://github.com/ramailo1/arprov/releases",
-    "direct_download": "https://github.com/ramailo1/arprov/archive/main.zip"
-  },
-  "support": {
-    "issues": "https://github.com/ramailo1/arprov/issues",
-    "discussions": "https://github.com/ramailo1/arprov/discussions"
-  },
-  "license": "MIT",
-  "lastUpdated": "2026-02-15",
-  "quality": {
-    "successRate": 95,
-    "testCoverage": 90,
-    "documentation": "كامل",
-    "maintenance": "نشط"
-  }
+  ]
 }
