@@ -726,19 +726,30 @@ class FaselHDProvider : MainAPI() {
 
             println("FaselHD: Plain GET failed or blocked, trying CloudflareKiller for $url")
             mutex.withLock {
-                val cfRes = app.get(
-                    url,
-                    headers = headers(mainUrl, referer),
-                    interceptor = cfKiller,
-                    timeout = 120
-                )
-                val cfDoc = cfRes.document
-                if (cfRes.isSuccessful) {
-                    println("FaselHD: CloudflareKiller successful for $url")
-                    delay(2000)
-                    if (!isBlocked(cfDoc)) return@runCatching cfDoc
+                try {
+                    val cfRes = app.get(
+                        url,
+                        headers = headers(mainUrl, referer),
+                        interceptor = cfKiller,
+                        timeout = 120
+                    )
+                    val cfDoc = cfRes.document
+                    println("FaselHD: CloudflareKiller status=${cfRes.code} for $url")
+                    
+                    if (cfRes.isSuccessful) {
+                        delay(2000)
+                        if (!isBlocked(cfDoc)) {
+                            println("FaselHD: CloudflareKiller successfully bypassed for $url")
+                            return@runCatching cfDoc
+                        } else {
+                            println("FaselHD: CloudflareKiller returned 200 but HTML is still blocked! HTML snippet: ${cfDoc.body()?.text()?.take(200)}")
+                        }
+                    } else {
+                        println("FaselHD: CloudflareKiller returned non-success code ${cfRes.code}. HTML snippet: ${cfDoc.body()?.text()?.take(200)}")
+                    }
+                } catch (e: Exception) {
+                    println("FaselHD: CloudflareKiller threw exception: ${e.message}")
                 }
-                println("FaselHD: CloudflareKiller failed or still blocked for $url")
                 null
             }
         }.getOrNull()
