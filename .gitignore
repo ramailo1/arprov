@@ -96,3 +96,7 @@ kapt/
 # Misc test files added during debugging
 test_fasel.html
 test_fasel_*.html
+test_provider.ps1
+TestJsoup.kt
+TestRelative.kt
+test_jsoup.groovy
