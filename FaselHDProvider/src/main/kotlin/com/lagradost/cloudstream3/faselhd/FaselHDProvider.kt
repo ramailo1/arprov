@@ -729,8 +729,9 @@ class FaselHDProvider : MainAPI() {
             println("FaselHD: Plain GET failed or blocked, trying WebViewResolver for $url")
             mutex.withLock {
                 try {
-                    // This explicitly forces CloudStream to open a hidden WebView and solve Cloudflare/Turnstile
-                    val resolver = WebViewResolver(Regex("faselhdx\\.bid|fasel-hd\\.cam"))
+                    // We must NOT match the main URL, otherwise WebViewResolver stops immediately before Cloudflare runs.
+                    // We match a resource that is ONLY loaded after Cloudflare is bypassed (like the CDN or WP content).
+                    val resolver = WebViewResolver(Regex("faselhdcdn|wp-content|gstatic"))
                     resolver.resolveUsingWebView(
                         requestCreator("GET", url, headers = finalHeaders)
                     )
