@@ -1180,12 +1180,19 @@ class FaselHDProvider : MainAPI() {
         val url = if (page == 1) "$host${request.data}"
         else "$host${request.data.trimEnd('/')}/page/$page"
 
-        val doc = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
+        println("FaselHD Debug: getMainPage fetching url=$url")
+        val doc = safeGet(url, host) 
+        if (doc == null) {
+            println("FaselHD Debug: getMainPage safeGet returned null for url=$url")
+            return newHomePageResponse(request.name, emptyList())
+        }
 
         // Select all content items — slider + grid — then deduplicate by URL
-        val results = doc.select(
-            "div.postDiv, article, .entry-box, .blockMovie, .epDivHome, .swiper-slide"
-        ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val elements = doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome, .swiper-slide")
+        println("FaselHD Debug: getMainPage selector found ${elements.size} elements for url=$url")
+
+        val results = elements.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        println("FaselHD Debug: getMainPage mapped to ${results.size} distinct SearchResponses for url=$url")
 
         return newHomePageResponse(request.name, results)
     }
@@ -1197,17 +1204,26 @@ class FaselHDProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
+        val htmlClass = this.className()
         // Site uses <div class="h1"> for titles (confirmed from live HTML)
         val title = selectFirst("div.h1, .h1, div.h4, .h4, div.h5, .h5, .entry-title, h1, h2, h3, h4, h5")?.text()?.trim()
             ?: selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: return null
 
-        if (title.isBlank()) return null
+        if (title.isNullOrBlank()) {
+            println("FaselHD Debug: toSearchResult failed - title is null or blank for class=$htmlClass")
+            return null
+        }
 
-        var rawHref = selectFirst("a")?.attr("href") ?: return null
+        var rawHref = selectFirst("a")?.attr("href")
+        if (rawHref == null) {
+            println("FaselHD Debug: toSearchResult failed - rawHref is null for title=$title class=$htmlClass")
+            return null
+        }
+        
         if (rawHref.startsWith("/")) {
             rawHref = "$mainUrl$rawHref"
         } else if (!rawHref.startsWith("http")) {
+            println("FaselHD Debug: toSearchResult failed - rawHref ($rawHref) does not start with http for title=$title")
             return null
         }
 
@@ -1239,6 +1255,8 @@ class FaselHDProvider : MainAPI() {
         val isSeriesUrl = rawHref.contains("/series/") || rawHref.contains("/anime/") ||
             rawHref.contains("/tvshows/") || rawHref.contains("/asian-series/")
         val type = if (isEpisodeUrl || isSeriesUrl) TvType.TvSeries else TvType.Movie
+
+        println("FaselHD Debug: toSearchResult SUCCESS - title=$title, href=$href, type=$type")
 
         return newMovieSearchResponse(title, href, type) {
             posterUrl = poster?.takeIf { it.isNotBlank() }
