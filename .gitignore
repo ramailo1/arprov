@@ -100,3 +100,4 @@ test_provider.ps1
 TestJsoup.kt
 TestRelative.kt
 test_jsoup.groovy
+*.code-workspace
