@@ -1182,30 +1182,12 @@ class FaselHDProvider : MainAPI() {
 
         val doc = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
 
-        // Extract slider/featured items from the homepage hero banner (page 1 only)
-        val sliderResults = if (page == 1) {
-            doc.select(
-                ".owl-item .blockMovie, .owl-item article, " +
-                ".swiper-slide .blockMovie, .swiper-slide article, " +
-                ".sliderDiv .blockMovie, .sliderDiv article, " +
-                "#slider .blockMovie, #slider article, " +
-                ".carousel-item .blockMovie, .carousel-item article"
-            ).mapNotNull { it.toSearchResult() }
-        } else emptyList()
+        // Select all content items — slider + grid — then deduplicate by URL
+        val results = doc.select(
+            "div.postDiv, article, .entry-box, .blockMovie, .epDivHome"
+        ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
-        val results = doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome")
-            .filterNot { el ->
-                // Exclude items already captured in slider to avoid duplicates
-                el.parents().any { p ->
-                    p.hasClass("owl-item") || p.hasClass("swiper-slide") ||
-                    p.hasClass("sliderDiv") || p.id() == "slider" ||
-                    p.hasClass("carousel-item")
-                }
-            }
-            .mapNotNull { it.toSearchResult() }
-
-        val combined = (sliderResults + results).distinctBy { it.url }
-        return newHomePageResponse(request.name, combined)
+        return newHomePageResponse(request.name, results)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
