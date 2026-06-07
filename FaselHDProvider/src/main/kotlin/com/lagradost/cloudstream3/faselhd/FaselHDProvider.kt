@@ -18,6 +18,8 @@ import okhttp3.Cookie
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -249,6 +251,7 @@ class FaselHDProvider : MainAPI() {
     private val VIDEO_EXTENSIONS = listOf(".m3u8", ".mp4", ".ts", ".mpd", ".webm", ".mkv")
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
     private val ioScope = CoroutineScope(Dispatchers.IO)
+    private var resolvedHost: String? = null
 
 
     private fun isVideoMediaUrl(url: String): Boolean {
@@ -645,15 +648,35 @@ class FaselHDProvider : MainAPI() {
         val js = buildJwProbeJs()
         webView.evaluateJavascript(js, null)
     }
-    private suspend fun resolveHost(): String = runCatching {
-        println("FaselHD: Resolving host from $mainUrl")
-        val resp = app.get(mainUrl, allowRedirects = true, timeout = 10)
-        val uri = java.net.URL(resp.url.trimEnd('/'))
-        resp.okhttpResponse.close()
-        val host = "${uri.protocol}://${uri.host}"
-        println("FaselHD: Host resolved to $host")
-        host.also { mainUrl = it }
-    }.getOrDefault(mainUrl)
+    private suspend fun resolveHost(): String {
+        resolvedHost?.let { return it }
+        val hosts = listOf(
+            mainUrl,
+            "https://web6712x.faselhdx.bid",
+            "https://www.fasel-hd.cam",
+            "https://web31818x.faselhdx.bid"
+        ).distinct()
+
+        for (host in hosts) {
+            try {
+                println("FaselHD: Trying to resolve host: $host")
+                val resp = app.get(host, allowRedirects = true, timeout = 5)
+                if (resp.isSuccessful) {
+                    val uri = java.net.URL(resp.url.trimEnd('/'))
+                    resp.okhttpResponse.close()
+                    val resolved = "${uri.protocol}://${uri.host}"
+                    println("FaselHD: Host resolved successfully to $resolved")
+                    mainUrl = resolved
+                    resolvedHost = resolved
+                    return resolved
+                }
+                resp.okhttpResponse.close()
+            } catch (e: Throwable) {
+                println("FaselHD: Failed to resolve host $host: ${e.message}")
+            }
+        }
+        return mainUrl
+    }
 
     private fun normalizeUrl(url: String, host: String): String {
         if (!url.contains(baseDomain)) return url
@@ -1158,18 +1181,18 @@ class FaselHDProvider : MainAPI() {
         else "$host${request.data.trimEnd('/')}/page/$page"
 
         val doc = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
-        val results = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        val results = doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, results)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val host = resolveHost()
         val doc = safeGet("$host/?s=$query", host) ?: return emptyList()
-        return doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
+        return doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome").mapNotNull { it.toSearchResult() }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("div.h1, .entry-title, h3, .title")?.text()
+        val title = selectFirst("div.h1, .entry-title, h3, .title, .h5, h5, .h4, h4")?.text()
             ?: selectFirst("img")?.attr("alt")?.takeIf { it.isNotEmpty() }
             ?: return null
 
@@ -1204,6 +1227,49 @@ class FaselHDProvider : MainAPI() {
         }
     }
 
+    private data class ParsedSeason(val title: String, val url: String, val seasonNumber: Int)
+
+    private fun parseSeasonNumber(title: String): Int? {
+        val cleanTitle = title.lowercase()
+        val num = Regex("""\d+""").find(cleanTitle)?.value?.toIntOrNull()
+        if (num != null) return num
+
+        return when {
+            "الأول" in cleanTitle || "الاول" in cleanTitle || "first" in cleanTitle -> 1
+            "الثاني" in cleanTitle || "التاني" in cleanTitle || "second" in cleanTitle -> 2
+            "الثالث" in cleanTitle || "التالت" in cleanTitle || "third" in cleanTitle -> 3
+            "الرابع" in cleanTitle || "fourth" in cleanTitle -> 4
+            "الخامس" in cleanTitle || "fifth" in cleanTitle -> 5
+            "السادس" in cleanTitle || "sixth" in cleanTitle -> 6
+            "السابع" in cleanTitle || "seventh" in cleanTitle -> 7
+            "الثامن" in cleanTitle || "eighth" in cleanTitle -> 8
+            "التاسع" in cleanTitle || "ninth" in cleanTitle -> 9
+            "العاشر" in cleanTitle || "tenth" in cleanTitle -> 10
+            else -> null
+        }
+    }
+
+    private fun extractUrlFromOnclick(onclick: String, host: String): String? {
+        val pattern = Regex("""window\.location\.href\s*=\s*['"]([^'"]+)['"]""")
+        val match = pattern.find(onclick)?.groupValues?.get(1) ?: return null
+        return if (match.startsWith("http")) match else "$host${if (match.startsWith("/")) "" else "/"}$match"
+    }
+
+    private fun parseEpisodesFromDoc(doc: Document, host: String): List<Episode> {
+        val rawLinks = doc.select(
+            "#epAll a, div.epAll a, #DivEpisodesList a, .episodes-list a, a[href*='/episodes/']"
+        )
+        return rawLinks.mapIndexed { idx, el ->
+            val epUrl = normalizeUrl(el.attr("abs:href"), host)
+            val epTitle = el.text().trim()
+            val epNum = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull() ?: (idx + 1)
+            newEpisode(epUrl) {
+                name = epTitle
+                episode = epNum
+            }
+        }.distinctBy { it.data }
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         println("FaselHD: load -> $url")
         val host = resolveHost()
@@ -1231,14 +1297,85 @@ class FaselHDProvider : MainAPI() {
             .firstOrNull()?.text()?.toIntOrNull()
         val recs = doc.select("div.postDiv, article, .entry-box").mapNotNull { it.toSearchResult() }
 
-        val isEpisodePage = "/episodes/" in pageUrl
+        val isEpisodePage = "/episodes/" in pageUrl || "/episode/" in pageUrl
         val isSeries =
             "/series/" in pageUrl || "/tvshow" in pageUrl ||
                 "/anime/" in pageUrl || "/asian-series/" in pageUrl ||
-                doc.select("#seasonList, div.seasonLoop, #epAll, div.epAll, #DivEpisodesList").isNotEmpty() ||
+                doc.select("#seasonList, div.seasonLoop, .seasonDiv, #epAll, div.epAll, #DivEpisodesList").isNotEmpty() ||
                 doc.select("a[href*='/episodes/']").isNotEmpty()
 
         return when {
+            isSeries -> {
+                val seasons = mutableListOf<ParsedSeason>()
+                val seasonElements = doc.select("#seasonList a, div.seasonLoop a, #seasonList .seasonDiv, div.seasonLoop .seasonDiv, .seasonDiv")
+                
+                seasonElements.forEachIndexed { idx, el ->
+                    val sTitle = el.text().trim()
+                    val url = if (el.tagName() == "a") {
+                        el.attr("abs:href")
+                    } else {
+                        val onclick = el.attr("onclick")
+                        if (onclick.isNotEmpty()) extractUrlFromOnclick(onclick, host) else null
+                    }
+                    if (!url.isNullOrBlank()) {
+                        val sUrl = normalizeUrl(url, host)
+                        val sNum = parseSeasonNumber(sTitle) ?: (idx + 1)
+                        seasons.add(ParsedSeason(sTitle, sUrl, sNum))
+                    }
+                }
+
+                val allEpisodes = mutableListOf<Episode>()
+
+                if (seasons.isEmpty()) {
+                    val eps = parseEpisodesFromDoc(doc, host)
+                    eps.forEach { it.season = 1 }
+                    allEpisodes.addAll(eps)
+                } else {
+                    val deferreds = seasons.distinctBy { it.url }.map { season ->
+                        ioScope.async {
+                            try {
+                                val sDoc = if (season.url == pageUrl) doc else safeGet(season.url, pageUrl)
+                                if (sDoc != null) {
+                                    val eps = parseEpisodesFromDoc(sDoc, host)
+                                    eps.forEach { it.season = season.seasonNumber }
+                                    eps
+                                } else {
+                                    emptyList()
+                                }
+                            } catch (e: Throwable) {
+                                println("FaselHD: Error fetching season ${season.seasonNumber}: ${e.message}")
+                                emptyList()
+                            }
+                        }
+                    }
+                    val results = deferreds.awaitAll()
+                    results.forEach { allEpisodes.addAll(it) }
+                }
+
+                // If it is an episode page and the current pageUrl itself is not in the list,
+                // add it explicitly.
+                if (isEpisodePage && allEpisodes.none { it.data == pageUrl }) {
+                    val epNum = Regex("""\d+""").find(title)?.value?.toIntOrNull() ?: 1
+                    allEpisodes.add(newEpisode(pageUrl) {
+                        name = title
+                        episode = epNum
+                        season = 1
+                    })
+                }
+
+                val sortedEpisodes = allEpisodes.distinctBy { it.data }
+                    .sortedWith(compareBy({ it.season ?: 1 }, { it.episode ?: 1 }))
+
+                newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, sortedEpisodes) {
+                    posterUrl = finalPoster
+                    backgroundPosterUrl = finalPoster
+                    this.year = year
+                    plot = desc
+                    recommendations = recs
+                    buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
+                }
+            }
+
             isEpisodePage -> {
                 newTvSeriesLoadResponse(
                     title,
@@ -1250,42 +1387,6 @@ class FaselHDProvider : MainAPI() {
                     backgroundPosterUrl = finalPoster
                     this.year = year
                     plot = desc
-                    buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
-                }
-            }
-
-            isSeries -> {
-                val rawLinks = doc.select(
-                    "#epAll a, div.epAll a, #DivEpisodesList a, .episodes-list a, a[href*='/episodes/']"
-                )
-
-                val episodes = if (rawLinks.isNotEmpty()) {
-                    rawLinks.mapIndexed { idx, el ->
-                        val epUrl = normalizeUrl(el.attr("abs:href"), host)
-                        val epTitle = el.text().trim()
-                        val epNum = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull() ?: (idx + 1)
-                        newEpisode(epUrl) {
-                            name = epTitle
-                            episode = epNum
-                        }
-                    }.distinctBy { it.data }
-                } else {
-                    doc.select("#seasonList a, div.seasonLoop a").mapIndexed { idx, el ->
-                        val seasonUrl = normalizeUrl(el.attr("abs:href"), host)
-                        val seasonTitle = el.text().trim()
-                        newEpisode(seasonUrl) {
-                            name = seasonTitle
-                            season = Regex("""\d+""").find(seasonTitle)?.value?.toIntOrNull() ?: (idx + 1)
-                        }
-                    }
-                }
-
-                newTvSeriesLoadResponse(title, pageUrl, TvType.TvSeries, episodes) {
-                    posterUrl = finalPoster
-                    backgroundPosterUrl = finalPoster
-                    this.year = year
-                    plot = desc
-                    recommendations = recs
                     buildPosterHeaders(finalPoster, pageUrl)?.let { posterHeaders = it }
                 }
             }

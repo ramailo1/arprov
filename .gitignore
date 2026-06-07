@@ -5,6 +5,9 @@ gradle-app.setting
 !gradle-wrapper.jar
 !gradle-wrapper.properties
 
+# CloudStream plugin packages (compiled output)
+*.cs3
+
 # IDE files
 .idea/
 *.iml
@@ -49,11 +52,15 @@ pip-log.txt
 *.nar
 hs_err_pid*
 
-# Android
+# Android / Gradle
 local.properties
 *.apk
 *.ap_
+*.aab
 *.dex
+*.keystore
+*.jks
+keystore.properties
 
 # Reports and test outputs
 reports/
@@ -77,3 +84,15 @@ yarn-error.log*
 
 # Debug backups
 *.debug
+
+# Gradle user home cache (avoid committing local cache)
+.gradle/
+gradle/wrapper/gradle-wrapper.jar
+
+# Generated source / kapt
+generated/
+kapt/
+
+# Misc test files added during debugging
+test_fasel.html
+test_fasel_*.html
