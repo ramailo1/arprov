@@ -1181,8 +1181,31 @@ class FaselHDProvider : MainAPI() {
         else "$host${request.data.trimEnd('/')}/page/$page"
 
         val doc = safeGet(url, host) ?: return newHomePageResponse(request.name, emptyList())
-        val results = doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, results)
+
+        // Extract slider/featured items from the homepage hero banner (page 1 only)
+        val sliderResults = if (page == 1) {
+            doc.select(
+                ".owl-item .blockMovie, .owl-item article, " +
+                ".swiper-slide .blockMovie, .swiper-slide article, " +
+                ".sliderDiv .blockMovie, .sliderDiv article, " +
+                "#slider .blockMovie, #slider article, " +
+                ".carousel-item .blockMovie, .carousel-item article"
+            ).mapNotNull { it.toSearchResult() }
+        } else emptyList()
+
+        val results = doc.select("div.postDiv, article, .entry-box, .blockMovie, .epDivHome")
+            .filterNot { el ->
+                // Exclude items already captured in slider to avoid duplicates
+                el.parents().any { p ->
+                    p.hasClass("owl-item") || p.hasClass("swiper-slide") ||
+                    p.hasClass("sliderDiv") || p.id() == "slider" ||
+                    p.hasClass("carousel-item")
+                }
+            }
+            .mapNotNull { it.toSearchResult() }
+
+        val combined = (sliderResults + results).distinctBy { it.url }
+        return newHomePageResponse(request.name, combined)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -1230,22 +1253,50 @@ class FaselHDProvider : MainAPI() {
     private data class ParsedSeason(val title: String, val url: String, val seasonNumber: Int)
 
     private fun parseSeasonNumber(title: String): Int? {
-        val cleanTitle = title.lowercase()
-        val num = Regex("""\d+""").find(cleanTitle)?.value?.toIntOrNull()
-        if (num != null) return num
+        val cleanTitle = title.trim()
+        val lowerTitle = cleanTitle.lowercase()
 
+        // Priority 1: Arabic ordinal words (الموسم الأول = S1, الموسم الثاني = S2, etc.)
+        val ordinalMap = listOf(
+            listOf("الأول", "الاول", "أولى", "اولى") to 1,
+            listOf("الثاني", "التاني", "ثانية") to 2,
+            listOf("الثالث", "التالت", "ثالثة") to 3,
+            listOf("الرابع", "رابعة") to 4,
+            listOf("الخامس", "خامسة") to 5,
+            listOf("السادس", "سادسة") to 6,
+            listOf("السابع", "سابعة") to 7,
+            listOf("الثامن", "ثامنة") to 8,
+            listOf("التاسع", "تاسعة") to 9,
+            listOf("العاشر", "عاشرة") to 10,
+            listOf("الحادي عشر", "الحادية عشرة") to 11,
+            listOf("الثاني عشر", "الثانية عشرة") to 12
+        )
+        for ((words, num) in ordinalMap) {
+            if (words.any { it in lowerTitle }) return num
+        }
+
+        // Priority 2: Number DIRECTLY after season keyword (e.g. "الموسم 3", "Season 3", "S3")
+        // Only matches 1-2 digit numbers to avoid years/IDs
+        val afterKeyword = Regex(
+            """(?:الموسم|موسم|season|s)\s*(\d{1,2})(?:\D|$)""",
+            RegexOption.IGNORE_CASE
+        ).find(lowerTitle)?.groupValues?.get(1)?.toIntOrNull()
+        if (afterKeyword != null) return afterKeyword
+
+        // Priority 3: English ordinals
         return when {
-            "الأول" in cleanTitle || "الاول" in cleanTitle || "first" in cleanTitle -> 1
-            "الثاني" in cleanTitle || "التاني" in cleanTitle || "second" in cleanTitle -> 2
-            "الثالث" in cleanTitle || "التالت" in cleanTitle || "third" in cleanTitle -> 3
-            "الرابع" in cleanTitle || "fourth" in cleanTitle -> 4
-            "الخامس" in cleanTitle || "fifth" in cleanTitle -> 5
-            "السادس" in cleanTitle || "sixth" in cleanTitle -> 6
-            "السابع" in cleanTitle || "seventh" in cleanTitle -> 7
-            "الثامن" in cleanTitle || "eighth" in cleanTitle -> 8
-            "التاسع" in cleanTitle || "ninth" in cleanTitle -> 9
-            "العاشر" in cleanTitle || "tenth" in cleanTitle -> 10
+            "first" in lowerTitle -> 1
+            "second" in lowerTitle -> 2
+            "third" in lowerTitle -> 3
+            "fourth" in lowerTitle -> 4
+            "fifth" in lowerTitle -> 5
+            "sixth" in lowerTitle -> 6
+            "seventh" in lowerTitle -> 7
+            "eighth" in lowerTitle -> 8
+            "ninth" in lowerTitle -> 9
+            "tenth" in lowerTitle -> 10
             else -> null
+            // NOTE: No bare \d+ fallback — that caused "season 75" false positives from series IDs/years
         }
     }
 
