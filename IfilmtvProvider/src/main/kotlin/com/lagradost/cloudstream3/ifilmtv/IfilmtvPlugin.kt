@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.plugins.BasePlugin
 @CloudstreamPlugin
 class IfilmtvPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(IfilmtvProvider())
+        registerMainAPI(IfilmtvArProvider())
+        registerMainAPI(IfilmtvEnProvider())
+        registerMainAPI(IfilmtvFaProvider())
     }
 }

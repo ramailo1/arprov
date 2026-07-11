@@ -76,7 +76,6 @@ graph TD
 | **Akwam** | ترفيه عام | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | عربي وعالمي | `com.lagradost.cloudstream3.faselhd` |
 | **Anime4up** | أنمي وأفلام | `com.lagradost.cloudstream3` |
-| **Animeiat** | أنمي متخصص | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | أفلام ومسلسلات | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimaclub` |
@@ -92,6 +91,10 @@ graph TD
 | **RistoAnime** | أنمي متخصص | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.tuk` |
 | **TopCinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.topcinema` |
+| **iFilmTV (Arabic)** | أفلام ومسلسلات + بث مباشر | `com.lagradost.cloudstream3.ifilmtv` |
+| **iFilmTV (English)** | Series & Movies + Live | `com.lagradost.cloudstream3.ifilmtv` |
+| **iFilmTV (فارسی)** | سریال و فیلم + پخش زنده | `com.lagradost.cloudstream3.ifilmtv` |
+| **GogoAnime** | أنمي (Sub/Dub) | `com.lagradost.cloudstream3.gogoanime` |
 
 > [!NOTE]
 > **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.
@@ -111,6 +114,7 @@ graph TD
 | **AnimeBlkom** | حظر Cloudflare | `Disabled` |
 | **FajerShow** | حظر Cloudflare | `Disabled` |
 | **ShahidMBC** | حظر جغرافي / DRM | `Disabled` |
+| **Animeiat** | الموقع مغلق | `Disabled` |
 
 ---
 

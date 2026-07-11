@@ -2,7 +2,8 @@ rootProject.name = "ArProv"
 
 val disabled = listOf<String>(
     "AnimeBlkomProvider",
-    "FajerShowProvider", 
+    "AnimeiatProvider",
+    "FajerShowProvider",
     "ShahidMBCProvider"
 )
 

@@ -4,23 +4,28 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.json.JSONArray
 import java.net.URLEncoder
 
-class IfilmtvProvider : MainAPI() {
-    override var lang = "ar"
-    override var mainUrl = "https://ar.ifilmtv.ir"
-    override var name = "iFilmTV"
+abstract class IfilmtvBase(
+    override var name: String,
+    override var lang: String,
+    override var mainUrl: String,
+    private val seriesLabel: String,
+    private val moviesLabel: String,
+) : MainAPI() {
     override val usesWebView = false
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
+    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Live)
 
-    private fun String.getIntFromText(): Int? {
-        return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
+    companion object {
+        val ALL_LIVE_STREAMS = listOf(
+            Triple("iFilmTV العربية", "ar", "https://live.presstv.ir/hls/ifilmar.m3u8"),
+            Triple("iFilmTV English", "en", "https://live.presstv.ir/hls/ifilmen.m3u8"),
+            Triple("iFilmTV فارسی", "fa", "https://live.presstv.ir/hls/ifilmfa.m3u8"),
+        )
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
@@ -40,28 +45,45 @@ class IfilmtvProvider : MainAPI() {
         }
     }
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/Series" to "مسلسلات",
-        "$mainUrl/Film" to "أفلام",
-    )
+    private fun liveItem(title: String, langCode: String): SearchResponse {
+        return newAnimeSearchResponse(title, "$mainUrl/Home/Live/$langCode", TvType.Live) {
+            this.posterUrl = fixUrlNull("$mainUrl/img/i.png")
+        }
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = mutableListOf<SearchResponse>()
-        if (request.data.contains("/Series")) {
-            val url = "${request.data}?order=1&page=$page"
-            val doc = app.get(url, timeout = 120).document
-            doc.select("div.All-Film-body.Serial > div.content-all-film > a.inner-panel")
-                .mapNotNull { it.toSearchResponse() }
-                .also { items.addAll(it) }
-        } else if (request.data.contains("/Film")) {
-            val url = "${request.data}?order=1&page=$page"
-            val doc = app.get(url, timeout = 120).document
-            doc.select("div.All-Film-body > div.content-all-film > a.inner-panel")
-                .mapNotNull { it.toSearchResponse() }
-                .also { items.addAll(it) }
+
+        when {
+            request.data.contains("/Live") -> {
+                ALL_LIVE_STREAMS.forEach { (title, langCode, _) ->
+                    items.add(liveItem(title, langCode))
+                }
+            }
+            request.data.contains("/Series") -> {
+                val url = "${request.data}?order=1&page=$page"
+                val doc = app.get(url, timeout = 120).document
+                doc.select("div.All-Film-body.Serial > div.content-all-film > a.inner-panel")
+                    .mapNotNull { it.toSearchResponse() }
+                    .also { items.addAll(it) }
+            }
+            request.data.contains("/Film") -> {
+                val url = "${request.data}?order=1&page=$page"
+                val doc = app.get(url, timeout = 120).document
+                doc.select("div.All-Film-body > div.content-all-film > a.inner-panel")
+                    .mapNotNull { it.toSearchResponse() }
+                    .also { items.addAll(it) }
+            }
         }
+
         return newHomePageResponse(request.name, items)
     }
+
+    override val mainPage = mainPageOf(
+        "$mainUrl/Series" to seriesLabel,
+        "$mainUrl/Film" to moviesLabel,
+        "$mainUrl/Home/Live" to "Live / البث الحي",
+    )
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = URLEncoder.encode(query, "UTF-8")
@@ -91,6 +113,16 @@ class IfilmtvProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        val liveMatch = Regex("""Home/Live/(\w+)""").find(url)
+        if (liveMatch != null) {
+            val langCode = liveMatch.groupValues[1]
+            val liveInfo = ALL_LIVE_STREAMS.firstOrNull { it.second == langCode } ?: ALL_LIVE_STREAMS[0]
+            return newMovieLoadResponse(liveInfo.first, url, TvType.Live, liveInfo.third) {
+                this.posterUrl = fixUrlNull("$mainUrl/img/i.png")
+                this.plot = "iFilmTV Live - البث الحي"
+            }
+        }
+
         val doc = app.get(url, timeout = 120).document
         val html = doc.toString()
         val title = doc.selectFirst("meta[property='og:title']")?.attr("content")
@@ -100,11 +132,11 @@ class IfilmtvProvider : MainAPI() {
         val poster = fixUrlNull(doc.selectFirst("meta[property='og:image']")?.attr("content"))
         val synopsis = doc.selectFirst("meta[property='og:description']")?.attr("content")?.trim() ?: ""
         val actors = doc.select("div.Film-Artists-panel > a").mapNotNull {
-            val name = it.selectFirst("span")?.text()
+            val actorName = it.selectFirst("span")?.text()
             val image = it.selectFirst("img.fill-box")?.attr("src")?.let { fixUrl(it) }
             val role = it.selectFirst("h6")?.text()
-            if (name.isNullOrBlank()) return@mapNotNull null
-            val actor = Actor(name, image)
+            if (actorName.isNullOrBlank()) return@mapNotNull null
+            val actor = Actor(actorName, image)
             ActorData(actor = actor, roleString = role)
         }.toList()
 
@@ -159,7 +191,7 @@ class IfilmtvProvider : MainAPI() {
                             val videoAddr = item.optString("VideoAddress", "")
                             val imgAddr = item.optString("ImageAddress_M", "")
                             if (videoAddr.isNotBlank()) {
-                                val videoUrl = if (videoAddr.startsWith("http")) videoAddr else "https://fa.ifilmtv.ir/$videoAddr"
+                                val videoUrl = if (videoAddr.startsWith("http")) videoAddr else "https://video.ifilmtv.ir/ifilm/$videoAddr"
                                 episodes.add(newEpisode(videoUrl) {
                                     this.name = "الحلقة $epNum"
                                     this.episode = epNum
@@ -194,12 +226,7 @@ class IfilmtvProvider : MainAPI() {
                 val ep = parts[2]
                 val langE = parts[3]
                 val mp4Url = "https://preview.presstv.ir/ifilm/$langE$idSerial/$ep.mp4"
-                val hlsUrl = "https://vod.ifilmtv.ir/hls/$langE$idSerial/,$ep,${ep}_320,.mp4.urlset/master.m3u8"
                 callback(newExtractorLink(name, "MP4", mp4Url, ExtractorLinkType.VIDEO) {
-                    this.quality = Qualities.P720.value
-                    this.referer = mainUrl
-                })
-                callback(newExtractorLink(name, "HLS", hlsUrl, ExtractorLinkType.M3U8) {
                     this.quality = Qualities.P720.value
                     this.referer = mainUrl
                 })
