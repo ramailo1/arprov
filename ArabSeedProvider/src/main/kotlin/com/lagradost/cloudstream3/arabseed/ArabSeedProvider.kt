@@ -3,15 +3,14 @@ package com.lagradost.cloudstream3.arabseed
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
-import android.util.Base64
+import org.jsoup.Jsoup
+import org.json.JSONObject
+import java.net.URLEncoder
 
 class ArabSeedProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://asd.pics"
+    override var mainUrl = "https://arabseed.store"
     override var name = "ArabSeed"
     override val usesWebView = false
     override val hasMainPage = true
@@ -20,25 +19,23 @@ class ArabSeedProvider : MainAPI() {
     private fun String.getIntFromText(): Int? {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
-    
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val title = attr("title").ifEmpty { select("h3").text() }
         if (title.isEmpty()) return null
-        
-        val posterUrl = select("img.images__loader").let { 
-            it.attr("data-src").ifEmpty { 
-                it.attr("src") 
+
+        val posterUrl = select("img.images__loader").let {
+            it.attr("data-src").ifEmpty {
+                it.attr("src")
             }
         }
-        
-        // Determine type from URL or title
+
         val href = attr("href")
         val tvType = when {
-            href.contains("/series/") || title.contains("مسلسل") -> TvType.TvSeries
+            href.contains("/series/") -> TvType.TvSeries
             else -> TvType.Movie
         }
-        
+
         return newMovieSearchResponse(
             title,
             href,
@@ -49,28 +46,15 @@ class ArabSeedProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2026/" to "Ramadan Series 2026",
-        "$mainUrl/category/foreign-movies-10/" to "Foreign Movies",
-        "$mainUrl/category/arabic-movies-10/" to "Arabic Movies",
-        "$mainUrl/category/netfilx/افلام-netfilx/" to "Netflix Movies",
-        "$mainUrl/category/asian-movies/" to "Asian Movies",
-        "$mainUrl/category/turkish-movies/" to "Turkish Movies",
-        "$mainUrl/category/افلام-مدبلجة-1/" to "Dubbed Movies",
-        "$mainUrl/category/indian-movies/" to "Indian Movies",
-        "$mainUrl/category/افلام-كلاسيكيه/" to "Classic Movies",
-        "$mainUrl/category/foreign-series-3/" to "Foreign Series",
-        "$mainUrl/category/arabic-series-8/" to "Arabic Series",
-        "$mainUrl/category/netfilx/مسلسلات-netfilx-1/" to "Netflix Series",
-        "$mainUrl/category/turkish-series-2/" to "Turkish Series",
-        "$mainUrl/category/مسلسلات-مدبلجة/" to "Dubbed Series",
-        "$mainUrl/category/مسلسلات-كوريه/" to "Korean Series",
-        "$mainUrl/category/مسلسلات-مصريه/" to "Egyptian Series",
-        "$mainUrl/category/مسلسلات-هندية/" to "Indian Series",
-        "$mainUrl/category/cartoon-series/" to "Cartoon",
-        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2025/" to "Ramadan Series 2025",
-        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2024/" to "Ramadan Series 2024",
-        "$mainUrl/category/مسلسلات-رمضان/ramadan-series-2023/" to "Ramadan Series 2023",
-        "$mainUrl/category/wwe-shows-1/" to "WWE",
+        "$mainUrl/recently/" to "المضاف حديثا",
+        "$mainUrl/category/الافلام/افلام-اجنبي/" to "افلام اجنبي",
+        "$mainUrl/category/الافلام/افلام-عربي/" to "افلام عربي",
+        "$mainUrl/category/الافلام/افلام-netflix/" to "افلام Netfilx",
+        "$mainUrl/category/المسلسلات/مسلسلات-اجنبي/" to "مسلسلات اجنبي",
+        "$mainUrl/category/المسلسلات/مسلسلات-عربي/" to "مسلسلات عربي",
+        "$mainUrl/category/المسلسلات/مسلسلات-تركيه/" to "مسلسلات تركيه",
+        "$mainUrl/category/المسلسلات/مسلسلات-netflix/" to "مسلسلات Netfilx",
+        "$mainUrl/category/wwe-shows/" to "مصارعه",
     )
 
     override suspend fun getMainPage(
@@ -87,33 +71,30 @@ class ArabSeedProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val list = arrayListOf<SearchResponse>()
-        arrayListOf(
-            mainUrl to "series",
-            mainUrl to "movies"
-        ).forEach { (url, type) ->
-            val doc = app.post(
-                "$url/wp-content/themes/Elshaikh2021/Ajaxat/SearchingTwo.php",
-                data = mapOf("search" to query, "type" to type),
-                referer = mainUrl
-            ).document
-            doc.select("a.movie__block").mapNotNull {
-                it.toSearchResponse()?.let { it1 -> list.add(it1) }
-            }
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val document = app.get("$mainUrl/?s=$encoded").document
+        return document.select("a.movie__block").mapNotNull {
+            it.toSearchResponse()
         }
-        return list
+    }
+
+    private fun extractToken(html: String): String? {
+        return Regex("csrf__token['\"]?\\s*:\\s*['\"]([^'\"]+)['\"]").find(html)?.groupValues?.get(1)
+    }
+
+    private fun extractPostId(html: String): String? {
+        return Regex("post_id['\"]?\\s*:\\s*['\"]?(\\d+)").find(html)?.groupValues?.get(1)
     }
 
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, timeout = 120).document
+        val html = doc.toString()
         val title = doc.selectFirst(".post__name")?.text()?.cleanTitle() ?: doc.select("h1").text()
-        
-        // Robust detection
-        val episodesElements = doc.select(".episodes__list a, .seasons__list a")
-        // If it has episodes, it's a series. If not, treat as movie (safe fallback for singles).
-        val isMovie = episodesElements.isEmpty()
 
-        val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src") 
+        val seasonTabs = doc.select("#seasons__list li[data-season]")
+        val isMovie = seasonTabs.isEmpty()
+
+        val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src")
             ?: doc.selectFirst(".poster__single img")?.attr("src")
             ?: doc.selectFirst(".poster__single img")?.attr("data-src")
             ?: doc.selectFirst(".poster img")?.attr("data-src")
@@ -129,7 +110,7 @@ class ArabSeedProvider : MainAPI() {
         val year = doc.select("a[href*='/release-year/']").text().getIntFromText()
         val tags = doc.select("a[href*='/genre/']").map { it.text() }
 
-        val actors = doc.select("a.d__flex.align__items__center.gap__10[href*='/actor/']").mapNotNull {
+        val actors = doc.select("a[href*='/actor/']").mapNotNull {
             val name = it.selectFirst("h3")?.text() ?: return@mapNotNull null
             val image = it.selectFirst("img")?.attr("data-src") ?: it.selectFirst("img")?.attr("src")
             val roleString = it.selectFirst("span")?.text()
@@ -137,8 +118,8 @@ class ArabSeedProvider : MainAPI() {
             ActorData(actor = mainActor, roleString = roleString)
         }
 
-        val recommendations = doc.select("a.movie__block").mapNotNull { element ->
-            element.toSearchResponse()
+        val recommendations = doc.select("a.movie__block").mapNotNull {
+            it.toSearchResponse()
         }
 
         return if (isMovie) {
@@ -156,19 +137,65 @@ class ArabSeedProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val episodes = episodesElements.mapNotNull { it ->
-                val episodeName = it.text()
-                val episodeNumber = it.selectFirst("b")?.text()?.toIntOrNull() 
-                    ?: episodeName.getIntFromText()
-                
-                newEpisode(it.attr("href")) {
-                    this.name = episodeName
-                    this.episode = episodeNumber
-                    this.season = 1 
-                }
-            }.distinctBy { it.data }.sortedBy { it.episode }
+            val csrfToken = extractToken(html)
+            val seriesId = seasonTabs.firstOrNull()?.attr("data-series")
+                ?: doc.selectFirst("#seasons__list li")?.attr("data-series")
 
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            val episodes = arrayListOf<Episode>()
+            val defaultHtml = doc.selectFirst(".episodes__list")?.html() ?: ""
+
+            seasonTabs.forEachIndexed { index, tab ->
+                val seasonId = tab.attr("data-season")
+                val seasonNumber = index + 1
+                val isSelected = tab.hasClass("selected")
+
+                val episodesHtml = if (isSelected && defaultHtml.isNotEmpty()) {
+                    defaultHtml
+                } else if (seriesId != null && csrfToken != null) {
+                    try {
+                        val resp = app.post(
+                            "$mainUrl/season__episodes/",
+                            data = mapOf(
+                                "series_id" to seriesId,
+                                "season_id" to seasonId,
+                                "csrf_token" to csrfToken
+                            ),
+                            headers = mapOf("Referer" to url)
+                        )
+                        JSONObject(resp.text).optString("html", "")
+                    } catch (e: Exception) {
+                        ""
+                    }
+                } else {
+                    ""
+                }
+
+                if (episodesHtml.isNotEmpty()) {
+                    val episodeDoc = Jsoup.parse(episodesHtml)
+                    episodeDoc.select("a[href]").forEach { a ->
+                        val href = a.attr("href")
+                        if (href.contains("الحلقة", ignoreCase = true)
+                            || href.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9", ignoreCase = true)
+                        ) {
+                            val episodeName = a.text()
+                            val episodeNumber = a.selectFirst("b")?.text()?.toIntOrNull()
+                                ?: episodeName.getIntFromText()
+                            episodes.add(
+                                newEpisode(href) {
+                                    this.name = episodeName
+                                    this.episode = episodeNumber
+                                    this.season = seasonNumber
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            val sortedEpisodes = episodes.distinctBy { it.data }
+                .sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }))
+
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis
@@ -191,8 +218,6 @@ class ArabSeedProvider : MainAPI() {
             .trim()
     }
 
-
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -201,134 +226,96 @@ class ArabSeedProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         val watchUrl = doc.select(".watch__btn").attr("href")
-        // If watchUrl is empty or same as current, try to parse current page for servers
-        // Some pages might be the watch page itself
-        val watchDoc = if (watchUrl.isNotEmpty() && watchUrl != data) {
-            app.get(watchUrl, headers = mapOf("Referer" to data)).document
-        } else {
-            doc
-        }
+        if (watchUrl.isEmpty()) return false
 
-        val servers = watchDoc.select(".servers__list li")
+        val watchDoc = app.get(watchUrl, headers = mapOf("Referer" to data)).document
+        val watchHtml = watchDoc.toString()
 
-        servers.map {
-            val link = it.attr("data-link")
-            val name = it.text()
+        val postId = extractPostId(watchHtml)
+        val csrfToken = extractToken(watchHtml)
 
-            // Extract the actual URL - format can be /play.php?url=BASE64 or /play/?id=BASE64 or direct
-            val finalUrl = when {
-                link.contains("url=") -> {
-                    val encoded = link.substringAfter("url=")
-                    try {
-                        String(Base64.decode(encoded, Base64.DEFAULT))
-                    } catch (e: Exception) { link }
-                }
-                link.contains("id=") -> {
-                    val encoded = link.substringAfter("id=")
-                    try {
-                        String(Base64.decode(encoded, Base64.DEFAULT))
-                    } catch (e: Exception) { link }
-                }
-                else -> link
+        val qualities = listOf("480", "720", "1080")
+
+        qualities.forEach { quality ->
+            val serversHtml = if (quality == "480") {
+                watchDoc.selectFirst(".servers__list ul")?.html()
+                    ?: (if (postId != null && csrfToken != null) fetchQualityServers(postId, quality, csrfToken, watchUrl) else "")
+            } else if (postId != null && csrfToken != null) {
+                fetchQualityServers(postId, quality, csrfToken, watchUrl)
+            } else {
+                ""
             }
 
-            // If parsed URL is valid, load it
-            if (finalUrl.isNotEmpty()) {
-                if (finalUrl.contains("savefiles.com")) {
-                    extractSaveFiles(finalUrl, name, callback)
-                } else if (finalUrl.startsWith("/") || listOf("asd.pics", "asd.homes", "arabseed.me", "seeeed.xyz", "reviewrate.net", "reviewtech.me", "arabseed.show").any { finalUrl.contains(it) }) {
-                     // Internal link presumably
-                     val urlToLoad = if (finalUrl.startsWith("/")) mainUrl + finalUrl else finalUrl
-                     val doc = app.get(urlToLoad, headers = mapOf("Referer" to watchUrl)).document
-                     val sourceElement = doc.select("source")
-                     if (sourceElement.hasAttr("src")) {
-                         callback.invoke(
-                             newExtractorLink(
-                                 this.name,
-                                 "$name (Internal)",
-                                 sourceElement.attr("src"),
-                                 if (!sourceElement.attr("type").contains("mp4")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                             ) {
-                                 this.quality = Qualities.Unknown.value
-                                 this.referer = data
-                             }
-                         )
-                     } else {
-                         val iframeSrc = doc.select("iframe").attr("src")
-                         if (iframeSrc.isNotEmpty()) {
-                             if (iframeSrc.contains("savefiles.com")) {
-                                 extractSaveFiles(iframeSrc, name, callback)
-                             } else {
-                                 loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                             }
-                         }
-                     }
-                 } else {
-                     loadExtractor(finalUrl, data, subtitleCallback, callback)
-                 }
+            if (serversHtml.isNotEmpty()) {
+                val serverDoc = Jsoup.parse(serversHtml)
+                for (li in serverDoc.select("li[data-src]")) {
+                    val src = li.attr("data-src")
+                    processServerLink(src, data, subtitleCallback, callback)
+                }
             }
         }
 
-        // Download Links Logic
         val downloadUrl = doc.select(".download__btn").attr("href")
         if (downloadUrl.isNotEmpty()) {
             try {
                 val downloadDoc = app.get(downloadUrl, headers = mapOf("Referer" to data)).document
-                val downloadLinks = downloadDoc.select(".downloads__links__list li a")
-                downloadLinks.map {
-                    val link = it.attr("href")
-                    loadExtractor(link, data, subtitleCallback, callback)
+                downloadDoc.select(".downloads__links__list li a").forEach { a ->
+                    var link = a.attr("href")
+                    if (link.contains("/download/?download_url=")) {
+                        link = link.substringAfter("download_url=").substringBefore("&")
+                    }
+                    if (link.isNotEmpty()) {
+                        loadExtractor(link, data, subtitleCallback, callback)
+                    }
                 }
             } catch (e: Exception) {
-               // Ignore download errors
+                // ignore download errors
             }
         }
 
         return true
     }
-    private suspend fun extractSaveFiles(url: String, name: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            // Extract file code
-            // Url format: https://savefiles.com/e/CODE
-            val code = url.substringAfter("/e/").substringBefore("?")
-            val domain = "https://savefiles.com"
 
-            val response = app.post(
-                "$domain/dl",
+    private suspend fun fetchQualityServers(
+        postId: String,
+        quality: String,
+        csrfToken: String,
+        referer: String
+    ): String {
+        return try {
+            val resp = app.post(
+                "$mainUrl/get__quality__servers/",
                 data = mapOf(
-                    "op" to "embed",
-                    "file_code" to code,
-                    "auto" to "1",
-                    "referer" to ""
+                    "post_id" to postId,
+                    "quality" to quality,
+                    "csrf_token" to csrfToken
                 ),
-                headers = mapOf("Referer" to url)
-            ).text
-
-            // Extract m3u8 from: sources: ["..."] or sources: ['...']
-            // The browser debug showed: sources: ["https://..."]
-            // Also seen: source: "..."
-            val m3u8 = Regex("""sources:\s*\[\s*["'](.*?)["']""").find(response)?.groupValues?.get(1)
-                ?: Regex("""source:\s*["'](.*?)["']""").find(response)?.groupValues?.get(1)
-
-            if (!m3u8.isNullOrEmpty()) {
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        "$name (SaveFiles)",
-                        m3u8,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                    }
-                )
-            } else {
-                // Fallback: try default extractor if manual parsing fails
-                loadExtractor(url, null, {}, callback)
-            }
-
+                headers = mapOf("Referer" to referer)
+            )
+            JSONObject(resp.text).optString("html", "")
         } catch (e: Exception) {
-            e.printStackTrace()
-             loadExtractor(url, null, {}, callback)
+            ""
+        }
+    }
+
+    private suspend fun processServerLink(
+        src: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (src.isEmpty()) return
+        var finalUrl = src
+        if (finalUrl.contains("/watch/?url=")) {
+            finalUrl = finalUrl.substringAfter("url=")
+        }
+        if (finalUrl.startsWith("//")) {
+            finalUrl = "https:$finalUrl"
+        } else if (finalUrl.startsWith("/")) {
+            finalUrl = mainUrl + finalUrl
+        }
+        if (finalUrl.isNotEmpty()) {
+            loadExtractor(finalUrl, referer, subtitleCallback, callback)
         }
     }
 }

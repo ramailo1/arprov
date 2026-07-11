@@ -1,6 +1,6 @@
-$env:JAVA_HOME = "E:\Users\yamad\AppData\Local\Programs\Eclipse Adoptium\jdk-17.0.17.10-hotspot"
-$env:ANDROID_HOME = "E:\Users\yamad\AppData\Local\Android\SDK"
-$env:ANDROID_SDK_ROOT = "E:\Users\yamad\AppData\Local\Android\SDK"
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot"
+$env:ANDROID_HOME = "C:\Users\yamad\AppData\Local\Android\Sdk"
+$env:ANDROID_SDK_ROOT = "C:\Users\yamad\AppData\Local\Android\Sdk"
 
 $argsStr = $args -join " "
 if ([string]::IsNullOrWhiteSpace($argsStr)) {
