@@ -293,7 +293,17 @@ new_chunk_2 = """    @SuppressLint("SetJavaScriptEnabled")
 
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
-                val context = AcraApplication.context
+                val context = try {
+                    val clazz = Class.forName("com.lagradost.cloudstream3.CloudStreamApp")
+                    clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
+                } catch (e: Throwable) {
+                    try {
+                        val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
+                        clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
+                    } catch (e: Throwable) {
+                        null
+                    }
+                }
                 if (context == null) {
                     continuation.resume(null)
                     return@post
