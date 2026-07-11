@@ -901,17 +901,38 @@ class FaselHDProvider : MainAPI() {
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
                 val context = try {
+                    // Try CloudStreamApp static field
                     val clazz = Class.forName("com.lagradost.cloudstream3.CloudStreamApp")
                     clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
-                } catch (e: Throwable) {
+                } catch (e1: Throwable) {
                     try {
-                        val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
-                        clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
-                    } catch (e: Throwable) {
-                        null
+                        // Try CloudStreamApp companion property
+                        val clazz = Class.forName("com.lagradost.cloudstream3.CloudStreamApp")
+                        val companionField = clazz.getDeclaredField("Companion").apply { isAccessible = true }
+                        val companion = companionField.get(null)
+                        val contextField = companion!!.javaClass.getDeclaredField("context").apply { isAccessible = true }
+                        contextField.get(companion) as? android.content.Context
+                    } catch (e2: Throwable) {
+                        try {
+                            // Try AcraApplication companion property
+                            val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
+                            val companionField = clazz.getDeclaredField("Companion").apply { isAccessible = true }
+                            val companion = companionField.get(null)
+                            val contextField = companion!!.javaClass.getDeclaredField("context").apply { isAccessible = true }
+                            contextField.get(companion) as? android.content.Context
+                        } catch (e3: Throwable) {
+                            try {
+                                // Try AcraApplication static field
+                                val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
+                                clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
+                            } catch (e4: Throwable) {
+                                null
+                            }
+                        }
                     }
                 }
                 if (context == null) {
+                    Log.e("FaselHD", "WebView extraction failed: Context is null (Reflection context lookup failed)")
                     continuation.resume(null)
                     return@post
                 }

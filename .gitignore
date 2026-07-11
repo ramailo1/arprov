@@ -26,7 +26,7 @@ desktop.ini
 # Logs
 *.log
 logs/
-txt
+*.txt
 
 # Temporary files
 tmp/
@@ -46,6 +46,8 @@ venv/
 pip-log.txt
 local_build.ps1
 local_build.ps1.bak
+updater.ps1
+updater.py
 
 # Kotlin/Java
 *.class
