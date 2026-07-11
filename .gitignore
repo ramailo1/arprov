@@ -44,6 +44,8 @@ env/
 venv/
 .venv/
 pip-log.txt
+local_build.ps1
+local_build.ps1.bak
 
 # Kotlin/Java
 *.class

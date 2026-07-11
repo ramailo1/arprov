@@ -857,6 +857,7 @@ class FaselHDProvider : MainAPI() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
+    @Suppress("DEPRECATION")
     private suspend fun extractM3u8ViaWebView(
         playerUrl: String,
         playerHost: String,
