@@ -1770,11 +1770,27 @@ class FaselHDProvider : MainAPI() {
                     null
                 }
                 if (videoPageHtml != null) {
-                    val jwFileRegex = Regex("""(?:["']file["']\s*:\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)""")
-                    val jwSrcRegex  = Regex("""https?://[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?""", RegexOption.IGNORE_CASE)
+                    val cleanHtml = videoPageHtml.replace("\\/", "/")
+                    
+                    val patterns = listOf(
+                        Regex("""(?:["']?file["']?\s*[:=]\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)"""),
+                        Regex("""(?:["']?src["']?\s*[:=]\s*["'])(https?://[^"']+\.(?:m3u8|mp4)[^"']*)"""),
+                        Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']"""),
+                        Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
+                        Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)""")
+                    )
 
-                    val streamUrl = jwFileRegex.find(videoPageHtml)?.groupValues?.get(1)
-                        ?: jwSrcRegex.find(videoPageHtml)?.value
+                    var streamUrl: String? = null
+                    for (pattern in patterns) {
+                        val match = pattern.find(cleanHtml)
+                        if (match != null) {
+                            val candidate = match.groupValues.getOrNull(1) ?: match.value
+                            if (candidate.isNotBlank()) {
+                                streamUrl = candidate
+                                break
+                            }
+                        }
+                    }
 
                     if (streamUrl != null) {
                         Log.i("FaselHD", "SAFEGET-HIT url=$streamUrl")
