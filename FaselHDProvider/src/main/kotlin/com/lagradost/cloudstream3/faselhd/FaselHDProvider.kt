@@ -900,39 +900,76 @@ class FaselHDProvider : MainAPI() {
 
         val webView = suspendCancellableCoroutine<WebView?> { continuation ->
             mainHandler.post {
-                val context = try {
-                    // Try CloudStreamApp static field
-                    val clazz = Class.forName("com.lagradost.cloudstream3.CloudStreamApp")
-                    clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
-                } catch (e1: Throwable) {
+                val diagnostics = StringBuilder()
+                fun getContextFromClass(className: String): android.content.Context? {
                     try {
-                        // Try CloudStreamApp companion property
-                        val clazz = Class.forName("com.lagradost.cloudstream3.CloudStreamApp")
-                        val companionField = clazz.getDeclaredField("Companion").apply { isAccessible = true }
-                        val companion = companionField.get(null)
-                        val contextField = companion!!.javaClass.getDeclaredField("context").apply { isAccessible = true }
-                        contextField.get(companion) as? android.content.Context
-                    } catch (e2: Throwable) {
+                        val clazz = Class.forName(className)
+
+                        fun dereference(obj: Any?): android.content.Context? {
+                            if (obj == null) return null
+                            if (obj is android.content.Context) return obj
+                            try {
+                                if (obj.javaClass.name.contains("WeakReference")) {
+                                    val getMethod = obj.javaClass.getMethod("get")
+                                    return getMethod.invoke(obj) as? android.content.Context
+                                }
+                            } catch (e: Throwable) {
+                                diagnostics.append("[$className] WeakReference get failed: ${e.message}; ")
+                            }
+                            return null
+                        }
+                        
                         try {
-                            // Try AcraApplication companion property
-                            val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
+                            val field = clazz.getDeclaredField("context").apply { isAccessible = true }
+                            val ctx = dereference(field.get(null))
+                            if (ctx != null) return ctx
+                        } catch (e: Throwable) {
+                            diagnostics.append("[$className] getDeclaredField(context) failed: ${e.message}; ")
+                        }
+
+                        try {
+                            val method = clazz.getDeclaredMethod("getContext").apply { isAccessible = true }
+                            val ctx = dereference(method.invoke(null))
+                            if (ctx != null) return ctx
+                        } catch (e: Throwable) {
+                            diagnostics.append("[$className] getDeclaredMethod(getContext) failed: ${e.message}; ")
+                        }
+
+                        try {
                             val companionField = clazz.getDeclaredField("Companion").apply { isAccessible = true }
                             val companion = companionField.get(null)
-                            val contextField = companion!!.javaClass.getDeclaredField("context").apply { isAccessible = true }
-                            contextField.get(companion) as? android.content.Context
-                        } catch (e3: Throwable) {
-                            try {
-                                // Try AcraApplication static field
-                                val clazz = Class.forName("com.lagradost.cloudstream3.AcraApplication")
-                                clazz.getDeclaredField("context").apply { isAccessible = true }.get(null) as? android.content.Context
-                            } catch (e4: Throwable) {
-                                null
+                            if (companion != null) {
+                                try {
+                                    val field = companion.javaClass.getDeclaredField("context").apply { isAccessible = true }
+                                    val ctx = dereference(field.get(companion))
+                                    if (ctx != null) return ctx
+                                } catch (e: Throwable) {
+                                    diagnostics.append("[$className Companion] getDeclaredField(context) failed: ${e.message}; ")
+                                }
+
+                                try {
+                                    val method = companion.javaClass.getDeclaredMethod("getContext").apply { isAccessible = true }
+                                    val ctx = dereference(method.invoke(companion))
+                                    if (ctx != null) return ctx
+                                } catch (e: Throwable) {
+                                    diagnostics.append("[$className Companion] getDeclaredMethod(getContext) failed: ${e.message}; ")
+                                }
                             }
+                        } catch (e: Throwable) {
+                            diagnostics.append("[$className] Companion access failed: ${e.message}; ")
                         }
+
+                    } catch (e: Throwable) {
+                        diagnostics.append("Class.forName($className) failed: ${e.message}; ")
                     }
+                    return null
                 }
+
+                val context = getContextFromClass("com.lagradost.cloudstream3.CloudStreamApp")
+                    ?: getContextFromClass("com.lagradost.cloudstream3.AcraApplication")
+
                 if (context == null) {
-                    Log.e("FaselHD", "WebView extraction failed: Context is null (Reflection context lookup failed)")
+                    Log.e("FaselHD", "WebView extraction failed: Context is null. Reflection diagnostics: $diagnostics")
                     continuation.resume(null)
                     return@post
                 }
