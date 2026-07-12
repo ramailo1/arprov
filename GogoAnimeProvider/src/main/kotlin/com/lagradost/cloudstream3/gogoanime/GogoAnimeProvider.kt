@@ -260,37 +260,34 @@ class GogoAnimeProvider : MainAPI() {
                             val sourcesJson = app.get(sourcesUrl, timeout = 30, referer = megaplayIframe).text
                             Log.d("GogoAnime", "Sources response: ${sourcesJson.take(1000)}")
                             val json = org.json.JSONObject(sourcesJson)
-                            val sources = json.optJSONArray("sources")
-                            if (sources != null) {
-                                for (i in 0 until sources.length()) {
-                                    val source = sources.optJSONObject(i)
-                                    if (source != null) {
-                                        val file = source.optString("file", "")
-                                        val type = source.optString("type", "")
-                                        val label = source.optString("label", "")
-                                        if (file.isNotBlank()) {
-                                            Log.d("GogoAnime", "Found source: file=$file type=$type label=$label")
-                                            val linkType = when {
-                                                file.contains(".m3u8") || type == "hls" -> ExtractorLinkType.M3U8
-                                                else -> ExtractorLinkType.VIDEO
-                                            }
-                                            callback(newExtractorLink(name, "$serverLabel ${label.ifBlank { serverLabel }}", file, linkType) {
-                                                this.referer = "https://megaplay.buzz/"
-                                                this.quality = when {
-                                                    label.contains("1080") -> Qualities.P1080.value
-                                                    label.contains("720") -> Qualities.P720.value
-                                                    label.contains("480") -> Qualities.P480.value
-                                                    label.contains("360") -> Qualities.P360.value
-                                                    else -> Qualities.P720.value
-                                                }
-                                            })
-                                            foundVideo = true
-                                        }
+                            val sourcesList = mutableListOf<org.json.JSONObject>()
+                            json.optJSONArray("sources")?.let { arr ->
+                                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { sourcesList.add(it) }
+                            }
+                            json.optJSONObject("sources")?.let { sourcesList.add(it) }
+                            Log.d("GogoAnime", "Sources parsed: ${sourcesList.size} entries")
+                            for (source in sourcesList) {
+                                val file = source.optString("file", "")
+                                val type = source.optString("type", "")
+                                val label = source.optString("label", "")
+                                if (file.isNotBlank()) {
+                                    Log.d("GogoAnime", "Found source: file=$file type=$type label=$label")
+                                    val linkType = when {
+                                        file.contains(".m3u8") || type == "hls" -> ExtractorLinkType.M3U8
+                                        else -> ExtractorLinkType.VIDEO
                                     }
+                                    callback(newExtractorLink(name, "$serverLabel ${label.ifBlank { serverLabel }}", file, linkType) {
+                                        this.referer = "https://megaplay.buzz/"
+                                        this.quality = when {
+                                            label.contains("1080") -> Qualities.P1080.value
+                                            label.contains("720") -> Qualities.P720.value
+                                            label.contains("480") -> Qualities.P480.value
+                                            label.contains("360") -> Qualities.P360.value
+                                            else -> Qualities.P720.value
+                                        }
+                                    })
+                                    foundVideo = true
                                 }
-                            } else {
-                                Log.d("GogoAnime", "No 'sources' array in JSON response")
-                                Log.d("GogoAnime", "Full JSON keys: ${json.names()}")
                             }
 
                             val tracks = json.optJSONArray("tracks")
@@ -300,7 +297,7 @@ class GogoAnimeProvider : MainAPI() {
                                     if (track != null) {
                                         val file = track.optString("file", "")
                                         val kind = track.optString("kind", "")
-                                        val language = track.optString("language", "")
+                                        val language = track.optString("language", "").ifBlank { track.optString("label", "") }
                                         if (file.isNotBlank() && (kind == "captions" || kind == "subtitles")) {
                                             Log.d("GogoAnime", "Found subtitle track: file=$file lang=$language")
                                             subtitleCallback(newSubtitleFile(
