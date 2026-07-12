@@ -125,13 +125,22 @@ class GogoAnimeProvider : MainAPI() {
                         timeout = 30
                     ).document
                     ajaxDoc.select("li > a[href*='-episode-']").forEach { a ->
-                        val epUrl = a.attr("href")
-                        val epNum = a.selectFirst("div.name")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+                        val rawHref = a.attr("href")
+                        val epUrl = rawHref.trim().removeSurrounding("\"").removeSurrounding("'")
+                        val nameEl = a.selectFirst("div.name")
+                        val rawName = nameEl?.text() ?: ""
                         val cate = a.selectFirst("div.cate")?.text() ?: ""
+                        Log.d("GogoAnime", "  episode: rawHref='$rawHref' cleanUrl='$epUrl' name='$rawName' cate='$cate' fullText='${a.text().trim()}'")
+                        val epNum = rawName.replace(Regex("[^0-9]"), "").toIntOrNull()
                         val epName = if (epNum != null) {
-                            if (cate.isNotBlank()) "Episode $epNum ($cate)" else "Episode $epNum"
+                            val base = rawName.trim()
+                            val baseName = when {
+                                base.contains("الحلقة", true) || base.contains("episode", true) -> base
+                                else -> "Episode $epNum"
+                            }
+                            if (cate.isNotBlank()) "$baseName ($cate)" else baseName
                         } else {
-                            a.text().trim()
+                            rawName.ifBlank { a.text().trim() }
                         }
                         if (epUrl.isNotBlank()) {
                             episodes.add(newEpisode(epUrl) {
@@ -146,6 +155,10 @@ class GogoAnimeProvider : MainAPI() {
 
         val sorted = episodes.distinctBy { it.data }
             .sortedWith(compareBy({ it.episode ?: 0 }))
+
+        Log.d("GogoAnime", "Final episode list (${sorted.size} total):")
+        sorted.take(10).forEach { Log.d("GogoAnime", "  ep=${it.episode} name='${it.name}' data='${it.data}'") }
+        if (sorted.size > 10) Log.d("GogoAnime", "  ... and ${sorted.size - 10} more")
 
         val tvType = if (genres.any { it.contains("Movie", true) }) TvType.AnimeMovie else TvType.Anime
         val dubStatus = if (title.contains("مدبلج", true) || title.contains("dub", true))
@@ -168,9 +181,14 @@ class GogoAnimeProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("GogoAnime", "=== loadLinks called ===")
-        Log.d("GogoAnime", "data URL: $data")
-        Log.d("GogoAnime", "calling app.get on $data")
-        val mainHtml = app.get(data, timeout = 60).text
+        Log.d("GogoAnime", "raw data URL: $data")
+
+        val cleanData = data.replace("\\/", "/")
+        val realUrl = Regex("""https?://[^\s"']+""").findAll(cleanData).lastOrNull()?.value ?: data
+        Log.d("GogoAnime", "resolved realUrl: $realUrl")
+
+        Log.d("GogoAnime", "calling app.get on $realUrl")
+        val mainHtml = app.get(realUrl, timeout = 60).text
         Log.d("GogoAnime", "=== MAIN PAGE HTML (first 2000) ===\n${mainHtml.take(2000)}\n=== END MAIN PAGE HTML ===")
         val doc = Jsoup.parse(mainHtml)
 
@@ -298,7 +316,7 @@ class GogoAnimeProvider : MainAPI() {
 
         for ((_, streamingUrl) in serverUrls) {
             Log.d("GogoAnime", "Calling loadExtractor for $streamingUrl")
-            val loaded = loadExtractor(streamingUrl, data, subtitleCallback, callback)
+            val loaded = loadExtractor(streamingUrl, realUrl, subtitleCallback, callback)
             Log.d("GogoAnime", "loadExtractor returned $loaded for $streamingUrl")
         }
 
