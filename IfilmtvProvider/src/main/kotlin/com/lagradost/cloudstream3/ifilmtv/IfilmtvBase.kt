@@ -55,9 +55,11 @@ abstract class IfilmtvBase(
         val items = mutableListOf<SearchResponse>()
 
         when {
-            request.data.contains("/Live") -> {
-                ALL_LIVE_STREAMS.forEach { (title, langCode, _) ->
-                    items.add(liveItem(title, langCode))
+            request.data.contains("/Home/Live") -> {
+                if (page == 1) {
+                    ALL_LIVE_STREAMS.forEach { (title, langCode, _) ->
+                        items.add(liveItem(title, langCode))
+                    }
                 }
             }
             request.data.contains("/Series") -> {
@@ -80,9 +82,9 @@ abstract class IfilmtvBase(
     }
 
     override val mainPage = mainPageOf(
+        "$mainUrl/Home/Live" to "Live / البث الحي",
         "$mainUrl/Series" to seriesLabel,
         "$mainUrl/Film" to moviesLabel,
-        "$mainUrl/Home/Live" to "Live / البث الحي",
     )
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -225,9 +227,15 @@ abstract class IfilmtvBase(
                 val idSerial = parts[1]
                 val ep = parts[2]
                 val langE = parts[3]
-                val mp4Url = "https://preview.presstv.ir/ifilm/$langE$idSerial/$ep.mp4"
+                val videoLang = if (langE == "fa") "" else langE
+                val mp4Url = "https://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
                 callback(newExtractorLink(name, "MP4", mp4Url, ExtractorLinkType.VIDEO) {
                     this.quality = Qualities.P720.value
+                    this.referer = mainUrl
+                })
+                val hlsUrl = "https://vod.ifilmtv.ir/hls/$videoLang$idSerial/$ep,${ep}_320,.mp4.urlset/master.m3u8"
+                callback(newExtractorLink(name, "HLS", hlsUrl, ExtractorLinkType.M3U8) {
+                    this.quality = Qualities.P1080.value
                     this.referer = mainUrl
                 })
             }
