@@ -300,10 +300,12 @@ class GogoAnimeProvider : MainAPI() {
                                         val language = track.optString("language", "").ifBlank { track.optString("label", "") }
                                         if (file.isNotBlank() && (kind == "captions" || kind == "subtitles")) {
                                             Log.d("GogoAnime", "Found subtitle track: file=$file lang=$language")
-                                            subtitleCallback(newSubtitleFile(
-                                                lang = if (language.isNotBlank()) language else "Unknown",
+                                            val subtitle = newSubtitleFile(
+                                                lang = language.ifBlank { "Unknown" },
                                                 url = file
-                                            ))
+                                            )
+                                            subtitle.headers = mapOf("Referer" to megaplayIframe)
+                                            subtitleCallback(subtitle)
                                         }
                                     }
                                 }
