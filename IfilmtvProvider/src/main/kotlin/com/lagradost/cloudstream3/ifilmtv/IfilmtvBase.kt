@@ -1,5 +1,6 @@
 package com.lagradost.cloudstream3.ifilmtv
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -157,6 +158,7 @@ abstract class IfilmtvBase(
             }
         }
 
+        Log.i("Ifilmtv", "load url=$url")
         val episodes = mutableListOf<Episode>()
         val contentId = Regex("Uid['\"]?\\s*['\"]?(\\d+)").find(html)?.groupValues?.get(1)
             ?: url.substringAfterLast("/")
@@ -166,7 +168,10 @@ abstract class IfilmtvBase(
         val inter = Regex("inter_\\s*=\\s*(\\d+)").find(html)?.groupValues?.get(1)?.toIntOrNull()
         val langE = Regex("""langE\s*=\s*"(\w+)"""").find(html)?.groupValues?.get(1) ?: "ar"
 
+        Log.i("Ifilmtv", "contentId=$contentId extrafild=$extrafild idSerial=$idSerial inter=$inter langE=$langE")
+
         if (extrafild != null && extrafild.isNotBlank() && idSerial != null && inter != null) {
+            Log.i("Ifilmtv", "Using extrafild direct loop path with inter=$inter")
             for (ep in 1..inter) {
                 val epData = "ifilmtv_path_a|$idSerial|$ep|$langE"
                 episodes.add(newEpisode(epData) {
@@ -175,15 +180,19 @@ abstract class IfilmtvBase(
                 })
             }
         } else {
+            Log.i("Ifilmtv", "Using AJAX fallback path")
             var page = 1
             var hasMore = true
             while (hasMore) {
                 val ajaxUrl = "$mainUrl/Home/PageingAttachmentItem?id=$contentId&page=$page&size=10"
+                Log.i("Ifilmtv", "Fetching AJAX page $page from $ajaxUrl")
                 val resp = app.get(ajaxUrl).text
                 if (resp.isBlank() || resp == "[]") {
+                    Log.i("Ifilmtv", "AJAX page $page returned empty response")
                     hasMore = false
                 } else {
                     val arr = JSONArray(resp)
+                    Log.i("Ifilmtv", "AJAX page $page returned ${arr.length()} items")
                     if (arr.length() == 0) {
                         hasMore = false
                     } else {
@@ -208,6 +217,7 @@ abstract class IfilmtvBase(
         }
 
         val sorted = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 0 }))
+        Log.i("Ifilmtv", "Parsed total episodes count: ${sorted.size}")
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sorted) {
             this.posterUrl = poster
             this.plot = synopsis
@@ -221,6 +231,7 @@ abstract class IfilmtvBase(
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.i("Ifilmtv", "loadLinks data=$data")
         if (data.startsWith("ifilmtv_path_a|")) {
             val parts = data.split("|")
             if (parts.size >= 4) {
@@ -231,6 +242,7 @@ abstract class IfilmtvBase(
                 
                 // HTTP MP4 stream (Primary, bypasses certificate revocation block)
                 val mp4UrlHttp = "http://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
+                Log.i("Ifilmtv", "Adding MP4 (HTTP): $mp4UrlHttp")
                 callback(newExtractorLink(name, "MP4 (HTTP)", mp4UrlHttp, ExtractorLinkType.VIDEO) {
                     this.quality = Qualities.P720.value
                     this.referer = mainUrl
@@ -238,6 +250,7 @@ abstract class IfilmtvBase(
 
                 // HTTPS MP4 stream (Fallback)
                 val mp4UrlHttps = "https://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
+                Log.i("Ifilmtv", "Adding MP4 (HTTPS): $mp4UrlHttps")
                 callback(newExtractorLink(name, "MP4 (HTTPS)", mp4UrlHttps, ExtractorLinkType.VIDEO) {
                     this.quality = Qualities.P720.value
                     this.referer = mainUrl
@@ -245,6 +258,7 @@ abstract class IfilmtvBase(
 
                 // HTTP HLS stream (Primary, fixed layout with leading comma after slash)
                 val hlsUrlHttp = "http://vod.ifilmtv.ir/hls/$videoLang$idSerial/,$ep,${ep}_320,.mp4.urlset/master.m3u8"
+                Log.i("Ifilmtv", "Adding HLS (HTTP): $hlsUrlHttp")
                 callback(newExtractorLink(name, "HLS (HTTP)", hlsUrlHttp, ExtractorLinkType.M3U8) {
                     this.quality = Qualities.P1080.value
                     this.referer = mainUrl
@@ -252,6 +266,7 @@ abstract class IfilmtvBase(
 
                 // HTTPS HLS stream (Fallback, fixed layout with leading comma after slash)
                 val hlsUrlHttps = "https://vod.ifilmtv.ir/hls/$videoLang$idSerial/,$ep,${ep}_320,.mp4.urlset/master.m3u8"
+                Log.i("Ifilmtv", "Adding HLS (HTTPS): $hlsUrlHttps")
                 callback(newExtractorLink(name, "HLS (HTTPS)", hlsUrlHttps, ExtractorLinkType.M3U8) {
                     this.quality = Qualities.P1080.value
                     this.referer = mainUrl
@@ -262,6 +277,7 @@ abstract class IfilmtvBase(
 
         if (data.startsWith("http")) {
             val type = if (data.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            Log.i("Ifilmtv", "Adding direct HTTP/HTTPS link: $data")
             callback(newExtractorLink(name, name, data, type) {
                 this.quality = Qualities.P720.value
                 this.referer = mainUrl
@@ -269,6 +285,7 @@ abstract class IfilmtvBase(
             return true
         }
 
+        Log.i("Ifilmtv", "loadLinks: unhandled data structure")
         return false
     }
 }
