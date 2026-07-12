@@ -126,22 +126,21 @@ class GogoAnimeProvider : MainAPI() {
                     ).document
                     ajaxDoc.select("li > a[href*='-episode-']").forEach { a ->
                         val rawHref = a.attr("href")
-                        val epUrl = rawHref.trim().removeSurrounding("\"").removeSurrounding("'")
-                        val nameEl = a.selectFirst("div.name")
-                        val rawName = nameEl?.text() ?: ""
-                        val cate = a.selectFirst("div.cate")?.text() ?: ""
-                        Log.d("GogoAnime", "  episode: rawHref='$rawHref' cleanUrl='$epUrl' name='$rawName' cate='$cate' fullText='${a.text().trim()}'")
-                        val epNum = rawName.replace(Regex("[^0-9]"), "").toIntOrNull()
-                        val epName = if (epNum != null) {
-                            val base = rawName.trim()
-                            val baseName = when {
-                                base.contains("الحلقة", true) || base.contains("episode", true) -> base
-                                else -> "Episode $epNum"
-                            }
-                            if (cate.isNotBlank()) "$baseName ($cate)" else baseName
-                        } else {
-                            rawName.ifBlank { a.text().trim() }
+                        val epUrl = rawHref
+                            .replace("\\/", "/")
+                            .replace("\\\"", "\"")
+                            .trim()
+                            .removeSurrounding("\"").removeSurrounding("'")
+                        val fullText = a.text().trim()
+                        Log.d("GogoAnime", "  episode: rawHref='$rawHref' cleanUrl='$epUrl' fullText='$fullText'")
+                        val epNum = Regex("""episode[_-](\d+)""", RegexOption.IGNORE_CASE)
+                            .find(epUrl)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: Regex("""\d+""").find(fullText)?.value?.toIntOrNull()
+                        val type = when {
+                            fullText.contains("DUB", true) || fullText.contains("مدبلج", true) -> "DUB"
+                            else -> "SUB"
                         }
+                        val epName = if (epNum != null) "Episode $epNum ($type)" else "Episode ($type)"
                         if (epUrl.isNotBlank()) {
                             episodes.add(newEpisode(epUrl) {
                                 this.name = epName
@@ -248,62 +247,80 @@ class GogoAnimeProvider : MainAPI() {
                     Log.d("GogoAnime", "fetching megaplay iframe: $megaplayIframe")
                     val megaplayHtml = app.get(megaplayIframe, timeout = 30, referer = streamingUrl).text
                     Log.d("GogoAnime", "=== MEGAPLAY HTML (full) ===\n${megaplayHtml}\n=== END MEGAPLAY HTML ===")
-                    val megaplayDoc = Jsoup.parse(megaplayHtml)
                     var foundVideo = false
 
-                    val m3u8Url = Regex("""['"]?(https?://[^'"]*\.m3u8[^'"]*)""", RegexOption.IGNORE_CASE)
-                        .find(megaplayDoc.html())?.groupValues?.get(1)
-                    if (m3u8Url != null) {
-                        Log.d("GogoAnime", "FOUND m3u8: $m3u8Url")
-                        foundVideo = true
-                        callback(newExtractorLink(name, serverLabel, m3u8Url, ExtractorLinkType.M3U8) {
-                            this.referer = megaplayIframe
-                            this.quality = Qualities.P720.value
-                        })
-                    } else {
-                        Log.d("GogoAnime", "No m3u8 URL found in megaplay HTML")
-                    }
+                    val dataId = Regex("""<div[^>]*id="megaplay-player"[^>]*data-id="([^"]+)"""")
+                        .find(megaplayHtml)?.groupValues?.get(1)
+                    Log.d("GogoAnime", "Megaplay data-id: $dataId")
 
-                    val mp4Url = Regex("""['"]?(https?://[^'"]*\.mp4[^'"]*)""", RegexOption.IGNORE_CASE)
-                        .find(megaplayDoc.html())?.groupValues?.get(1)
-                    if (mp4Url != null && m3u8Url == null) {
-                        Log.d("GogoAnime", "FOUND mp4: $mp4Url")
-                        foundVideo = true
-                        callback(newExtractorLink(name, serverLabel, mp4Url, ExtractorLinkType.VIDEO) {
-                            this.referer = megaplayIframe
-                            this.quality = Qualities.P720.value
-                        })
-                    } else if (mp4Url != null) {
-                        Log.d("GogoAnime", "Found mp4 but skipping because m3u8 already found")
-                    } else {
-                        Log.d("GogoAnime", "No mp4 URL found in megaplay HTML")
-                    }
+                    if (dataId != null) {
+                        val sourcesUrl = "https://megaplay.buzz/stream/getSources?id=$dataId"
+                        Log.d("GogoAnime", "Fetching sources from: $sourcesUrl")
+                        try {
+                            val sourcesJson = app.get(sourcesUrl, timeout = 30, referer = megaplayIframe).text
+                            Log.d("GogoAnime", "Sources response: ${sourcesJson.take(1000)}")
+                            val json = org.json.JSONObject(sourcesJson)
+                            val sources = json.optJSONArray("sources")
+                            if (sources != null) {
+                                for (i in 0 until sources.length()) {
+                                    val source = sources.optJSONObject(i)
+                                    if (source != null) {
+                                        val file = source.optString("file", "")
+                                        val type = source.optString("type", "")
+                                        val label = source.optString("label", "")
+                                        if (file.isNotBlank()) {
+                                            Log.d("GogoAnime", "Found source: file=$file type=$type label=$label")
+                                            val linkType = when {
+                                                file.contains(".m3u8") || type == "hls" -> ExtractorLinkType.M3U8
+                                                else -> ExtractorLinkType.VIDEO
+                                            }
+                                            callback(newExtractorLink(name, "$serverLabel ${label.ifBlank { serverLabel }}", file, linkType) {
+                                                this.referer = "https://megaplay.buzz/"
+                                                this.quality = when {
+                                                    label.contains("1080") -> Qualities.P1080.value
+                                                    label.contains("720") -> Qualities.P720.value
+                                                    label.contains("480") -> Qualities.P480.value
+                                                    label.contains("360") -> Qualities.P360.value
+                                                    else -> Qualities.P720.value
+                                                }
+                                            })
+                                            foundVideo = true
+                                        }
+                                    }
+                                }
+                            } else {
+                                Log.d("GogoAnime", "No 'sources' array in JSON response")
+                                Log.d("GogoAnime", "Full JSON keys: ${json.names()}")
+                            }
 
-                    val anyVideo = Regex("""(https?://[^'"]*\.(?:m3u8|mp4|ts|webm|mkv)[^'"]*)""", RegexOption.IGNORE_CASE)
-                        .findAll(megaplayDoc.html()).toList()
-                    Log.d("GogoAnime", "All video URLs found: ${anyVideo.map { it.groupValues[1] }}")
-
-                    val subtitlePattern = Regex(
-                        """['"]?(https?://[^'"]*\.(?:vtt|srt|ass|sub)[^'"]*)""",
-                        RegexOption.IGNORE_CASE
-                    )
-                    subtitlePattern.findAll(megaplayDoc.html()).forEach { match ->
-                        val subUrl = match.groupValues[1]
-                        if (subUrl.isNotBlank()) {
-                            Log.d("GogoAnime", "Found subtitle $subUrl")
-                            subtitleCallback(newSubtitleFile(
-                                lang = extractSubtitleLang(subUrl),
-                                url = subUrl
-                            ))
+                            val tracks = json.optJSONArray("tracks")
+                            if (tracks != null) {
+                                for (i in 0 until tracks.length()) {
+                                    val track = tracks.optJSONObject(i)
+                                    if (track != null) {
+                                        val file = track.optString("file", "")
+                                        val kind = track.optString("kind", "")
+                                        val language = track.optString("language", "")
+                                        if (file.isNotBlank() && (kind == "captions" || kind == "subtitles")) {
+                                            Log.d("GogoAnime", "Found subtitle track: file=$file lang=$language")
+                                            subtitleCallback(newSubtitleFile(
+                                                lang = if (language.isNotBlank()) language else "Unknown",
+                                                url = file
+                                            ))
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.d("GogoAnime", "Error fetching sources: ${e.message}")
                         }
+                    } else {
+                        Log.d("GogoAnime", "No megaplay data-id found in HTML")
                     }
 
                     if (!foundVideo) {
-                        Log.d("GogoAnime", "No video found via HTTP, providing fallback link for $megaplayIframe")
-                        callback(newExtractorLink(name, "$serverLabel (WebView)", megaplayIframe, ExtractorLinkType.M3U8) {
-                            this.referer = streamingUrl
-                            this.quality = Qualities.P720.value
-                        })
+                        Log.d("GogoAnime", "No m3u8 via API for $serverLabel, WebView fallback for $megaplayIframe")
+                        loadExtractor(megaplayIframe, realUrl, subtitleCallback, callback)
                     }
                 } else {
                     Log.d("GogoAnime", "WARN: no iframe found on stream page at all")
@@ -312,12 +329,6 @@ class GogoAnimeProvider : MainAPI() {
                 Log.d("GogoAnime", "Error processing $streamingUrl: ${e.message}")
                 Log.d("GogoAnime", "Stack: ${e.stackTraceToString()}")
             }
-        }
-
-        for ((_, streamingUrl) in serverUrls) {
-            Log.d("GogoAnime", "Calling loadExtractor for $streamingUrl")
-            val loaded = loadExtractor(streamingUrl, realUrl, subtitleCallback, callback)
-            Log.d("GogoAnime", "loadExtractor returned $loaded for $streamingUrl")
         }
 
         Log.d("GogoAnime", "=== loadLinks returning true ===")
