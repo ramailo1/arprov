@@ -228,13 +228,31 @@ abstract class IfilmtvBase(
                 val ep = parts[2]
                 val langE = parts[3]
                 val videoLang = if (langE == "fa") "" else langE
-                val mp4Url = "https://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
-                callback(newExtractorLink(name, "MP4", mp4Url, ExtractorLinkType.VIDEO) {
+                
+                // HTTP MP4 stream (Primary, bypasses certificate revocation block)
+                val mp4UrlHttp = "http://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
+                callback(newExtractorLink(name, "MP4 (HTTP)", mp4UrlHttp, ExtractorLinkType.VIDEO) {
                     this.quality = Qualities.P720.value
                     this.referer = mainUrl
                 })
-                val hlsUrl = "https://vod.ifilmtv.ir/hls/$videoLang$idSerial/$ep,${ep}_320,.mp4.urlset/master.m3u8"
-                callback(newExtractorLink(name, "HLS", hlsUrl, ExtractorLinkType.M3U8) {
+
+                // HTTPS MP4 stream (Fallback)
+                val mp4UrlHttps = "https://preview.presstv.ir/ifilm/$videoLang$idSerial/$ep.mp4"
+                callback(newExtractorLink(name, "MP4 (HTTPS)", mp4UrlHttps, ExtractorLinkType.VIDEO) {
+                    this.quality = Qualities.P720.value
+                    this.referer = mainUrl
+                })
+
+                // HTTP HLS stream (Primary, fixed layout with leading comma after slash)
+                val hlsUrlHttp = "http://vod.ifilmtv.ir/hls/$videoLang$idSerial/,$ep,${ep}_320,.mp4.urlset/master.m3u8"
+                callback(newExtractorLink(name, "HLS (HTTP)", hlsUrlHttp, ExtractorLinkType.M3U8) {
+                    this.quality = Qualities.P1080.value
+                    this.referer = mainUrl
+                })
+
+                // HTTPS HLS stream (Fallback, fixed layout with leading comma after slash)
+                val hlsUrlHttps = "https://vod.ifilmtv.ir/hls/$videoLang$idSerial/,$ep,${ep}_320,.mp4.urlset/master.m3u8"
+                callback(newExtractorLink(name, "HLS (HTTPS)", hlsUrlHttps, ExtractorLinkType.M3U8) {
                     this.quality = Qualities.P1080.value
                     this.referer = mainUrl
                 })
