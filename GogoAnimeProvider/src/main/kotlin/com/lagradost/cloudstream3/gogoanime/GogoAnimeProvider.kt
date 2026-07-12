@@ -2,6 +2,7 @@ package com.lagradost.cloudstream3.gogoanime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import android.util.Log
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -14,7 +15,6 @@ class GogoAnimeProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA, TvType.Others)
 
     private val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-    private val nonce = "f5ca6470db"
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val a = selectFirst("a") ?: return null
@@ -35,20 +35,12 @@ class GogoAnimeProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get(request.data.format(page), timeout = 120).document
+        Log.d("GogoAnime", "Fetched main page ${request.name}, page $page URL: ${request.data.format(page)}")
         val items = mutableListOf<SearchResponse>()
 
-        val isRecent = request.name.contains("الحلقات")
-        if (isRecent) {
-            doc.select("ul.items > li").mapNotNull { it.toSearchResponse() }.also { items.addAll(it) }
-        } else {
-            doc.select("div.content-all-film > a.inner-panel").mapNotNull { el ->
-                val url = el.attr("href") ?: return@mapNotNull null
-                val title = el.selectFirst("h3, h6")?.text() ?: return@mapNotNull null
-                val poster = el.selectFirst("img")?.attr("src") ?: return@mapNotNull null
-                newAnimeSearchResponse(title, url, TvType.Anime) { this.posterUrl = poster }
-            }.also { items.addAll(it) }
-        }
+        doc.select("ul.items > li").mapNotNull { it.toSearchResponse() }.also { items.addAll(it) }
 
+        Log.d("GogoAnime", "Total items gathered: ${items.size}")
         return newHomePageResponse(request.name, items)
     }
 
@@ -70,6 +62,9 @@ class GogoAnimeProvider : MainAPI() {
         }
 
         val doc = app.get(animeUrl, timeout = 120).document
+        Log.d("GogoAnime", "Loading anime page $animeUrl")
+        val nonce = Regex("""nonce:\s*['"]([a-f0-9]+)['"]""").find(doc.html())?.groupValues?.get(1) ?: "b273b7b384"
+        Log.d("GogoAnime", "Extracted nonce: $nonce")
 
         val title = doc.selectFirst("div.anime_info_body_bg h1, h1")?.text()
             ?: doc.selectFirst("meta[property='og:title']")?.attr("content")
@@ -80,9 +75,6 @@ class GogoAnimeProvider : MainAPI() {
         val genres = doc.select("p.type:contains(Genres) a, p.type:contains(التصنيفات) a").map { it.text() }
         val year = doc.selectFirst("p.type:contains(Released)")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
 
-        val malId = doc.selectFirst("a[href*='myanimelist.net']")?.attr("href")
-            ?.replace(Regex(".*anime/|/.*"), "")?.toIntOrNull()
-
         val episodeRanges = doc.select("#episode_page a").mapNotNull {
             Triple(
                 it.attr("data-range-start").toIntOrNull() ?: return@mapNotNull null,
@@ -91,6 +83,7 @@ class GogoAnimeProvider : MainAPI() {
             )
         }
 
+        Log.d("GogoAnime", "Found ${episodeRanges.size} episode ranges")
         val episodes = mutableListOf<Episode>()
 
         if (episodeRanges.isNotEmpty()) {
@@ -148,6 +141,7 @@ class GogoAnimeProvider : MainAPI() {
         val doc = app.get(data, timeout = 60).document
 
         val serverLinks = doc.select(".anime_muti_link a[data-video]")
+        Log.d("GogoAnime", "Found ${serverLinks.size} server links")
         if (serverLinks.isEmpty()) return false
 
         val serverUrls = mutableListOf<Pair<String, String>>()
@@ -164,12 +158,15 @@ class GogoAnimeProvider : MainAPI() {
             }
         }
 
+        Log.d("GogoAnime", "Collected ${serverUrls.size} server URLs")
         if (serverUrls.isEmpty()) return false
 
         for ((serverLabel, streamingUrl) in serverUrls) {
             try {
+                Log.d("GogoAnime", "Processing streaming URL $streamingUrl")
                 val streamDoc = app.get(streamingUrl, timeout = 30).document
                 val megaplayIframe = streamDoc.selectFirst("iframe")?.attr("src")
+                Log.d("GogoAnime", "Found megaplay iframe $megaplayIframe")
 
                 if (megaplayIframe != null) {
                     val megaplayDoc = app.get(megaplayIframe, timeout = 30, referer = streamingUrl).document
@@ -178,6 +175,7 @@ class GogoAnimeProvider : MainAPI() {
                         .find(megaplayDoc.html())?.groupValues?.get(1)
 
                     if (m3u8Url != null) {
+                        Log.d("GogoAnime", "Found m3u8 $m3u8Url")
                         callback(newExtractorLink(name, serverLabel, m3u8Url, ExtractorLinkType.M3U8) {
                             this.referer = megaplayIframe
                             this.quality = Qualities.P720.value
@@ -191,7 +189,8 @@ class GogoAnimeProvider : MainAPI() {
                     subtitlePattern.findAll(megaplayDoc.html()).forEach { match ->
                         val subUrl = match.groupValues[1]
                         if (subUrl.isNotBlank()) {
-                            subtitleCallback(SubtitleFile(
+                            Log.d("GogoAnime", "Found subtitle $subUrl")
+                            subtitleCallback(newSubtitleFile(
                                 lang = extractSubtitleLang(subUrl),
                                 url = subUrl
                             ))
@@ -201,6 +200,7 @@ class GogoAnimeProvider : MainAPI() {
                     val mp4Url = Regex("""['"]?(https?://[^'"]*\.mp4[^'"]*)""", RegexOption.IGNORE_CASE)
                         .find(megaplayDoc.html())?.groupValues?.get(1)
                     if (mp4Url != null && m3u8Url == null) {
+                        Log.d("GogoAnime", "Found MP4 $mp4Url")
                         callback(newExtractorLink(name, serverLabel, mp4Url, ExtractorLinkType.VIDEO) {
                             this.referer = megaplayIframe
                             this.quality = Qualities.P720.value
@@ -211,6 +211,7 @@ class GogoAnimeProvider : MainAPI() {
         }
 
         for ((_, streamingUrl) in serverUrls) {
+            Log.d("GogoAnime", "Loading extractor for $streamingUrl")
             loadExtractor(streamingUrl, data, subtitleCallback, callback)
         }
 
