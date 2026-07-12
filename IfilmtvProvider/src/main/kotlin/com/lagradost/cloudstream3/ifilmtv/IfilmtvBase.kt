@@ -232,7 +232,7 @@ abstract class IfilmtvBase(
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.i("Ifilmtv", "loadLinks data=$data")
-        if (data.startsWith("ifilmtv_path_a|")) {
+        if (data.contains("ifilmtv_path_a|")) {
             val parts = data.split("|")
             if (parts.size >= 4) {
                 val idSerial = parts[1]
