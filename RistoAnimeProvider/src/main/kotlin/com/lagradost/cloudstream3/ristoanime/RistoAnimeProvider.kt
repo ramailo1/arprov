@@ -3,6 +3,7 @@ package com.lagradost.cloudstream3.ristoanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
@@ -14,14 +15,14 @@ class RistoAnimeProvider : MainAPI() {
     private suspend fun ensureDomain() {
         if (checkedDomain) return
         mutex.withLock {
-            if (checkedDomain) return
+            if (checkedDomain) return@withLock
             for (domain in domainPool) {
                 try {
                     val response = app.get(domain, timeout = 10)
                     if (response.isSuccessful) {
                         mainUrl = domain
                         checkedDomain = true
-                        return
+                        break
                     }
                 } catch (e: Exception) {
                     // ignore and try next
