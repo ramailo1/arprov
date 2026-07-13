@@ -7,7 +7,37 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class RistoAnimeProvider : MainAPI() {
-    override var mainUrl = "https://ristoanime.org"
+    private val domainPool = listOf("https://ristoanime.me", "https://ristoanime.org")
+    private var checkedDomain = false
+    private val mutex = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun ensureDomain() {
+        if (checkedDomain) return
+        mutex.withLock {
+            if (checkedDomain) return
+            for (domain in domainPool) {
+                try {
+                    val response = app.get(domain, timeout = 10)
+                    if (response.isSuccessful) {
+                        mainUrl = domain
+                        checkedDomain = true
+                        return
+                    }
+                } catch (e: Exception) {
+                    // ignore and try next
+                }
+            }
+        }
+    }
+
+    private fun String.replaceDomain(): String {
+        return this.replace("https://ristoanime.org", mainUrl)
+            .replace("https://ristoanime.me", mainUrl)
+            .replace("http://ristoanime.org", mainUrl)
+            .replace("http://ristoanime.me", mainUrl)
+    }
+
+    override var mainUrl = domainPool.first()
     override var name = "RistoAnime"
     override val hasMainPage = true
     override var lang = "ar"
@@ -44,7 +74,8 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = buildPagedUrl(request.data, page)
+        ensureDomain()
+        val url = buildPagedUrl(request.data.replaceDomain(), page)
         val doc = app.get(url, headers = headers()).document
         politeDelay()
 
@@ -88,6 +119,7 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        ensureDomain()
         val url = "$mainUrl/search?q=${query.trim().replace(" ", "+")}"
         val doc = app.get(url, headers = headers()).document
         politeDelay()
@@ -96,7 +128,8 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val cleanUrl = url.removeSuffix("/watch").removeSuffix("/download")
+        ensureDomain()
+        val cleanUrl = url.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
         val doc = app.get(cleanUrl, headers = headers()).document
         politeDelay()
 
@@ -135,8 +168,8 @@ class RistoAnimeProvider : MainAPI() {
             
             if (seasons.isNotEmpty()) {
                 val scripts = doc.select("script").joinToString("\n") { it.html() } // Scan all scripts
-                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1) 
-                    ?: "https://ristoanime.org/wp-content/themes/TopAnime/Ajax/"
+                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1)?.replaceDomain() 
+                    ?: "$mainUrl/wp-content/themes/TopAnime/Ajax/"
                 val postId = Regex("post_id: '(\\d+)'").find(doc.html())?.groupValues?.get(1) 
                     ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
 
@@ -246,7 +279,8 @@ class RistoAnimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val postUrl = data.removeSuffix("/watch").removeSuffix("/download")
+        ensureDomain()
+        val postUrl = data.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
         val postDoc = app.get(postUrl, headers = headers()).document
         politeDelay(400)
 
