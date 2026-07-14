@@ -3,33 +3,12 @@ package com.lagradost.cloudstream3.ristoanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.withLock
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class RistoAnimeProvider : MainAPI() {
-    private val domainPool = listOf("https://ristoanime.me", "https://ristoanime.org")
-    private var checkedDomain = false
-    private val mutex = kotlinx.coroutines.sync.Mutex()
 
-    private suspend fun ensureDomain() {
-        if (checkedDomain) return
-        mutex.withLock {
-            if (checkedDomain) return@withLock
-            for (domain in domainPool) {
-                try {
-                    val response = app.get(domain, timeout = 10)
-                    if (response.isSuccessful) {
-                        mainUrl = domain
-                        checkedDomain = true
-                        break
-                    }
-                } catch (e: Exception) {
-                    // ignore and try next
-                }
-            }
-        }
-    }
+    override var mainUrl = "https://ristoanime.me"
 
     private fun String.replaceDomain(): String {
         return this.replace("https://ristoanime.org", mainUrl)
@@ -38,7 +17,6 @@ class RistoAnimeProvider : MainAPI() {
             .replace("http://ristoanime.me", mainUrl)
     }
 
-    override var mainUrl = domainPool.first()
     override var name = "RistoAnime"
     override val hasMainPage = true
     override var lang = "ar"
@@ -75,7 +53,6 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        ensureDomain()
         val url = buildPagedUrl(request.data.replaceDomain(), page)
         val doc = app.get(url, headers = headers()).document
         politeDelay()
@@ -120,7 +97,6 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        ensureDomain()
         val url = "$mainUrl/search?q=${query.trim().replace(" ", "+")}"
         val doc = app.get(url, headers = headers()).document
         politeDelay()
@@ -129,7 +105,6 @@ class RistoAnimeProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        ensureDomain()
         val cleanUrl = url.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
         val doc = app.get(cleanUrl, headers = headers()).document
         politeDelay()
@@ -274,71 +249,77 @@ class RistoAnimeProvider : MainAPI() {
         }
     }
 
+    private suspend fun extractLinksFromDoc(
+        doc: org.jsoup.nodes.Document,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // 1. data-watch / data-link / data-src attributes
+        doc.select("li[data-watch], button[data-watch], a[data-watch], li[data-link], [data-src]").forEach { el ->
+            val url = fixUrlNull(el.attr("data-watch").ifBlank { el.attr("data-link") }.ifBlank { el.attr("data-src") })
+            if (!url.isNullOrBlank()) loadExtractor(url, referer, subtitleCallback, callback)
+        }
+
+        // 2. iframes
+        doc.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) loadExtractor(src, referer, subtitleCallback, callback)
+        }
+
+        // 3. direct video file links
+        doc.select("source[src], video source, a[href]").forEach { el ->
+            val link = fixUrlNull(el.attr("src").ifBlank { el.attr("href") }) ?: return@forEach
+            val isM3u8 = link.contains(".m3u8", ignoreCase = true)
+            if (isM3u8 || link.contains(".mp4", ignoreCase = true) || link.contains(".mkv", ignoreCase = true)) {
+                callback(
+                    newExtractorLink(
+                        source = "RistoAnime",
+                        name = "RistoAnime - ${if (isM3u8) "HLS" else "Direct"}",
+                        url = link,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = referer
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        ensureDomain()
         val postUrl = data.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
         val postDoc = app.get(postUrl, headers = headers()).document
         politeDelay(400)
 
-        val watchUrl = fixUrlNull(postDoc.selectFirst("a:contains(المشاهدة الان)")?.attr("href"))
+        // Try extracting directly from the episode page first
+        extractLinksFromDoc(postDoc, postUrl, subtitleCallback, callback)
+
+        // Also follow watch/download redirect buttons if present
+        val watchUrl  = fixUrlNull(postDoc.selectFirst("a:contains(المشاهدة الان)")?.attr("href"))
         val downloadUrl = fixUrlNull(postDoc.selectFirst("a:contains(التحميل الان)")?.attr("href"))
 
         listOfNotNull(watchUrl, downloadUrl).distinct().forEach { actionUrl ->
             try {
                 val actionDoc = app.get(actionUrl, headers = headers(), referer = postUrl).document
                 politeDelay(250)
+                extractLinksFromDoc(actionDoc, actionUrl, subtitleCallback, callback)
 
-                // Extract iframes and direct links from data attributes
-                actionDoc.select("li[data-watch], button[data-watch], a[data-watch], li[data-link], [data-src]").forEach { el ->
-                    val url = fixUrlNull(el.attr("data-watch").ifBlank { el.attr("data-link") }.ifBlank { el.attr("data-src") })
-                    if (!url.isNullOrBlank()) loadExtractor(url, actionUrl, subtitleCallback, callback)
-                }
-
-                actionDoc.select("iframe[src]").forEach { iframe ->
-                    val src = iframe.attr("src")
-                    if (src.isNotBlank()) loadExtractor(src, actionUrl, subtitleCallback, callback)
-                }
-
-                // Extract direct video links from tags
-                actionDoc.select("a[href], source[src], video source").forEach { el ->
-                    val link = fixUrlNull(el.attr("href").ifBlank { el.attr("src") }) ?: return@forEach
-                    val isM3u8 = link.contains(".m3u8", ignoreCase = true)
-                    if (isM3u8 || link.contains(".mp4", ignoreCase = true) || link.contains(".mkv", ignoreCase = true)) {
-                        callback(
-                            newExtractorLink(
-                                source = "RistoAnime",
-                                name = "RistoAnime - ${if (isM3u8) "HLS" else "Direct"}",
-                                url = link,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = actionUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                }
-
-                // Extract download service buttons (ODOJO, CUTVID, etc.)
+                // For download page: also try external service links (ODOJO, CUTVID, etc.)
                 if (actionUrl == downloadUrl) {
                     actionDoc.select("a[href]:not([href*='$mainUrl'])").forEach { a ->
                         val link = fixUrlNull(a.attr("href")) ?: return@forEach
                         if (link.startsWith("http") && a.text().trim().isNotEmpty()) {
-                            try {
-                                loadExtractor(link, actionUrl, subtitleCallback, callback)
-                            } catch (e: Exception) {
-                                // Ignore extractor errors
-                            }
+                            try { loadExtractor(link, actionUrl, subtitleCallback, callback) } catch (_: Exception) {}
                         }
                     }
                 }
-            } catch (e: Exception) {
-                // Continue with next link
-            }
+            } catch (_: Exception) {}
         }
 
         return true
