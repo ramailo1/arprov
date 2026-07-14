@@ -95,6 +95,7 @@ graph TD
 | **iFilmTV (English)** | Series & Movies + Live | `com.lagradost.cloudstream3.ifilmtv` |
 | **iFilmTV (فارسی)** | سریال و فیلم + پخش زنده | `com.lagradost.cloudstream3.ifilmtv` |
 | **GogoAnime** | أنمي (Sub/Dub) | `com.lagradost.cloudstream3.gogoanime` |
+| **Shoffree** | أفلام ومسلسلات | `com.lagradost.cloudstream3.shoffree` |
 
 > [!NOTE]
 > **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.

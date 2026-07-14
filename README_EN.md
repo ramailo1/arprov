@@ -92,6 +92,7 @@ graph TD
 | **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
 | **TopCinema** | Movies & Series | `com.lagradost.cloudstream3.topcinema` |
+| **Shoffree** | Movies & Series | `com.lagradost.cloudstream3.shoffree` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
