@@ -210,6 +210,7 @@ class ShoffreeProvider : MainAPI() {
         val poster = card.selectFirst("img")?.attr("data-src") 
             ?: card.selectFirst("img")?.attr("src") ?: ""
         
+        val channelName = card.selectFirst(".channel-name")?.text()?.lowercase() ?: ""
         val type = when {
             link.contains("/watch/wrestling/") -> "wrestling"
             link.contains("/watch/theater/") -> "theater"  
@@ -218,8 +219,23 @@ class ShoffreeProvider : MainAPI() {
             link.contains("/watch/") && link.contains("/episode/") -> "series"
             else -> "unknown"
         }
-        
-        val tvType = if (type == "movie") TvType.Movie else TvType.TvSeries
+
+        val isAnime = (type == "series" || type == "movie") && (
+            title.contains("انمي", ignoreCase = true) ||
+            title.contains("أنمي", ignoreCase = true) ||
+            channelName.contains("anime") ||
+            channelName.contains("انمي") ||
+            channelName.contains("أنمي")
+        )
+
+        val tvType = when {
+            type == "movie" && isAnime -> TvType.Anime
+            type == "movie" -> TvType.Movie
+            isAnime -> TvType.Anime
+            else -> TvType.TvSeries
+        }
+
+        println("ShoffreeProvider: parseCard type=$type anime=$isAnime tvType=$tvType title=\"${title.take(50)}\"")
         
         items.add(newMovieSearchResponse(title, link, tvType) {
             this.posterUrl = poster
@@ -281,94 +297,106 @@ class ShoffreeProvider : MainAPI() {
     }
 
     private suspend fun loadSeries(doc: Document, url: String): LoadResponse {
-        println("ShoffreeProvider: Loading series page")
+        println("ShoffreeProvider: loadSeries for $url")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
         val poster = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
         val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
-        
-        val episodes = extractEpisodesFromPlaylist(doc, url)
-        println("ShoffreeProvider: Series: $title, episodes: ${episodes.size}")
-        
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+
+        val isAnime = title.contains("انمي", ignoreCase = true) ||
+                      title.contains("أنمي", ignoreCase = true) ||
+                      doc.select(".channel-name, .genre, .category, .video-info span").any {
+                          it.text().contains("anime", ignoreCase = true) ||
+                          it.text().contains("انيميشن", ignoreCase = true)
+                      }
+        val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
+        println("ShoffreeProvider: Type=${if (isAnime) "Anime" else "TvSeries"}, searching episodes")
+
+        val firstEpLink = doc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
+        var episodes = emptyList<Episode>()
+
+        if (firstEpLink != null) {
+            val watchUrl = firstEpLink.attr("href")
+            println("ShoffreeProvider: First episode link: $watchUrl, fetching watch page")
+            try {
+                val watchDoc = app.get(watchUrl).document
+                episodes = extractEpisodesFromSidebar(watchDoc, title)
+            } catch (e: Exception) {
+                println("ShoffreeProvider: Failed to fetch watch page sidebar: ${e.message}")
+            }
+        } else {
+            println("ShoffreeProvider: No episode links found on series page")
+        }
+
+        println("ShoffreeProvider: Series \"$title\", episodes=${episodes.size}")
+
+        return newTvSeriesLoadResponse(title, url, tvType, episodes) {
             this.posterUrl = poster
             this.plot = plot
             this.year = year
         }
     }
 
-    private fun extractEpisodesFromPlaylist(doc: Document, @Suppress("UNUSED_PARAMETER") baseUrl: String): List<Episode> {
+    private fun extractEpisodesFromSidebar(doc: Document, seriesTitle: String = ""): List<Episode> {
+        println("ShoffreeProvider: Extracting episodes from sidebar for \"$seriesTitle\"")
         val episodes = mutableListOf<Episode>()
         
-        doc.select("#playlist-list .playlist-item, .playlist-items-wrapper a[data-ep-id]").forEach { epLink ->
-            val epUrl = epLink.attr("href").ifBlank { return@forEach }
-            val epNum = epLink.attr("data-ep").toIntOrNull() 
-                ?: Regex("""الحلقة\s*(\d+)""").find(epLink.text())?.groupValues?.get(1)?.toIntOrNull() 
-                ?: return@forEach
-            @Suppress("UNUSED_VARIABLE")
-            val epId = epLink.attr("data-ep-id") 
-                ?: Regex("""/episode/(\d+)/""").find(epUrl)?.groupValues?.get(1)
-                ?: return@forEach
+        doc.select("#playlist-list .playlist-item[data-ep-id]").forEach { epLink ->
+            val epUrl = epLink.attr("href").ifBlank {
+                println("ShoffreeProvider: Skipping sidebar item with no href")
+                return@forEach
+            }
+            val epNum = epLink.attr("data-ep").toIntOrNull()
+            if (epNum == null) {
+                println("ShoffreeProvider: Skipping sidebar item with no data-ep: ${epUrl.takeLast(60)}")
+                return@forEach
+            }
+            val epId = epLink.attr("data-ep-id")
             val epTitle = epLink.selectFirst("h4, .item-meta h4")?.text() ?: "الحلقة $epNum"
             val epPoster = epLink.selectFirst("img")?.attr("src") ?: ""
             
-            val seasonNum = Regex("""/season/(\d+)/""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            println("ShoffreeProvider: Episode #$epNum (id=$epId): \"$epTitle\" -> ${epUrl.takeLast(60)}")
             
-            episodes.add(newEpisode(epUrl) {
-                this.name = epTitle
-                this.episode = epNum
-                this.season = seasonNum
-                this.posterUrl = epPoster
-            })
-        }
-        
-        doc.select(".video-player-wrapper a[href*='/episode/']").forEach { epLink ->
-            val epUrl = epLink.attr("href").ifBlank { return@forEach }
-            val epNum = Regex("""/episode/(\d+)/""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
-            val epTitle = epLink.text().ifBlank { "الحلقة $epNum" }
             episodes.add(newEpisode(epUrl) {
                 this.name = epTitle
                 this.episode = epNum
                 this.season = 1
+                this.posterUrl = epPoster
             })
         }
         
-        return episodes.distinctBy { Pair(it.season ?: 1, it.episode ?: 0) }
-            .sortedBy { it.season ?: 1 }.sortedBy { it.episode ?: 0 }
+        println("ShoffreeProvider: Sidebar yielded ${episodes.size} episodes for \"$seriesTitle\"")
+        return episodes.sortedBy { it.episode ?: 0 }
     }
 
     private suspend fun loadWatchPage(doc: Document, url: String): LoadResponse {
-        println("ShoffreeProvider: Loading watch page: $url")
-        
-        if (url.contains("/episode/")) {
-            val seriesUrl = doc.selectFirst("a[href*='/serie/']")?.attr("href") 
-                ?: doc.selectFirst("a[href*='الموسم']")?.attr("href")
-            
-            if (seriesUrl != null) {
-                println("ShoffreeProvider: Episode page detected, loading series: $seriesUrl")
-                val seriesDoc = app.get(seriesUrl).document
-                return loadSeries(seriesDoc, seriesUrl)
-            }
-        }
-        
+        println("ShoffreeProvider: loadWatchPage for $url")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
         val poster = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
-        
-        val isMovie = url.contains("/movie/") || !url.contains("/episode/")
+
+        if (url.contains("/episode/")) {
+            println("ShoffreeProvider: Episode watch page, extracting sidebar episodes")
+            val episodes = extractEpisodesFromSidebar(doc, title)
+
+            val isAnime = title.contains("انمي", ignoreCase = true) ||
+                          title.contains("أنمي", ignoreCase = true)
+            val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
+            println("ShoffreeProvider: ${episodes.size} episodes from sidebar, type=${if (isAnime) "Anime" else "TvSeries"}")
+
+            return newTvSeriesLoadResponse(title, url, tvType, episodes) {
+                this.posterUrl = poster
+                this.plot = plot
+            }
+        }
+
+        val isMovie = url.contains("/movie/")
         val tvType = if (isMovie) TvType.Movie else TvType.TvSeries
-        
-        return if (isMovie) {
-            newMovieLoadResponse(title, url, tvType, url) {
-                this.posterUrl = poster
-                this.plot = plot
-            }
-        } else {
-            val episodes = extractEpisodesFromPlaylist(doc, url)
-            newTvSeriesLoadResponse(title, url, tvType, episodes) {
-                this.posterUrl = poster
-                this.plot = plot
-            }
+        println("ShoffreeProvider: ${if (isMovie) "Movie" else "Wrestling"} watch page: \"$title\"")
+
+        return newMovieLoadResponse(title, url, tvType, url) {
+            this.posterUrl = poster
+            this.plot = plot
         }
     }
 
@@ -500,19 +528,39 @@ class ShoffreeProvider : MainAPI() {
         if (streamUrl.contains("/watch/")) {
             val (contentType, contentId, episodeId) = parseWatchUrl(streamUrl)
             println("ShoffreeProvider: Parsed watch URL - type=$contentType, id=$contentId, episode=$episodeId")
-            
+
             if (contentType != null && contentId != null) {
+                // POST key_token to establish session for streem endpoint
+                println("ShoffreeProvider: POST key_token=$contentId to establish session")
+                try {
+                    val postResp = app.post(
+                        streamUrl,
+                        data = mapOf("key_token" to contentId),
+                        headers = mapOf("Referer" to streamUrl, "X-Requested-With" to "XMLHttpRequest")
+                    )
+                    println("ShoffreeProvider: POST status=${postResp.code}, session established")
+                } catch (e: Exception) {
+                    println("ShoffreeProvider: POST session failed (non-fatal): ${e.message}")
+                }
+
                 val streemUrl = when (contentType) {
                     "movie" -> "$mainUrl/streem/watch/movie/$contentId"
                     "serie" -> {
                         if (episodeId != null) "$mainUrl/streem/watch/serie/$contentId/$episodeId" else null
                     }
+                    "wrestling" -> "$mainUrl/streem/watch/wrestling/$contentId"
                     else -> null
                 }
-                
+
                 if (streemUrl != null) {
                     val success = tryDirectDecryption(streemUrl, callback)
-                    if (success) return true
+                    if (success) {
+                        println("ShoffreeProvider: Direct decryption succeeded for $streemUrl")
+                        return true
+                    }
+                    println("ShoffreeProvider: Direct decryption failed for $streemUrl")
+                } else {
+                    println("ShoffreeProvider: No streem URL for type=$contentType id=$contentId")
                 }
             }
         }
@@ -548,13 +596,34 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun tryDirectDecryption(streemUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
         try {
             println("ShoffreeProvider: Trying direct decryption for $streemUrl")
-            val response = app.get(streemUrl, headers = mapOf("Referer" to mainUrl)).text
-            
-            println("ShoffreeProvider: Response length: ${response.length}")
-            
-            val decodedHtml = decryptResponse(response) ?: return false
+            val response = app.get(streemUrl, headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer" to mainUrl
+            ))
+            println("ShoffreeProvider: GET streem status=${response.code} length=${response.text.length}")
+            val responseText = response.text
+
+            if (responseText.isBlank()) {
+                println("ShoffreeProvider: EMPTY response from streem endpoint")
+                return false
+            }
+
+            println("ShoffreeProvider: Response preview: ${responseText.take(300)}")
+
+            val decodedHtml = decryptResponse(responseText)
+            if (decodedHtml == null) {
+                println("ShoffreeProvider: decryptResponse returned null — check encryption pattern match")
+                return false
+            }
+
+            if (decodedHtml.isBlank()) {
+                println("ShoffreeProvider: Decrypted HTML is blank despite decryption succeeding")
+                return false
+            }
+
             println("ShoffreeProvider: Decrypted HTML length: ${decodedHtml.length}")
-            
+            println("ShoffreeProvider: Decrypted preview: ${decodedHtml.take(300)}")
+
             return extractFromDecryptedHtml(decodedHtml, streemUrl, callback)
         } catch (e: Exception) {
             println("ShoffreeProvider: Direct decryption failed: ${e.message}")
@@ -564,32 +633,56 @@ class ShoffreeProvider : MainAPI() {
     }
 
     private suspend fun decryptResponse(response: String): String? {
+        // Log what the response actually looks like for debugging
+        val hasDecryptFunction = Regex("""\(function \(_key, _payload\) \{""").containsMatchIn(response)
+        val hasAltDecrypt = Regex("""_decrypt\(_payload,\s*_key\)""").containsMatchIn(response)
+        val hasShfEmb = response.contains("Shf_v2_embd")
+        val hasScriptTags = response.contains("<script")
+        val hasIframe = response.contains("<iframe")
+        val hasKeyToken = response.contains("key_token")
+        val hasVarKey = Regex("""var\s+_payload\s*=""").containsMatchIn(response)
+        val hasVarKey2 = Regex("""var\s+_key\s*=""").containsMatchIn(response)
+        println("ShoffreeProvider: decryptResponse patterns: hasDecryptFn=$hasDecryptFunction altDecrypt=$hasAltDecrypt ShfEmb=$hasShfEmb scripts=$hasScriptTags iframes=$hasIframe keyToken=$hasKeyToken varPayload=$hasVarKey varKey=$hasVarKey2")
+
         val scriptMatch = Regex("""\(function \(_key, _payload\) \{""").find(response)
         if (scriptMatch == null) {
-            println("ShoffreeProvider: No decryption function found in response")
-            return null
+            println("ShoffreeProvider: No primary decryption function found")
+            if (hasAltDecrypt) println("ShoffreeProvider: But alt decrypt pattern found — trying alt path")
+            else {
+                println("ShoffreeProvider: No known encryption pattern detected in response")
+                println("ShoffreeProvider: Available patterns: ShfEmb=$hasShfEmb scripts=$hasScriptTags iframes=$hasIframe")
+                return null
+            }
         }
-        
+
         val payloadMatch = Regex("""\("([^"]+)",\s*"([^"]+)"\)""").find(response)
         if (payloadMatch != null) {
             val key = payloadMatch.groupValues[1]
             val payload = payloadMatch.groupValues[2]
-            println("ShoffreeProvider: Decrypting with extracted key=$key, payload length=${payload.length}")
-            val decryptedHtml = decryptShoffreePlayer(payload, key)
-            return URLDecoder.decode(String(Base64.decode(decryptedHtml, Base64.DEFAULT), Charsets.UTF_8), "UTF-8")
+            println("ShoffreeProvider: Primary pattern — key=$key payload_len=${payload.length}")
+            val decryptedHex = decryptShoffreePlayer(payload, key)
+            println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
+            val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
+            println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
+            return URLDecoder.decode(String(decodedBytes, Charsets.UTF_8), "UTF-8")
         }
-        
+
         val altMatch = Regex("""_decrypt\(_payload,\s*_key\)""").find(response)
         if (altMatch != null) {
             val payloadMatch2 = Regex("""_payload\s*=\s*"([^"]+)""").find(response)
             if (payloadMatch2 != null) {
                 val payload = payloadMatch2.groupValues[1]
-                println("ShoffreeProvider: Found payload via alt pattern, using known key")
-                val decryptedHtml = decryptShoffreePlayer(payload, STREEM_DECRYPT_KEY)
-                return URLDecoder.decode(String(Base64.decode(decryptedHtml, Base64.DEFAULT), Charsets.UTF_8), "UTF-8")
+                println("ShoffreeProvider: Alt pattern — payload_len=${payload.length} key=$STREEM_DECRYPT_KEY")
+                val decryptedHex = decryptShoffreePlayer(payload, STREEM_DECRYPT_KEY)
+                println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
+                val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
+                println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
+                return URLDecoder.decode(String(decodedBytes, Charsets.UTF_8), "UTF-8")
             }
+            println("ShoffreeProvider: Alt pattern found but no _payload variable detected")
         }
-        
+
+        println("ShoffreeProvider: All decryption patterns exhausted, returning null")
         return null
     }
 
