@@ -536,7 +536,7 @@ class ShoffreeProvider : MainAPI() {
                     val postResp = app.post(
                         streamUrl,
                         data = mapOf("key_token" to contentId),
-                        headers = mapOf("Referer" to streamUrl, "X-Requested-With" to "XMLHttpRequest")
+                        headers = mapOf("Referer" to mainUrl, "X-Requested-With" to "XMLHttpRequest")
                     )
                     println("ShoffreeProvider: POST status=${postResp.code}, session established")
                 } catch (e: Exception) {
@@ -574,9 +574,13 @@ class ShoffreeProvider : MainAPI() {
             
             if (iframeSrc != null) {
                 val fullIframeUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
-                println("ShoffreeProvider: Found iframe: $fullIframeUrl")
-                loadExtractor(fullIframeUrl, subtitleCallback, callback)
-                return true
+                if (fullIframeUrl.contains(mainUrl.removePrefix("https://").removePrefix("http://"))) {
+                    println("ShoffreeProvider: Skipping internal iframe URL (same domain): $fullIframeUrl")
+                } else {
+                    println("ShoffreeProvider: Found iframe: $fullIframeUrl")
+                    loadExtractor(fullIframeUrl, subtitleCallback, callback)
+                    return true
+                }
             }
             
             val directSources = extractVideoSourcesFromPlayer(watchDoc.html())
@@ -664,7 +668,7 @@ class ShoffreeProvider : MainAPI() {
             println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
             val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
             println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
-            return URLDecoder.decode(String(decodedBytes, Charsets.UTF_8), "UTF-8")
+            return String(decodedBytes, Charsets.UTF_8)
         }
 
         val altMatch = Regex("""_decrypt\(_payload,\s*_key\)""").find(response)
@@ -677,7 +681,7 @@ class ShoffreeProvider : MainAPI() {
                 println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
                 val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
                 println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
-                return URLDecoder.decode(String(decodedBytes, Charsets.UTF_8), "UTF-8")
+                return String(decodedBytes, Charsets.UTF_8)
             }
             println("ShoffreeProvider: Alt pattern found but no _payload variable detected")
         }
