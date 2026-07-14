@@ -260,7 +260,7 @@ class ShoffreeProvider : MainAPI() {
             else -> "unknown"
         }
 
-        val isAnime = (type == "series" || type == "movie") && (
+        val isAnime = (type == "series" || type == "movie" || type == "theater" || type == "wrestling") && (
             title.contains("انمي", ignoreCase = true) ||
             title.contains("أنمي", ignoreCase = true) ||
             channelName.contains("anime") ||
@@ -269,8 +269,8 @@ class ShoffreeProvider : MainAPI() {
         )
 
         val tvType = when {
-            type == "movie" && isAnime -> TvType.Anime
-            type == "movie" -> TvType.Movie
+            (type == "movie" || type == "theater" || type == "wrestling") && isAnime -> TvType.Anime
+            type == "movie" || type == "theater" || type == "wrestling" -> TvType.Movie
             isAnime -> TvType.Anime
             else -> TvType.TvSeries
         }
@@ -317,7 +317,13 @@ class ShoffreeProvider : MainAPI() {
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
         fun getPosterUrl(): String {
             val ogImage = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
-            if (ogImage.isNotBlank() && !ogImage.contains("logo", true) && !ogImage.contains("favicon", true)) {
+            if (ogImage.isNotBlank() && 
+                !ogImage.contains("logo", true) && 
+                !ogImage.contains("favicon", true) && 
+                !ogImage.contains("icon", true) &&
+                !ogImage.contains("/assets/", true) &&
+                !ogImage.contains("/images/", true)
+            ) {
                 return ogImage
             }
             val otherPoster = doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
@@ -325,10 +331,16 @@ class ShoffreeProvider : MainAPI() {
                 ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
                 ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
                 ?: ""
-            if (otherPoster.isNotBlank() && !otherPoster.contains("logo", true) && !otherPoster.contains("favicon", true)) {
+            if (otherPoster.isNotBlank() && 
+                !otherPoster.contains("logo", true) && 
+                !otherPoster.contains("favicon", true) && 
+                !otherPoster.contains("icon", true) &&
+                !otherPoster.contains("/assets/", true) &&
+                !otherPoster.contains("/images/", true)
+            ) {
                 return otherPoster
             }
-            return ogImage
+            return ""
         }
         val poster = fixUrlNull(getPosterUrl()) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
@@ -460,18 +472,44 @@ class ShoffreeProvider : MainAPI() {
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
         fun getPosterUrl(): String {
             val ogImage = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
-            if (ogImage.isNotBlank() && !ogImage.contains("logo", true) && !ogImage.contains("favicon", true)) {
+            if (ogImage.isNotBlank() && 
+                !ogImage.contains("logo", true) && 
+                !ogImage.contains("favicon", true) && 
+                !ogImage.contains("icon", true) &&
+                !ogImage.contains("/assets/", true) &&
+                !ogImage.contains("/images/", true)
+            ) {
                 return ogImage
             }
+            
+            // Try extracting from player background-image style
+            val playerStyle = doc.selectFirst(".video-aspect-ratio, .fake-player, [style*=background-image]")?.attr("style") ?: ""
+            val bgUrl = Regex("""url\(['"]?([^'"]+)['"]?\)""").find(playerStyle)?.groupValues?.get(1) ?: ""
+            if (bgUrl.isNotBlank() && 
+                !bgUrl.contains("logo", true) && 
+                !bgUrl.contains("favicon", true) && 
+                !bgUrl.contains("icon", true) &&
+                !bgUrl.contains("/assets/", true) &&
+                !bgUrl.contains("/images/", true)
+            ) {
+                return bgUrl
+            }
+
             val otherPoster = doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
                 ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
                 ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
                 ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
                 ?: ""
-            if (otherPoster.isNotBlank() && !otherPoster.contains("logo", true) && !otherPoster.contains("favicon", true)) {
+            if (otherPoster.isNotBlank() && 
+                !otherPoster.contains("logo", true) && 
+                !otherPoster.contains("favicon", true) && 
+                !otherPoster.contains("icon", true) &&
+                !otherPoster.contains("/assets/", true) &&
+                !otherPoster.contains("/images/", true)
+            ) {
                 return otherPoster
             }
-            return ogImage
+            return ""
         }
         val poster = fixUrlNull(getPosterUrl()) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
@@ -528,7 +566,12 @@ class ShoffreeProvider : MainAPI() {
                     val src = el.attr("src").ifBlank { el.attr("data-src") }
                     if (src.isNotBlank()) {
                         val quality = extractQualityFromUrl(src) ?: Qualities.Unknown.value
-                        val link = newExtractorLink(name, "Shoffree", src, ExtractorLinkType.VIDEO) {
+                        val link = newExtractorLink(
+                            name, 
+                            "Shoffree", 
+                            src, 
+                            if (src.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
                             this.quality = quality
                             this.referer = mainUrl
                         }
@@ -543,7 +586,12 @@ class ShoffreeProvider : MainAPI() {
             Regex("""https?://[^"']+\.(?:m3u8|mp4)""").findAll(scripts).forEach { match ->
                 val src = match.value
                 val quality = extractQualityFromUrl(src) ?: Qualities.Unknown.value
-                val link = newExtractorLink(name, "Shoffree", src, ExtractorLinkType.VIDEO) {
+                val link = newExtractorLink(
+                    name, 
+                    "Shoffree", 
+                    src, 
+                    if (src.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
                     this.quality = quality
                     this.referer = mainUrl
                 }
@@ -556,7 +604,12 @@ class ShoffreeProvider : MainAPI() {
                 if (src.isNotBlank() && (src.contains("http") || src.startsWith("//"))) {
                     val fullSrc = if (src.startsWith("//")) "https:$src" else src
                     val quality = extractQualityFromUrl(fullSrc) ?: Qualities.Unknown.value
-                    val link = newExtractorLink(name, "Shoffree", fullSrc, ExtractorLinkType.VIDEO) {
+                    val link = newExtractorLink(
+                        name, 
+                        "Shoffree", 
+                        fullSrc, 
+                        if (fullSrc.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
                         this.quality = quality
                         this.referer = mainUrl
                     }
@@ -908,7 +961,12 @@ class ShoffreeProvider : MainAPI() {
                     else -> extractQualityFromUrl(file) ?: Qualities.Unknown.value
                 }
 
-                val link = newExtractorLink(name, label.ifBlank { "Shoffree" }, file, ExtractorLinkType.VIDEO) {
+                val link = newExtractorLink(
+                    name, 
+                    label.ifBlank { "Shoffree" }, 
+                    file, 
+                    if (file.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
                     this.quality = quality
                     this.referer = mainUrl
                 }
@@ -1058,9 +1116,14 @@ class ShoffreeProvider : MainAPI() {
                     println("ShoffreeProvider: Probe resolved media => $mediaUrl")
                     val quality = extractQualityFromUrl(mediaUrl) ?: Qualities.Unknown.value
                     GlobalScope.launch(Dispatchers.IO) {
-                        val link = newExtractorLink(name, "Shoffree", mediaUrl, ExtractorLinkType.VIDEO) {
+                        val link = newExtractorLink(
+                            name, 
+                            "Shoffree", 
+                            mediaUrl, 
+                            if (mediaUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
                             this.quality = quality
-                            this.referer = mainUrl
+                            this.referer = referer
                         }
                         callback(link)
                         if (continuation.isActive) {
@@ -1125,9 +1188,14 @@ class ShoffreeProvider : MainAPI() {
                             println("ShoffreeProvider: WebView intercepted media: $requestUrl")
                             val quality = extractQualityFromUrl(requestUrl) ?: Qualities.Unknown.value
                             GlobalScope.launch(Dispatchers.IO) {
-                                val link = newExtractorLink(name, "Shoffree", requestUrl, ExtractorLinkType.VIDEO) {
+                                val link = newExtractorLink(
+                                    name, 
+                                    "Shoffree", 
+                                    requestUrl, 
+                                    if (requestUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
                                     this.quality = quality
-                                    this.referer = mainUrl
+                                    this.referer = referer
                                 }
                                 callback(link)
                                 if (continuation.isActive) {
