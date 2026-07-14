@@ -315,13 +315,22 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun loadMovie(doc: Document, url: String): LoadResponse {
         println("ShoffreeProvider: Loading movie page")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val posterUrlRaw = doc.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
-            ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
-            ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
-            ?: ""
-        val poster = fixUrlNull(posterUrlRaw) ?: ""
+        fun getPosterUrl(): String {
+            val ogImage = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
+            if (ogImage.isNotBlank() && !ogImage.contains("logo", true) && !ogImage.contains("favicon", true)) {
+                return ogImage
+            }
+            val otherPoster = doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
+                ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
+                ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
+                ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
+                ?: ""
+            if (otherPoster.isNotBlank() && !otherPoster.contains("logo", true) && !otherPoster.contains("favicon", true)) {
+                return otherPoster
+            }
+            return ogImage
+        }
+        val poster = fixUrlNull(getPosterUrl()) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
         val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
         
@@ -449,13 +458,22 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun loadWatchPage(doc: Document, url: String): LoadResponse {
         println("ShoffreeProvider: loadWatchPage for $url")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val posterUrlRaw = doc.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
-            ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
-            ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
-            ?: ""
-        val poster = fixUrlNull(posterUrlRaw) ?: ""
+        fun getPosterUrl(): String {
+            val ogImage = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
+            if (ogImage.isNotBlank() && !ogImage.contains("logo", true) && !ogImage.contains("favicon", true)) {
+                return ogImage
+            }
+            val otherPoster = doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
+                ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
+                ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
+                ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
+                ?: ""
+            if (otherPoster.isNotBlank() && !otherPoster.contains("logo", true) && !otherPoster.contains("favicon", true)) {
+                return otherPoster
+            }
+            return ogImage
+        }
+        val poster = fixUrlNull(getPosterUrl()) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
 
         if (url.contains("/episode/")) {
@@ -474,8 +492,10 @@ class ShoffreeProvider : MainAPI() {
         }
 
         val isMovie = url.contains("/movie/")
-        val tvType = if (isMovie) TvType.Movie else TvType.TvSeries
-        println("ShoffreeProvider: ${if (isMovie) "Movie" else "Wrestling"} watch page: \"$title\"")
+        val isTheater = url.contains("/theater/")
+        val isWrestling = url.contains("/wrestling/")
+        val tvType = if (isMovie || isTheater || isWrestling) TvType.Movie else TvType.TvSeries
+        println("ShoffreeProvider: ${if (tvType == TvType.Movie) "Movie/Theater/Wrestling" else "Series"} watch page: \"$title\"")
 
         return newMovieLoadResponse(title, url, tvType, url) {
             this.posterUrl = poster
@@ -1034,6 +1054,23 @@ class ShoffreeProvider : MainAPI() {
                     userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 }
 
+                val probe = ShoffreeProbe { mediaUrl ->
+                    println("ShoffreeProvider: Probe resolved media => $mediaUrl")
+                    val quality = extractQualityFromUrl(mediaUrl) ?: Qualities.Unknown.value
+                    GlobalScope.launch(Dispatchers.IO) {
+                        val link = newExtractorLink(name, "Shoffree", mediaUrl, ExtractorLinkType.VIDEO) {
+                            this.quality = quality
+                            this.referer = mainUrl
+                        }
+                        callback(link)
+                        if (continuation.isActive) {
+                            println("ShoffreeProvider: WebView media found. Resuming coroutine.")
+                            continuation.resume(wv)
+                        }
+                    }
+                }
+                wv.addJavascriptInterface(probe, "ShoffreeProbe")
+
                 wv.webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                         if (consoleMessage != null) {
@@ -1047,11 +1084,13 @@ class ShoffreeProvider : MainAPI() {
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         println("ShoffreeProvider: WebView started loading: $url")
                         super.onPageStarted(view, url, favicon)
+                        view?.evaluateJavascript(buildJwHookScript(), null)
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         println("ShoffreeProvider: WebView finished loading: $url")
                         super.onPageFinished(view, url)
+                        view?.evaluateJavascript(buildJwHookScript(), null)
                     }
 
                     @Deprecated("Deprecated in Java")
@@ -1123,4 +1162,83 @@ class ShoffreeProvider : MainAPI() {
         }
         return@withTimeoutOrNull false
     } ?: false
+
+    class ShoffreeProbe(private val onUrl: (String) -> Unit) {
+        @android.webkit.JavascriptInterface
+        fun post(url: String) {
+            println("ShoffreeProvider: JS Probe intercepted URL: $url")
+            onUrl(url)
+        }
+    }
+
+    private fun buildJwHookScript(): String {
+        return """
+            (function() {
+                if (window.__shofHooked) return;
+                window.__shofHooked = true;
+                
+                // JWPlayer Hook
+                var _jwImpl = window.jwplayer;
+                Object.defineProperty(window, 'jwplayer', {
+                    configurable: true,
+                    enumerable: true,
+                    get: function() { return _jwImpl; },
+                    set: function(jw) {
+                        if (typeof jw !== 'function') { _jwImpl = jw; return; }
+                        _jwImpl = function() {
+                            var inst = jw.apply(this, arguments);
+                            if (inst && inst.setup) {
+                                var origSetup = inst.setup.bind(inst);
+                                inst.setup = function(cfg) {
+                                    try {
+                                        var src = (cfg.file)
+                                            || (cfg.playlist && cfg.playlist[0] && cfg.playlist[0].file)
+                                            || (cfg.sources && cfg.sources[0] && cfg.sources[0].file)
+                                            || '';
+                                        if (src) {
+                                            window.ShoffreeProbe.post(src);
+                                        }
+                                    } catch(e) {}
+                                    return origSetup(cfg);
+                                };
+                            }
+                            return inst;
+                        };
+                        try {
+                            for (var k in jw) {
+                                if (jw.hasOwnProperty(k)) {
+                                    try { _jwImpl[k] = jw[k]; } catch(e) {}
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                });
+
+                // XMLHttpRequest Hook
+                var XO = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    try {
+                        if (url.indexOf('.m3u8') !== -1 || url.indexOf('.mp4') !== -1) {
+                            window.ShoffreeProbe.post(url);
+                        }
+                    } catch(e) {}
+                    return XO.apply(this, arguments);
+                };
+
+                // Fetch Hook
+                var origFetch = window.fetch;
+                if (origFetch) {
+                    window.fetch = function(resource, init) {
+                        try {
+                            var url = typeof resource === 'string' ? resource : (resource ? resource.url : '');
+                            if (url.indexOf('.m3u8') !== -1 || url.indexOf('.mp4') !== -1) {
+                                window.ShoffreeProbe.post(url);
+                            }
+                        } catch(e) {}
+                        return origFetch.apply(this, arguments);
+                    };
+                }
+            })();
+        """.trimIndent()
+    }
 }
