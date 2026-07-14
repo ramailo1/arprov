@@ -22,6 +22,23 @@ import org.jsoup.nodes.Element
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URLEncoder
+import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Dispatchers
+import kotlin.coroutines.resume
 
 import kotlin.text.Charsets
 import com.lagradost.cloudstream3.utils.getQualityFromName
@@ -337,7 +354,7 @@ class ShoffreeProvider : MainAPI() {
         val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
         println("ShoffreeProvider: Type=${if (isAnime) "Anime" else "TvSeries"}")
 
-        val seasonCards = doc.select("#seasons-area .season-card-unified")
+        val seasonCards = doc.select("#seasons-area .season-card-unified, #seasons-area .season-card, .seasons-area a, .seasons-list a, .season-list-item, .season-card")
         println("ShoffreeProvider: Found ${seasonCards.size} season card(s)")
 
         val allEpisodes = mutableListOf<Episode>()
@@ -617,6 +634,13 @@ class ShoffreeProvider : MainAPI() {
                         return true
                     }
                     println("ShoffreeProvider: Direct decryption failed for $streemUrl")
+                    
+                    val wvSuccess = extractM3u8ViaWebView(streemUrl, streamUrl, callback)
+                    if (wvSuccess) {
+                        println("ShoffreeProvider: extractM3u8ViaWebView succeeded for $streemUrl")
+                        return true
+                    }
+                    println("ShoffreeProvider: extractM3u8ViaWebView failed for $streemUrl")
                 } else {
                     println("ShoffreeProvider: No streem URL for type=$contentType id=$contentId")
                 }
@@ -924,4 +948,155 @@ class ShoffreeProvider : MainAPI() {
             return false
         }
     }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private suspend fun extractM3u8ViaWebView(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean = kotlinx.coroutines.withTimeoutOrNull(20000) {
+        val webView = suspendCancellableCoroutine<WebView?> { continuation ->
+            Handler(Looper.getMainLooper()).post {
+                fun getContextFromClass(className: String): android.content.Context? {
+                    try {
+                        val clazz = Class.forName(className)
+                        fun dereference(obj: Any?): android.content.Context? {
+                            if (obj == null) return null
+                            if (obj is android.content.Context) return obj
+                            try {
+                                if (obj.javaClass.name.contains("WeakReference")) {
+                                    val getMethod = obj.javaClass.getMethod("get")
+                                    return getMethod.invoke(obj) as? android.content.Context
+                                }
+                            } catch (e: Throwable) {}
+                            return null
+                        }
+                        try {
+                            val field = clazz.getDeclaredField("context").apply { isAccessible = true }
+                            val ctx = dereference(field.get(null))
+                            if (ctx != null) return ctx
+                        } catch (e: Throwable) {}
+                        try {
+                            val method = clazz.getDeclaredMethod("getContext").apply { isAccessible = true }
+                            val ctx = dereference(method.invoke(null))
+                            if (ctx != null) return ctx
+                        } catch (e: Throwable) {}
+                    } catch (e: Throwable) {}
+                    return null
+                }
+                
+                val context = getContextFromClass("com.lagradost.cloudstream3.CloudStreamApp")
+                    ?: getContextFromClass("com.lagradost.cloudstream3.AcraApplication")
+                
+                if (context == null) {
+                    println("ShoffreeProvider: WebView context not found.")
+                    continuation.resume(null)
+                    return@post
+                }
+                
+                println("ShoffreeProvider: WebView initialized. Preparing to load URL: $url with referer $referer")
+                val wv = WebView(context)
+                val cookieManager = CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                
+                wv.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
+                    loadsImagesAutomatically = true
+                    allowFileAccess = true
+                    allowContentAccess = true
+                    userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+
+                wv.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                        if (consoleMessage != null) {
+                            println("ShoffreeProvider: WebView Console [${consoleMessage.messageLevel()}]: ${consoleMessage.message()} at ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()}")
+                        }
+                        return super.onConsoleMessage(consoleMessage)
+                    }
+                }
+
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                        println("ShoffreeProvider: WebView started loading: $url")
+                        super.onPageStarted(view, url, favicon)
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        println("ShoffreeProvider: WebView finished loading: $url")
+                        super.onPageFinished(view, url)
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onReceivedError(
+                        view: WebView?,
+                        errorCode: Int,
+                        description: String?,
+                        failingUrl: String?
+                    ) {
+                        println("ShoffreeProvider: WebView error code $errorCode: $description (failing URL: $failingUrl)")
+                        super.onReceivedError(view, errorCode, description, failingUrl)
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                        errorResponse: WebResourceResponse?
+                    ) {
+                        val reqUrl = request?.url?.toString()
+                        val statusCode = errorResponse?.statusCode
+                        println("ShoffreeProvider: WebView HTTP error $statusCode for URL: $reqUrl")
+                        super.onReceivedHttpError(view, request, errorResponse)
+                    }
+
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val requestUrl = request.url.toString()
+                        
+                        if (requestUrl.contains(".m3u8") || requestUrl.contains(".mp4")) {
+                            println("ShoffreeProvider: WebView intercepted media: $requestUrl")
+                            val quality = extractQualityFromUrl(requestUrl) ?: Qualities.Unknown.value
+                            GlobalScope.launch(Dispatchers.IO) {
+                                val link = newExtractorLink(name, "Shoffree", requestUrl, ExtractorLinkType.VIDEO) {
+                                    this.quality = quality
+                                    this.referer = mainUrl
+                                }
+                                callback(link)
+                                if (continuation.isActive) {
+                                    println("ShoffreeProvider: WebView media found. Resuming coroutine.")
+                                    continuation.resume(wv)
+                                }
+                            }
+                        }
+                        
+                        val blockList = listOf("doubleclick.net", "googlesyndication.com", "adservice.google", "google-analytics.com")
+                        if (blockList.any { requestUrl.contains(it) }) {
+                            return WebResourceResponse("text/plain", "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                        }
+                        
+                        return super.shouldInterceptRequest(view, request)
+                    }
+                }
+                
+                wv.loadUrl(url, mapOf("Referer" to referer))
+            }
+        }
+        
+        if (webView != null) {
+            println("ShoffreeProvider: WebView extraction succeeded, cleaning up WebView.")
+            Handler(Looper.getMainLooper()).post {
+                runCatching { webView.stopLoading() }
+                runCatching { webView.destroy() }
+            }
+            return@withTimeoutOrNull true
+        } else {
+            println("ShoffreeProvider: WebView extraction failed or timed out after 20 seconds.")
+        }
+        return@withTimeoutOrNull false
+    } ?: false
 }
