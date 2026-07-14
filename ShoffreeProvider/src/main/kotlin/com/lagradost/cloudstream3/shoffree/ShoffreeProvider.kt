@@ -1179,28 +1179,21 @@ class ShoffreeProvider : MainAPI() {
                     }
 
                     override fun shouldInterceptRequest(
-                        view: WebView,
-                        request: WebResourceRequest
+                        view: WebView?,
+                        request: WebResourceRequest?
                     ): WebResourceResponse? {
-                        val requestUrl = request.url.toString()
+                        val requestUrl = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+                        val urlLower = requestUrl.lowercase()
                         
-                        if (requestUrl.contains(".m3u8") || requestUrl.contains(".mp4")) {
-                            println("ShoffreeProvider: WebView intercepted media: $requestUrl")
-                            val quality = extractQualityFromUrl(requestUrl) ?: Qualities.Unknown.value
-                            GlobalScope.launch(Dispatchers.IO) {
-                                val link = newExtractorLink(
-                                    name, 
-                                    "Shoffree", 
-                                    requestUrl, 
-                                    if (requestUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.quality = quality
-                                    this.referer = referer
-                                }
-                                callback(link)
-                                if (continuation.isActive) {
-                                    println("ShoffreeProvider: WebView media found. Resuming coroutine.")
-                                    continuation.resume(wv)
+                        if (urlLower.contains(".m3u8") || urlLower.contains(".mp4")) {
+                            if (!urlLower.contains(".gif") && !urlLower.contains(".png") && !urlLower.contains(".jpg")) {
+                                println("ShoffreeProvider: WebView intercepted media: $requestUrl")
+                                probe.post(requestUrl)
+                            } else {
+                                val muParam = request.url.getQueryParameter("mu")
+                                if (muParam != null && (muParam.contains(".m3u8", true) || muParam.contains(".mp4", true))) {
+                                    println("ShoffreeProvider: WebView intercepted mu media: $muParam")
+                                    probe.post(muParam)
                                 }
                             }
                         }
@@ -1245,6 +1238,25 @@ class ShoffreeProvider : MainAPI() {
                 if (window.__shofHooked) return;
                 window.__shofHooked = true;
                 
+                function tryPostMedia(url) {
+                    try {
+                        if (!url) return;
+                        if (url.indexOf('.gif') !== -1 || url.indexOf('.png') !== -1 || url.indexOf('.jpg') !== -1) {
+                            var muMatch = url.match(/[?&]mu=([^&]+)/);
+                            if (muMatch && muMatch[1]) {
+                                var decoded = decodeURIComponent(muMatch[1]);
+                                if (decoded.indexOf('.m3u8') !== -1 || decoded.indexOf('.mp4') !== -1) {
+                                    window.ShoffreeProbe.post(decoded);
+                                }
+                            }
+                            return;
+                        }
+                        if (url.indexOf('.m3u8') !== -1 || url.indexOf('.mp4') !== -1) {
+                            window.ShoffreeProbe.post(url);
+                        }
+                    } catch(e) {}
+                }
+
                 // JWPlayer Hook
                 var _jwImpl = window.jwplayer;
                 Object.defineProperty(window, 'jwplayer', {
@@ -1264,7 +1276,7 @@ class ShoffreeProvider : MainAPI() {
                                             || (cfg.sources && cfg.sources[0] && cfg.sources[0].file)
                                             || '';
                                         if (src) {
-                                            window.ShoffreeProbe.post(src);
+                                            tryPostMedia(src);
                                         }
                                     } catch(e) {}
                                     return origSetup(cfg);
@@ -1286,9 +1298,8 @@ class ShoffreeProvider : MainAPI() {
                 var XO = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function(method, url) {
                     try {
-                        if (url.indexOf('.m3u8') !== -1 || url.indexOf('.mp4') !== -1) {
-                            window.ShoffreeProbe.post(url);
-                        }
+                        var urlStr = typeof url === 'string' ? url : (url ? url.toString() : '');
+                        tryPostMedia(urlStr);
                     } catch(e) {}
                     return XO.apply(this, arguments);
                 };
@@ -1299,9 +1310,7 @@ class ShoffreeProvider : MainAPI() {
                     window.fetch = function(resource, init) {
                         try {
                             var url = typeof resource === 'string' ? resource : (resource ? resource.url : '');
-                            if (url.indexOf('.m3u8') !== -1 || url.indexOf('.mp4') !== -1) {
-                                window.ShoffreeProbe.post(url);
-                            }
+                            tryPostMedia(url);
                         } catch(e) {}
                         return origFetch.apply(this, arguments);
                     };
