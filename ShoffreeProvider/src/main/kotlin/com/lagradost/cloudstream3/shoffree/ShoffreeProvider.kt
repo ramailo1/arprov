@@ -315,9 +315,13 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun loadMovie(doc: Document, url: String): LoadResponse {
         println("ShoffreeProvider: Loading movie page")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val poster = doc.selectFirst("img.poster, .poster img, .video-poster img, article img[data-src^=http], .video-card img[data-src^=http]")?.attr("data-src")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img, article img[src^=http], .video-card img[src^=http]")?.attr("src")
-            ?: doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
+        val posterUrlRaw = doc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
+            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
+            ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
+            ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
+            ?: ""
+        val poster = fixUrlNull(posterUrlRaw) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
         val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
         
@@ -341,7 +345,7 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun loadSeries(doc: Document, url: String): LoadResponse {
         println("ShoffreeProvider: loadSeries for $url")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val poster = doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
+        val poster = fixUrlNull(doc.selectFirst("meta[property='og:image']")?.attr("content")) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
         val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
 
@@ -445,9 +449,13 @@ class ShoffreeProvider : MainAPI() {
     private suspend fun loadWatchPage(doc: Document, url: String): LoadResponse {
         println("ShoffreeProvider: loadWatchPage for $url")
         val title = doc.selectFirst("title")?.text()?.split(" | ")?.firstOrNull() ?: ""
-        val poster = doc.selectFirst("img.poster, .poster img, .video-poster img, article img[data-src^=http], .video-card img[data-src^=http]")?.attr("data-src")
-            ?: doc.selectFirst("img.poster, .poster img, .video-poster img, article img[src^=http], .video-card img[src^=http]")?.attr("src")
-            ?: doc.selectFirst("meta[property='og:image']")?.attr("content") ?: ""
+        val posterUrlRaw = doc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("data-src")
+            ?: doc.selectFirst("img.poster, .poster img, .video-poster img")?.attr("src")
+            ?: doc.selectFirst("article img[data-src], .video-card img[data-src]")?.attr("data-src")
+            ?: doc.selectFirst("article img[src], .video-card img[src]")?.attr("src")
+            ?: ""
+        val poster = fixUrlNull(posterUrlRaw) ?: ""
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
 
         if (url.contains("/episode/")) {
@@ -980,6 +988,22 @@ class ShoffreeProvider : MainAPI() {
                             val method = clazz.getDeclaredMethod("getContext").apply { isAccessible = true }
                             val ctx = dereference(method.invoke(null))
                             if (ctx != null) return ctx
+                        } catch (e: Throwable) {}
+                        try {
+                            val companionField = clazz.getDeclaredField("Companion").apply { isAccessible = true }
+                            val companion = companionField.get(null)
+                            if (companion != null) {
+                                try {
+                                    val field = companion.javaClass.getDeclaredField("context").apply { isAccessible = true }
+                                    val ctx = dereference(field.get(companion))
+                                    if (ctx != null) return ctx
+                                } catch (e: Throwable) {}
+                                try {
+                                    val method = companion.javaClass.getDeclaredMethod("getContext").apply { isAccessible = true }
+                                    val ctx = dereference(method.invoke(companion))
+                                    if (ctx != null) return ctx
+                                } catch (e: Throwable) {}
+                            }
                         } catch (e: Throwable) {}
                     } catch (e: Throwable) {}
                     return null
