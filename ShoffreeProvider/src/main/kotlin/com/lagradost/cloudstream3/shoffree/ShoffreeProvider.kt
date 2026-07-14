@@ -51,6 +51,22 @@ class ShoffreeProvider : MainAPI() {
 
     private fun String.cleanHtml(): String = this.replace(Regex("<[^>]*>"), "").trim()
 
+    private fun extractSeasonNumber(label: String): Int {
+        return when {
+            label.contains("الأول") -> 1
+            label.contains("الثاني") -> 2
+            label.contains("الثالث") -> 3
+            label.contains("الرابع") -> 4
+            label.contains("الخامس") -> 5
+            label.contains("السادس") -> 6
+            label.contains("السابع") -> 7
+            label.contains("الثامن") -> 8
+            label.contains("التاسع") -> 9
+            label.contains("العاشر") -> 10
+            else -> Regex("""\d+""").find(label)?.value?.toIntOrNull() ?: 1
+        }
+    }
+
     private fun extractQualityFromUrl(url: String): Int? {
         return when {
             url.contains("1080") -> 1080
@@ -319,27 +335,58 @@ class ShoffreeProvider : MainAPI() {
                           it.text().contains("انيميشن", ignoreCase = true)
                       }
         val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
-        println("ShoffreeProvider: Type=${if (isAnime) "Anime" else "TvSeries"}, searching episodes")
+        println("ShoffreeProvider: Type=${if (isAnime) "Anime" else "TvSeries"}")
 
-        val firstEpLink = doc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
-        var episodes = emptyList<Episode>()
+        val seasonCards = doc.select("#seasons-area .season-card-unified")
+        println("ShoffreeProvider: Found ${seasonCards.size} season card(s)")
 
-        if (firstEpLink != null) {
-            val watchUrl = firstEpLink.attr("href")
-            println("ShoffreeProvider: First episode link: $watchUrl, fetching watch page")
-            try {
-                val watchDoc = app.get(watchUrl).document
-                episodes = extractEpisodesFromSidebar(watchDoc, title)
-            } catch (e: Exception) {
-                println("ShoffreeProvider: Failed to fetch watch page sidebar: ${e.message}")
+        val allEpisodes = mutableListOf<Episode>()
+
+        if (seasonCards.isEmpty()) {
+            val firstEpLink = doc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
+            if (firstEpLink != null) {
+                val watchUrl = firstEpLink.attr("href")
+                println("ShoffreeProvider: Single season — first episode link: $watchUrl")
+                try {
+                    val watchDoc = app.get(watchUrl).document
+                    val eps = extractEpisodesFromSidebar(watchDoc, title)
+                    eps.forEach { it.season = 1 }
+                    allEpisodes.addAll(eps)
+                } catch (e: Exception) {
+                    println("ShoffreeProvider: Failed to fetch watch page sidebar: ${e.message}")
+                }
+            } else {
+                println("ShoffreeProvider: No episode links found on series page")
             }
         } else {
-            println("ShoffreeProvider: No episode links found on series page")
+            for (card in seasonCards) {
+                val link = card.selectFirst("a[href]")?.attr("href") ?: continue
+                val label = card.selectFirst(".s-year")?.text() ?: ""
+                val seasonNum = extractSeasonNumber(label)
+                println("ShoffreeProvider: Season $seasonNum ($label) -> $link")
+
+                try {
+                    val seasonDoc = if (link == url) doc else app.get(link).document
+                    val epLink = seasonDoc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
+                    if (epLink != null) {
+                        val watchDoc = app.get(epLink.attr("href")).document
+                        val eps = extractEpisodesFromSidebar(watchDoc, title)
+                        eps.forEach { it.season = seasonNum }
+                        allEpisodes.addAll(eps)
+                        println("ShoffreeProvider: Season $seasonNum -> ${eps.size} episodes")
+                    } else {
+                        println("ShoffreeProvider: No episode links for season $seasonNum")
+                    }
+                } catch (e: Exception) {
+                    println("ShoffreeProvider: Failed to load season $seasonNum: ${e.message}")
+                }
+            }
         }
 
-        println("ShoffreeProvider: Series \"$title\", episodes=${episodes.size}")
+        val sorted = allEpisodes.sortedBy { (it.season ?: 1) * 10000 + (it.episode ?: 0) }
+        println("ShoffreeProvider: \"$title\" total=${sorted.size} episodes across seasons")
 
-        return newTvSeriesLoadResponse(title, url, tvType, episodes) {
+        return newTvSeriesLoadResponse(title, url, tvType, sorted) {
             this.posterUrl = poster
             this.plot = plot
             this.year = year
@@ -564,7 +611,7 @@ class ShoffreeProvider : MainAPI() {
                 }
 
                 if (streemUrl != null) {
-                    val success = tryDirectDecryption(streemUrl, callback)
+                    val success = tryDirectDecryption(streemUrl, streamUrl, callback)
                     if (success) {
                         println("ShoffreeProvider: Direct decryption succeeded for $streemUrl")
                         return true
@@ -608,7 +655,7 @@ class ShoffreeProvider : MainAPI() {
         return loadLinksViaWebView(streamUrl, callback)
     }
 
-    private suspend fun tryDirectDecryption(streemUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun tryDirectDecryption(streemUrl: String, watchUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
         try {
             println("ShoffreeProvider: Trying direct decryption for $streemUrl")
             val response = app.get(streemUrl, headers = mapOf(
@@ -646,7 +693,7 @@ class ShoffreeProvider : MainAPI() {
             }
             
             println("ShoffreeProvider: Direct extraction failed, trying AJAX API via /sources/ endpoint")
-            val apiSuccess = fetchSourcesViaApi(decodedHtml, streemUrl, callback)
+            val apiSuccess = fetchSourcesViaApi(decodedHtml, watchUrl, callback)
             if (apiSuccess) {
                 println("ShoffreeProvider: AJAX API succeeded for $streemUrl")
                 return true
@@ -727,7 +774,7 @@ class ShoffreeProvider : MainAPI() {
         return followEmbedIframes(html, referer, callback)
     }
 
-    private suspend fun fetchSourcesViaApi(decodedHtml: String, streemUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun fetchSourcesViaApi(decodedHtml: String, watchUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
         try {
             val keyMatch = Regex("""\bKEY\s*=\s*'([^']+)'""").find(decodedHtml)
             if (keyMatch == null) {
@@ -737,7 +784,7 @@ class ShoffreeProvider : MainAPI() {
             val key = keyMatch.groupValues[1]
             println("ShoffreeProvider: Extracted KEY=$key for AJAX API")
 
-            val apiUrl = streemUrl.replace("/watch/", "/sources/")
+            val apiUrl = watchUrl.replace("/watch/", "/sources/")
             println("ShoffreeProvider: POST to sources API: $apiUrl")
 
             val response = app.post(
@@ -762,11 +809,13 @@ class ShoffreeProvider : MainAPI() {
                 return false
             }
             println("ShoffreeProvider: Sources API response length=${jsonText.length}")
+            println("ShoffreeProvider: Sources API response preview: ${jsonText.take(500)}")
 
             val json = JSONObject(jsonText)
 
             if (json.optString("server_status") != "online") {
                 println("ShoffreeProvider: Server status=${json.optString("server_status")}, checking alternatives")
+                println("ShoffreeProvider: Full API JSON dump: $jsonText")
                 val moreServer = json.optJSONArray("more_server")
                 if (moreServer != null && moreServer.length() > 0) {
                     println("ShoffreeProvider: Got ${moreServer.length()} alternative iframe servers")
@@ -775,7 +824,7 @@ class ShoffreeProvider : MainAPI() {
                         val url = server.optString("url", "")
                         if (url.isNotBlank()) {
                             println("ShoffreeProvider: Following alternative server $i: $url")
-                            return handleEmbedUrl(url, streemUrl, callback)
+                            return handleEmbedUrl(url, watchUrl, callback)
                         }
                     }
                 }
