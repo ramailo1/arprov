@@ -109,135 +109,61 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(cleanUrl, headers = headers()).document
         politeDelay()
 
-        // Handle Redirection for episodes to series (Netflix UI)
-        if (!cleanUrl.contains("/series/")) {
-            val seriesUrl = fixUrlNull(
-                doc.select("a").find { it.text().contains("لمشاهدة جميع الحلقات") }?.attr("href")
-                ?: doc.select(".PostTitle a[href*='/series/']").attr("href")
-                ?: doc.select(".EasyScrap-breadcrumbs a[href*='/series/']").lastOrNull()?.attr("href")
-                ?: doc.select(".SingleContent a[href*='/series/']").firstOrNull()?.attr("href")
-                ?: doc.select("a[href*='/series/']").find { it.text().contains("انمي") || it.text().contains("مسلسل") }?.attr("href")
-            )
-            if (seriesUrl != null && seriesUrl != cleanUrl && seriesUrl.contains("/series/")) {
-                return load(seriesUrl)
-            }
-        }
-
-        val title = doc.selectFirst("h1.PostTitle")?.text()?.trim()
-            ?: doc.selectFirst(".PostTitle")?.text()?.trim()
-            ?: doc.select("h1").lastOrNull()?.text()?.trim()
+        val title = doc.selectFirst("h1.PostTitle, .PostTitle, h1")?.text()?.trim()
             ?: return null
 
         val poster = fixUrlNull(doc.extractPoster())
-        val description = doc.selectFirst(".StoryArea p")?.text()?.trim()
-            ?: doc.selectFirst(".StoryArea")?.text()?.trim()
-            ?: doc.selectFirst(".description, .plot, .summary")?.text()?.trim()
-        
+        val description = doc.selectFirst(".StoryArea p, .StoryArea, .description, .plot, .summary")?.text()?.trim()
         val tags = doc.select("a[href*='/genre/']").map { it.text().trim() }.distinct()
 
-        val isSeries = cleanUrl.contains("/series/") || doc.select(".EpisodesList").isNotEmpty()
+        // Determine if this is a series or movie
+        val hasEpisodeList = doc.select(".EpisodesList").isNotEmpty()
+        val isSeriesUrl = cleanUrl.contains("/series/")
+        val isSeries = isSeriesUrl || hasEpisodeList
         val type = if (isSeries) TvType.Anime else TvType.AnimeMovie
 
         return if (isSeries) {
-            val dbEpisodes = mutableListOf<Episode>()
-            val seasons = doc.select("[data-season]") // Robust selector
-            
-            if (seasons.isNotEmpty()) {
-                val scripts = doc.select("script").joinToString("\n") { it.html() } // Scan all scripts
-                val ajaxUrl = Regex("var AjaxtURL = \"(.*?)\";").find(scripts)?.groupValues?.get(1)?.replaceDomain() 
-                    ?: "$mainUrl/wp-content/themes/TopAnime/Ajax/"
-                val postId = Regex("post_id: '(\\d+)'").find(doc.html())?.groupValues?.get(1) 
-                    ?: Regex("\"post_id\",\"(\\d+)\"").find(doc.html())?.groupValues?.get(1)
+            val allEpisodes = mutableListOf<Episode>()
 
-                if (postId != null) {
-                    seasons.forEach { season ->
-                        val seasonNum = season.attr("data-season").toIntOrNull() ?: 1
-                        try {
-                            val response = app.post(
-                                "${ajaxUrl}Single/Episodes.php",
-                                data = mapOf("season" to "$seasonNum", "post_id" to postId),
-                                headers = headers() + mapOf("X-Requested-With" to "XMLHttpRequest")
-                            ).text
-                            
-                            val seasonDoc = Jsoup.parse(response)
-                            // Primary selector: article, Fallback: a
-                            val episodeElements = seasonDoc.select(".EpisodesList article").ifEmpty { seasonDoc.select(".EpisodesList a") }
+            // On /series/ pages, check if there are multiple seasons (SeasonsList with links)
+            // Each season link points to a /series/ sub-page with its own EpisodesList
+            val seasonLinks = doc.select(".SeasonsList a[href], .SeasonsList > ul li a[href]")
+                .mapNotNull { fixUrlNull(it.attr("href")) }
+                .filter { it.contains("/series/") }
+                .distinct()
 
-                            episodeElements.forEach { element ->
-                                val a = (if (element.tagName() == "a") element else element.selectFirst("a")) ?: return@forEach
-                                val epUrl = fixUrlNull(a.attr("href")) ?: return@forEach
-                                
-                                val rawText = (element.selectFirst("h3, h4, .title")?.text() ?: element.text()).trim()
-                                if (rawText.contains("المشاهدة الان") || rawText.contains("التحميل الان")) return@forEach
-
-                                val epNum = Regex("""\d+""").find(rawText)?.value?.toIntOrNull()
-                                val cleanTitle = if (epNum != null) "الحلقة $epNum" else rawText
-
-                                val thumbnail = fixUrlNull(
-                                    element.selectFirst("img")?.attr("data-src")
-                                        ?.ifBlank { element.selectFirst("img")?.attr("src") }
-                                        ?: element.selectFirst("[style*='background-image']")?.attr("style")?.let { style ->
-                                            Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
-                                        }
-                                )
-
-                                dbEpisodes.add(newEpisode(epUrl) {
-                                    this.name = cleanTitle
-                                    this.episode = epNum
-                                    this.season = seasonNum
-                                    this.posterUrl = thumbnail
-                                })
-                            }
-                        } catch (e: Exception) {
-                            // Ignore error
-                        }
-                    }
+            if (seasonLinks.isNotEmpty()) {
+                // Multi-season: fetch each season page and collect its episodes
+                seasonLinks.forEachIndexed { idx, seasonUrl ->
+                    val seasonNum = idx + 1
+                    try {
+                        val seasonDoc = app.get(seasonUrl, headers = headers()).document
+                        politeDelay()
+                        val eps = parseEpisodeList(seasonDoc, seasonNum)
+                        allEpisodes.addAll(eps)
+                    } catch (_: Exception) {}
                 }
-            } else {
-                // Primary selector: article, Fallback: a
-                val episodeElements = doc.select(".EpisodesList article").ifEmpty { doc.select(".EpisodesList a") }
-                val episodes = episodeElements.mapNotNull { element ->
-                        val a = (if (element.tagName() == "a") element else element.selectFirst("a")) ?: return@mapNotNull null
-                        val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
-                        
-                        val rawText = (element.selectFirst("h3, h4, .title")?.text() ?: element.text()).trim()
-                        if (rawText.contains("المشاهدة الان") || rawText.contains("التحميل الان")) return@mapNotNull null
-
-                        val epNum = Regex("""\d+""").find(rawText)?.value?.toIntOrNull()
-                        val cleanTitle = if (epNum != null) "الحلقة $epNum" else rawText
-
-                        val thumbnail = fixUrlNull(
-                            element.selectFirst("img")?.attr("data-src")
-                                ?.ifBlank { element.selectFirst("img")?.attr("src") }
-                                ?: element.selectFirst("[style*='background-image']")?.attr("style")?.let { style ->
-                                    Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
-                                }
-                        )
-
-                        newEpisode(epUrl) {
-                            this.name = cleanTitle
-                            this.episode = epNum
-                            this.season = 1 // Force season 1 for flat lists to trigger UI
-                            this.posterUrl = thumbnail
-                        }
-                    }
-                dbEpisodes.addAll(episodes)
             }
 
-            // Ensure all episodes have a season to trigger Netflix UI
-            dbEpisodes.forEach { if (it.season == null) it.season = 1 }
+            // Also parse episodes from the current page (covers single-season series and episode pages)
+            if (allEpisodes.isEmpty()) {
+                val seasonNum = extractSeasonNum(cleanUrl)
+                allEpisodes.addAll(parseEpisodeList(doc, seasonNum))
+            }
+
+            // Sort ascending by season then episode number
+            val sorted = allEpisodes.sortedWith(compareBy({ it.season ?: 1 }, { it.episode ?: 0 }))
 
             newAnimeLoadResponse(title, cleanUrl, type) {
                 this.posterUrl = poster
                 this.plot = description
                 this.tags = tags
-                addEpisodes(DubStatus.Subbed, dbEpisodes.ifEmpty { 
-                     // Fallback episode with season 1
-                    listOf(newEpisode(cleanUrl) { 
+                addEpisodes(DubStatus.Subbed, sorted.ifEmpty {
+                    listOf(newEpisode(cleanUrl) {
                         this.name = title
                         this.episode = 1
-                        this.season = 1 
-                    }) 
+                        this.season = 1
+                    })
                 })
             }
         } else {
@@ -249,43 +175,46 @@ class RistoAnimeProvider : MainAPI() {
         }
     }
 
-    private suspend fun extractLinksFromDoc(
-        doc: org.jsoup.nodes.Document,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        // 1. data-watch / data-link / data-src attributes
-        doc.select("li[data-watch], button[data-watch], a[data-watch], li[data-link], [data-src]").forEach { el ->
-            val url = fixUrlNull(el.attr("data-watch").ifBlank { el.attr("data-link") }.ifBlank { el.attr("data-src") })
-            if (!url.isNullOrBlank()) loadExtractor(url, referer, subtitleCallback, callback)
-        }
+    /** Extracts the season number from a URL slug (e.g. الموسم-3 → 3). */
+    private fun extractSeasonNum(url: String): Int {
+        // Try Arabic season pattern in URL: %d8%a7%d9%84%d9%85%d9%88%d8%b3%d9%85 = الموسم
+        val decoded = java.net.URLDecoder.decode(url, "UTF-8")
+        return Regex("""الموسم[- _]*(\d+)""").find(decoded)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""season[- _]*(\d+)""", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)?.toIntOrNull()
+            ?: 1
+    }
 
-        // 2. iframes
-        doc.select("iframe[src]").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank()) loadExtractor(src, referer, subtitleCallback, callback)
-        }
+    /**
+     * Parses the .EpisodesList from a Jsoup document.
+     * Episodes are listed newest-first on the site, so we reverse to get ascending order (ep 1 → N).
+     * Structure: <div class="EpisodesList"><a href="...">حلقة<em>3</em></a>...
+     */
+    private fun parseEpisodeList(doc: org.jsoup.nodes.Document, seasonNum: Int): List<Episode> {
+        val episodeList = doc.selectFirst(".EpisodesList") ?: return emptyList()
 
-        // 3. direct video file links
-        doc.select("source[src], video source, a[href]").forEach { el ->
-            val link = fixUrlNull(el.attr("src").ifBlank { el.attr("href") }) ?: return@forEach
-            val isM3u8 = link.contains(".m3u8", ignoreCase = true)
-            if (isM3u8 || link.contains(".mp4", ignoreCase = true) || link.contains(".mkv", ignoreCase = true)) {
-                callback(
-                    newExtractorLink(
-                        source = "RistoAnime",
-                        name = "RistoAnime - ${if (isM3u8) "HLS" else "Direct"}",
-                        url = link,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = referer
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
+        // Episodes are <a> tags directly inside .EpisodesList
+        val links = episodeList.select("a[href]")
+        if (links.isEmpty()) return emptyList()
+
+        val episodes = links.mapNotNull { a ->
+            val epUrl = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+            // Episode number is in <em> tag inside the <a>
+            val epNumStr = a.selectFirst("em")?.text()?.trim()
+            val epNum = epNumStr?.toIntOrNull()
+                ?: Regex("""\d+""").find(a.text())?.value?.toIntOrNull()
+            val cleanTitle = if (epNum != null) "الحلقة $epNum" else a.text().trim().ifBlank { "الحلقة" }
+
+            newEpisode(epUrl) {
+                this.name = cleanTitle
+                this.episode = epNum
+                this.season = seasonNum
             }
         }
+
+        // Site lists newest-first; reverse so ep 1 comes first
+        return episodes.reversed()
     }
+
 
     override suspend fun loadLinks(
         data: String,
@@ -295,30 +224,56 @@ class RistoAnimeProvider : MainAPI() {
     ): Boolean {
         val postUrl = data.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
         val postDoc = app.get(postUrl, headers = headers()).document
-        politeDelay(400)
+        politeDelay(300)
 
-        // Try extracting directly from the episode page first
-        extractLinksFromDoc(postDoc, postUrl, subtitleCallback, callback)
+        // Extract the post_id from inline JS (used in Rate.php, Trailer.php etc.)
+        val pageHtml = postDoc.html()
+        val postId = Regex("""'id'\s*,\s*'(\d+)'""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""id:\s*'(\d+)'""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""post_id:\s*'(\d+)'""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex(""""id","(\d+)"""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""AjaxtURL\+'Rate\.php'.*?id=(\d+)""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""'id=\d+&id=(\d+)'""").find(pageHtml)?.groupValues?.get(1)
 
-        // Also follow watch/download redirect buttons if present
-        val watchUrl  = fixUrlNull(postDoc.selectFirst("a:contains(المشاهدة الان)")?.attr("href"))
-        val downloadUrl = fixUrlNull(postDoc.selectFirst("a:contains(التحميل الان)")?.attr("href"))
+        // Extract the AjaxtURL from inline JS
+        val ajaxUrl = Regex("""var AjaxtURL\s*=\s*"(.*?)"""").find(pageHtml)?.groupValues?.get(1)?.replaceDomain()
+            ?: "$mainUrl/wp-content/themes/TopAnime/Ajaxt/"
 
-        listOfNotNull(watchUrl, downloadUrl).distinct().forEach { actionUrl ->
+        if (postId != null) {
             try {
-                val actionDoc = app.get(actionUrl, headers = headers(), referer = postUrl).document
-                politeDelay(250)
-                extractLinksFromDoc(actionDoc, actionUrl, subtitleCallback, callback)
+                // Call the Watch.php AJAX endpoint to get server list
+                val watchResponse = app.post(
+                    "${ajaxUrl}Single/Watch.php",
+                    data = mapOf("id" to postId),
+                    headers = headers() + mapOf(
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "Referer" to postUrl
+                    )
+                ).text
+                politeDelay(200)
 
-                // For download page: also try external service links (ODOJO, CUTVID, etc.)
-                if (actionUrl == downloadUrl) {
-                    actionDoc.select("a[href]:not([href*='$mainUrl'])").forEach { a ->
-                        val link = fixUrlNull(a.attr("href")) ?: return@forEach
-                        if (link.startsWith("http") && a.text().trim().isNotEmpty()) {
-                            try { loadExtractor(link, actionUrl, subtitleCallback, callback) } catch (_: Exception) {}
-                        }
+                val watchDoc = Jsoup.parse(watchResponse)
+
+                // Each <li data-watch="EMBED_URL"> contains an embed link
+                watchDoc.select("ul#watch li[data-watch]").forEach { li ->
+                    val embedUrl = li.attr("data-watch").trim()
+                    if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {
+                        try {
+                            loadExtractor(embedUrl, postUrl, subtitleCallback, callback)
+                        } catch (_: Exception) {}
                     }
                 }
+
+                // Download section: <div class="ServersList Download"> <ul> <li> <a href="...">
+                watchDoc.select(".ServersList.Download ul li a[href]").forEach { a ->
+                    val link = fixUrlNull(a.attr("href")) ?: return@forEach
+                    if (link.startsWith("http") && !link.contains(mainUrl)) {
+                        try {
+                            loadExtractor(link, postUrl, subtitleCallback, callback)
+                        } catch (_: Exception) {}
+                    }
+                }
+
             } catch (_: Exception) {}
         }
 
