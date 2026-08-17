@@ -16,7 +16,7 @@ class EgyDeadProvider : MainAPI() {
     override var name = "EgyDead"
     override val usesWebView = false
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
+    override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime, TvType.Cartoon)
 
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -33,26 +33,26 @@ class EgyDeadProvider : MainAPI() {
     )
 
     private val arabicOrdinals = listOf(
-        listOf("الأول", "الاول", "أولى", "اولى", "أول", "اول", "1") to 1,
-        listOf("الثاني", "التاني", "ثانية", "تانية", "ثاني", "تاني", "2") to 2,
-        listOf("الثالث", "التالت", "ثالثة", "تالتة", "ثالث", "تالت", "3") to 3,
-        listOf("الرابع", "رابعة", "رابع", "4") to 4,
-        listOf("الخامس", "خامسة", "خامس", "5") to 5,
-        listOf("السادس", "سادسة", "سادس", "6") to 6,
-        listOf("السابع", "سابعة", "سابع", "7") to 7,
-        listOf("الثامن", "ثامنة", "ثامن", "8") to 8,
-        listOf("التاسع", "تاسعة", "تاسع", "9") to 9,
-        listOf("العاشر", "عاشرة", "عاشر", "10") to 10,
-        listOf("الحادي عشر", "الحادية عشرة", "11") to 11,
-        listOf("الثاني عشر", "الثانية عشرة", "12") to 12,
-        listOf("الثالث عشر", "الثالثة عشرة", "13") to 13,
-        listOf("الرابع عشر", "الرابعة عشرة", "14") to 14,
-        listOf("الخامس عشر", "الخامسة عشرة", "15") to 15,
-        listOf("السادس عشر", "السادسة عشرة", "16") to 16,
-        listOf("السابع عشر", "السابعة عشرة", "17") to 17,
-        listOf("الثامن عشر", "الثامنة عشرة", "18") to 18,
-        listOf("التاسع عشر", "التاسعة عشرة", "19") to 19,
-        listOf("العشرون", "العشرين", "20") to 20
+        listOf("الحادي عشر", "الحادية عشرة") to 11,
+        listOf("الثاني عشر", "الثانية عشرة") to 12,
+        listOf("الثالث عشر", "الثالثة عشرة") to 13,
+        listOf("الرابع عشر", "الرابعة عشرة") to 14,
+        listOf("الخامس عشر", "الخامسة عشرة") to 15,
+        listOf("السادس عشر", "السادسة عشرة") to 16,
+        listOf("السابع عشر", "السابعة عشرة") to 17,
+        listOf("الثامن عشر", "الثامنة عشرة") to 18,
+        listOf("التاسع عشر", "التاسعة عشرة") to 19,
+        listOf("العشرون", "العشرين") to 20,
+        listOf("الأول", "الاول", "أولى", "اولى", "أول", "اول") to 1,
+        listOf("الثاني", "التاني", "ثانية", "تانية", "ثاني", "تاني") to 2,
+        listOf("الثالث", "التالت", "ثالثة", "تالتة", "ثالث", "تالت") to 3,
+        listOf("الرابع", "رابعة", "رابع") to 4,
+        listOf("الخامس", "خامسة", "خامس") to 5,
+        listOf("السادس", "سادسة", "سادس") to 6,
+        listOf("السابع", "سابعة", "سابع") to 7,
+        listOf("الثامن", "ثامنة", "ثامن") to 8,
+        listOf("التاسع", "تاسعة", "تاسع") to 9,
+        listOf("العاشر", "عاشرة", "عاشر") to 10
     )
 
     private fun String.getIntFromText(): Int? {
@@ -71,11 +71,11 @@ class EgyDeadProvider : MainAPI() {
             if (n != null && n in 1..49) return n
         }
 
-        // 2. Check Arabic ordinals with season/part keyword
+        // 2. Check compound Arabic ordinals first (11-19) then single (1-10)
         for ((words, num) in arabicOrdinals) {
             for (w in words) {
                 if (Regex("""(?:الموسم|الجزء|موسم|جزء|season|part)\s+$w""", RegexOption.IGNORE_CASE).containsMatchIn(text)
-                    || (text.contains(w) && (text.contains("موسم") || text.contains("الموسم") || text.contains("جزء") || text.contains("الجزء")))) {
+                    || text.contains(" $w ") || text.endsWith(" $w") || text.startsWith("$w ")) {
                     return num
                 }
             }
@@ -103,10 +103,10 @@ class EgyDeadProvider : MainAPI() {
 
     private fun String.cleanTitle(isDubbed: Boolean = false): String {
         var res = this.replace(
-            Regex("""(?i)جميع مواسم مسلسل|جميع مواسم انمي|جميع مواسم|مترجم كامل|مترجمة كاملة|مشاهدة فيلم|مشاهدة عرض|مشاهدة مسلسل|مشاهدة|مترجم|مترجمة|مدبلج كامل|مدبلجة كاملة|مدبلج|مدبلجة|مسلسل|انمي|برنامج|كاملة|كامل|اون لاين|اونلاين|تحميل""")
+            Regex("""(?i)جميع مواسم مسلسل|جميع مواسم انمي|جميع مواسم كرتون|جميع مواسم|مترجم و مدبلج كامل|مترجم و مدبلج|مترجمة و مدبلجة|مترجم كامل|مترجمة كاملة|مشاهدة فيلم|مشاهدة عرض|مشاهدة مسلسل|مشاهدة كرتون|مشاهدة|مترجم|مترجمة|مدبلج كامل|مدبلجة كاملة|مدبلج بالمصري|مدبلجة بالمصري|مدبلج للعربية|مدبلج|مدبلجة|مسلسل|انمي|كرتون|برنامج|كاملة|كامل|اون لاين|اونلاين|تحميل""")
             , ""
         ).trim()
-        res = res.replace(Regex("""^[\s\-–—]+|[\s\-–—]+$"""), "").trim()
+        res = res.replace(Regex("""^[\s\-–—،,و\.]+|[\s\-–—،,و\.]+$"""), "").trim()
         return if (isDubbed && !res.contains("مدبلج")) {
             "$res (مدبلج)"
         } else {
@@ -140,7 +140,7 @@ class EgyDeadProvider : MainAPI() {
         val rawTitle = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).trim()
         if (rawTitle.isEmpty()) return null
 
-        val isDub = rawTitle.contains("مدبلج", ignoreCase = true) || href.contains("-ar") || href.contains("مدبلج")
+        val isDub = rawTitle.contains("مدبلج", ignoreCase = true) || href.contains("-ar") || href.contains("-eg") || href.contains("مدبلج")
         val isSub = rawTitle.contains("مترجم", ignoreCase = true) || (!isDub && !href.contains("-jp") && !rawTitle.contains("الياباني"))
         val title = rawTitle.cleanTitle(isDub)
         if (title.isEmpty()) return null
@@ -149,10 +149,10 @@ class EgyDeadProvider : MainAPI() {
             it.attr("data-src").ifEmpty { it.attr("src") }
         } ?: ""
         
-        val isAnime = href.contains("انمي") || href.contains("anime") || rawTitle.contains("انمي")
+        val isAnimeOrCartoon = href.contains("انمي") || href.contains("anime") || href.contains("كرتون") || href.contains("cartoon") || rawTitle.contains("انمي") || rawTitle.contains("كرتون")
         val isSeries = href.contains("/serie/") || href.contains("/season/") || href.contains("/episode/")
         val tvType = when {
-            isAnime -> TvType.Anime
+            isAnimeOrCartoon -> TvType.Anime
             isSeries -> TvType.TvSeries
             else -> TvType.Movie
         }
@@ -179,9 +179,15 @@ class EgyDeadProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/page/movies/?page=" to "احدث الافلام",
+        "$mainUrl/category/english-movies/افلام-اجنبية-مدبلجة/?page=" to "افلام اجنبية مدبلجة",
+        "$mainUrl/category/افلام-كرتون/افلام-كرتون-ديزني-باللهجة-المصرية/?page=" to "افلام كرتون مدبلجة بالمصري",
         "$mainUrl/episode/?page=" to "احدث الحلقات",
         "$mainUrl/season/?page=" to "احدث المواسم",
         "$mainUrl/serie/?page=" to "احدث المسلسلات",
+        "$mainUrl/series-category/english-series-dubbed/?page=" to "مسلسلات اجنبي مدبلجة",
+        "$mainUrl/series-category/turkish-series-dubbed/?page=" to "مسلسلات تركية مدبلجة",
+        "$mainUrl/series-category/anime-series-dubbed/?page=" to "انميات مدبلجة",
+        "$mainUrl/series-category/cartoon-series-dubbed/?page=" to "مسلسلات كرتون مدبلجة",
     )
 
     override suspend fun getMainPage(
@@ -206,10 +212,8 @@ class EgyDeadProvider : MainAPI() {
 
         val document = app.get(url, headers = requestHeaders).document
         
-        // Select all potential containers and direct links for universal support
         val home = document.select("li.movieItem, div.BlockItem, a[href*='egydead']").toList().filter {
             val href = it.attr("href")
-            // Filter out common non-content links if it's a direct <a> tag
             if (it.tagName() == "a") {
                 href.contains("202") || href.contains("/%") || 
                 href.contains("/episode/") || href.contains("/season/") || href.contains("/serie/")
@@ -267,7 +271,7 @@ class EgyDeadProvider : MainAPI() {
         val rawTitle = doc.selectFirst("div.singleTitle em, div.singleTitle, .breadcrumbs-single li.current, h1")?.text()?.trim()
             ?: doc.title().substringBefore("|").substringBefore("-").trim()
 
-        val isDubbed = url.contains("-ar") || url.contains("مدبلج") || rawTitle.contains("مدبلج")
+        val isDubbed = url.contains("-ar") || url.contains("-eg") || url.contains("مدبلج") || rawTitle.contains("مدبلج")
         val title = rawTitle.cleanTitle(isDubbed)
 
         val isMovie = !url.contains("/serie/") && !url.contains("/season/") && !url.contains("/episode/")
@@ -294,20 +298,23 @@ class EgyDeadProvider : MainAPI() {
             }
         }
 
-        val isAnime = url.contains("انمي") || url.contains("anime") || rawTitle.contains("انمي") || tags.any { it.contains("انمي") || it.contains("أنمي") }
+        val isAnimeOrCartoon = url.contains("انمي") || url.contains("anime") || url.contains("كرتون") || url.contains("cartoon") 
+            || rawTitle.contains("انمي") || rawTitle.contains("كرتون")
+            || tags.any { it.contains("انمي") || it.contains("أنمي") || it.contains("كرتون") }
+        
         val allSeasonElements = doc.select("div.seasons-list a")
 
         // Separate Dubbed and Subbed seasons from the franchise/series
         val dubSeasonElements = allSeasonElements.filter { el ->
             val href = el.attr("abs:href")
             val text = el.text()
-            href.contains("-ar") || href.contains("مدبلج") || text.contains("مدبلج")
+            href.contains("-ar") || href.contains("-eg") || href.contains("مدبلج") || text.contains("مدبلج")
         }.sortSeasons()
 
         val subSeasonElements = allSeasonElements.filter { el ->
             val href = el.attr("abs:href")
             val text = el.text()
-            !href.contains("-ar") && !href.contains("مدبلج") && !text.contains("مدبلج") &&
+            !href.contains("-ar") && !href.contains("-eg") && !href.contains("مدبلج") && !text.contains("مدبلج") &&
             !href.contains("-jp") && !text.contains("الياباني")
         }.sortSeasons()
 
@@ -386,8 +393,10 @@ class EgyDeadProvider : MainAPI() {
         val distinctSub = subEpisodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))
         val distinctDub = dubEpisodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))
 
-        if (isAnime) {
-            return newAnimeLoadResponse(title, url, TvType.Anime) {
+        // If the series has both sub and dub or is anime/cartoon, use AnimeLoadResponse to give SUB/DUB toggle tabs in CloudStream UI
+        val hasBothVariants = distinctSub.isNotEmpty() && distinctDub.isNotEmpty()
+        if (isAnimeOrCartoon || hasBothVariants) {
+            return newAnimeLoadResponse(title, url, if (isAnimeOrCartoon) TvType.Anime else TvType.TvSeries) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis
@@ -397,7 +406,7 @@ class EgyDeadProvider : MainAPI() {
                 if (distinctDub.isNotEmpty()) addEpisodes(DubStatus.Dubbed, distinctDub)
             }
         } else {
-            // For standard TV Series
+            // For standard TV Series with single variant
             val combinedEpisodes = if (isDubbed && distinctDub.isNotEmpty()) {
                 distinctDub
             } else if (distinctSub.isNotEmpty()) {
