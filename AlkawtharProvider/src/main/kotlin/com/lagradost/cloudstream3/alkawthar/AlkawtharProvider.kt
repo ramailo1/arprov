@@ -357,61 +357,112 @@ class AlkawtharProvider : MainAPI() {
         }
 
         // 4. Namasha iframe embed extractor (used by multi-episode series like سيدة القصر)
-        val namashaIframe = doc.selectFirst("iframe[src*='namasha.com']")?.attr("src")
-        val namashaId = if (!namashaIframe.isNullOrEmpty()) {
+        var namashaIframe = doc.selectFirst("iframe[src*='namasha.com']")?.attr("src")
+        var namashaId = if (!namashaIframe.isNullOrEmpty()) {
             Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(namashaIframe)?.groupValues?.get(1)
         } else {
             Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(html)?.groupValues?.get(1)
         }
 
+        // If not found in news page, try checking corresponding /episode/ URL
+        if (namashaId == null && data.contains("/news/")) {
+            val epUrl = data.replace("/news/", "/episode/")
+            try {
+                val epDoc = app.get(epUrl, headers = requestHeaders).document
+                namashaIframe = epDoc.selectFirst("iframe[src*='namasha.com']")?.attr("src")
+                namashaId = if (!namashaIframe.isNullOrEmpty()) {
+                    Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(namashaIframe)?.groupValues?.get(1)
+                } else {
+                    Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(epDoc.html())?.groupValues?.get(1)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "loadLinks: failed to check episode fallback URL", e)
+            }
+        }
+
         if (namashaId != null) {
             Log.d(TAG, "loadLinks: found Namasha ID $namashaId")
-            val watchDoc = try {
-                app.get("https://www.namasha.com/v/$namashaId", headers = mapOf(
+            // Fetch the lightweight embed page with autoplay=true (contains CDN server and numeric file ID)
+            val embedHtml = try {
+                app.get("https://www.namasha.com/embed/$namashaId?autoplay=true", headers = mapOf(
                     "User-Agent" to userAgents.random(),
                     "Referer" to "https://www.alkawthartv.ir/"
-                )).document
+                )).text
             } catch (e: Exception) {
-                Log.e(TAG, "loadLinks: error fetching namasha watch page", e)
+                Log.e(TAG, "loadLinks: error fetching namasha embed page", e)
                 null
             }
 
-            if (watchDoc != null) {
-                val watchHtml = watchDoc.html()
-                val dlLinks = Regex("""href="(https://www\.namasha\.com/videos/dl/[^"]+)"""").findAll(watchHtml)
-                    .map { it.groupValues[1] }.distinct().toList()
+            if (!embedHtml.isNullOrEmpty()) {
+                val match = Regex("""https://(s\d+\.namasha\.com)/(?:dash|images|videos)/([0-9]+)""").find(embedHtml)
+                if (match != null) {
+                    val server = match.groupValues[1]
+                    val fileId = match.groupValues[2]
+                    Log.d(TAG, "loadLinks: extracted server=$server, fileId=$fileId")
 
-                dlLinks.forEach { dlUrl ->
-                    val quality = when {
-                        dlUrl.contains("1080p") -> Qualities.P1080.value
-                        dlUrl.contains("720p") -> Qualities.P720.value
-                        dlUrl.contains("480p") -> Qualities.P480.value
-                        dlUrl.contains("360p") -> Qualities.P360.value
-                        dlUrl.contains("240p") -> Qualities.P240.value
-                        else -> Qualities.P720.value
+                    val qualityMap = listOf(
+                        "1080p" to Qualities.P1080.value,
+                        "720p" to Qualities.P720.value,
+                        "480p" to Qualities.P480.value,
+                        "360p" to Qualities.P360.value,
+                        "240p" to Qualities.P240.value
+                    )
+
+                    qualityMap.forEach { (qLabel, qValue) ->
+                        val streamUrl = "https://$server/videos/$fileId-$qLabel.mp4"
+                        callback(newExtractorLink(name, "$name $qLabel", streamUrl) {
+                            this.referer = "https://www.namasha.com/"
+                            this.quality = qValue
+                        })
+                        foundAny = true
                     }
-                    val qualityLabel = when {
-                        dlUrl.contains("1080p") -> "1080p"
-                        dlUrl.contains("720p") -> "720p"
-                        dlUrl.contains("480p") -> "480p"
-                        dlUrl.contains("360p") -> "360p"
-                        dlUrl.contains("240p") -> "240p"
-                        else -> "720p"
-                    }
-                    callback(newExtractorLink(name, "$name $qualityLabel", dlUrl) {
+
+                    // Default MP4
+                    callback(newExtractorLink(name, name, "https://$server/videos/$fileId.mp4") {
                         this.referer = "https://www.namasha.com/"
-                        this.quality = quality
+                        this.quality = Qualities.P720.value
                     })
                     foundAny = true
                 }
+            }
 
-                // If no dl links, check for direct cdn mp4
-                if (!foundAny) {
-                    val cdnMp4 = Regex("""https://[^\s"']+\.namasha\.com/videos/[0-9]+\.mp4""").find(watchHtml)?.value
-                    if (!cdnMp4.isNullOrEmpty()) {
-                        callback(newExtractorLink(name, name, cdnMp4) {
+            // Fallback: if embed parsing didn't find direct server, try watch page dl links
+            if (!foundAny) {
+                val watchDoc = try {
+                    app.get("https://www.namasha.com/v/$namashaId", headers = mapOf(
+                        "User-Agent" to userAgents.random(),
+                        "Referer" to "https://www.alkawthartv.ir/"
+                    )).document
+                } catch (e: Exception) {
+                    Log.e(TAG, "loadLinks: error fetching namasha watch page", e)
+                    null
+                }
+
+                if (watchDoc != null) {
+                    val watchHtml = watchDoc.html()
+                    val dlLinks = Regex("""href="(https://www\.namasha\.com/videos/dl/[^"]+)"""").findAll(watchHtml)
+                        .map { it.groupValues[1] }.distinct().toList()
+
+                    dlLinks.forEach { dlUrl ->
+                        val quality = when {
+                            dlUrl.contains("1080p") -> Qualities.P1080.value
+                            dlUrl.contains("720p") -> Qualities.P720.value
+                            dlUrl.contains("480p") -> Qualities.P480.value
+                            dlUrl.contains("360p") -> Qualities.P360.value
+                            dlUrl.contains("240p") -> Qualities.P240.value
+                            else -> Qualities.P720.value
+                        }
+                        val qualityLabel = when {
+                            dlUrl.contains("1080p") -> "1080p"
+                            dlUrl.contains("720p") -> "720p"
+                            dlUrl.contains("480p") -> "480p"
+                            dlUrl.contains("360p") -> "360p"
+                            dlUrl.contains("240p") -> "240p"
+                            else -> "720p"
+                        }
+                        callback(newExtractorLink(name, "$name $qualityLabel", dlUrl) {
                             this.referer = "https://www.namasha.com/"
-                            this.quality = Qualities.P720.value
+                            this.quality = quality
                         })
                         foundAny = true
                     }
