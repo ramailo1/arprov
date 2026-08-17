@@ -84,12 +84,14 @@ class AlkawtharProvider : MainAPI() {
         return Regex("""\b(\d{1,3})\b""").find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
+    private data class RawEpisode(val url: String, val text: String, val img: String?, val num: Int?)
+
     /** Crawl all episodes from a category URL (supports multiple pages). */
     private suspend fun crawlCategoryEpisodes(
         baseCatUrl: String,
         requestHeaders: Map<String, String>
     ): List<Episode> {
-        val episodes = mutableListOf<Episode>()
+        val rawList = mutableListOf<RawEpisode>()
         var currentPage = 1
         val maxPages = 10
 
@@ -112,7 +114,7 @@ class AlkawtharProvider : MainAPI() {
             var newAdded = 0
             pageLinks.forEach { link ->
                 val epUrl = link.attr("abs:href").ifEmpty { fixUrl(link.attr("href")) }
-                if (epUrl.isEmpty() || episodes.any { it.data == epUrl }) return@forEach
+                if (epUrl.isEmpty() || rawList.any { it.url == epUrl }) return@forEach
 
                 val epText = (link.selectFirst("h2, h3, h4, .news-title, .title")?.text() ?: link.text()).trim()
                 if (epText.length < 2) return@forEach
@@ -122,24 +124,35 @@ class AlkawtharProvider : MainAPI() {
                     fixUrl(src).takeIf { s -> s.startsWith("http") } ?: ""
                 }
 
-                val epNum = parseEpisodeNumber(epText, epUrl) ?: (episodes.size + 1)
-                Log.d(TAG, "crawlCategoryEpisodes: adding ep $epNum - $epText -> $epUrl")
-                episodes.add(
-                    newEpisode(epUrl) {
-                        this.name = epText
-                        this.episode = epNum
-                        if (!epImg.isNullOrEmpty()) this.posterUrl = epImg
-                    }
-                )
+                val epNum = parseEpisodeNumber(epText, epUrl)
+                rawList.add(RawEpisode(epUrl, epText, epImg, epNum))
                 newAdded++
             }
 
-            Log.d(TAG, "crawlCategoryEpisodes: page $currentPage added $newAdded new episodes (total: ${episodes.size})")
+            Log.d(TAG, "crawlCategoryEpisodes: page $currentPage added $newAdded new raw items")
             if (newAdded == 0) break
             currentPage++
         }
 
-        Log.d(TAG, "crawlCategoryEpisodes: done, total episodes = ${episodes.size}")
+        // If most items have an explicit episode number, filter out overview/article pages without an episode number
+        val hasExplicitNumbers = rawList.count { it.num != null } >= (rawList.size / 2).coerceAtLeast(1)
+        val filtered = if (hasExplicitNumbers) {
+            rawList.filter { it.num != null }
+        } else {
+            rawList
+        }
+
+        val episodes = filtered.mapIndexed { index, item ->
+            val epNum = item.num ?: (index + 1)
+            newEpisode(item.url) {
+                this.name = item.text
+                this.episode = epNum
+                this.season = 1
+                if (!item.img.isNullOrEmpty()) this.posterUrl = item.img
+            }
+        }.distinctBy { it.data }.sortedBy { it.episode ?: 1 }
+
+        Log.d(TAG, "crawlCategoryEpisodes: done, total clean episodes = ${episodes.size}")
         return episodes
     }
 
