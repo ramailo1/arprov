@@ -94,6 +94,7 @@ graph TD
 | **iFilmTV (Arabic)** | أفلام ومسلسلات + بث مباشر | `com.lagradost.cloudstream3.ifilmtv` |
 | **iFilmTV (English)** | Series & Movies + Live | `com.lagradost.cloudstream3.ifilmtv` |
 | **iFilmTV (فارسی)** | سریال و فیلم + پخش زنده | `com.lagradost.cloudstream3.ifilmtv` |
+| **Alkawthar TV (قناة الكوثر)** | مسلسلات، أفلام، برامج دينية | `com.lagradost.cloudstream3.alkawthar` |
 | **GogoAnime** | أنمي (Sub/Dub) | `com.lagradost.cloudstream3.gogoanime` |
 | **Shoffree** | أفلام ومسلسلات | `com.lagradost.cloudstream3.shoffree` |
 

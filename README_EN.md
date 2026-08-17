@@ -93,6 +93,7 @@ graph TD
 | **Tuk Tuk Cinema** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
 | **TopCinema** | Movies & Series | `com.lagradost.cloudstream3.topcinema` |
 | **Shoffree** | Movies & Series | `com.lagradost.cloudstream3.shoffree` |
+| **Alkawthar TV** | Series, Movies & Documentaries | `com.lagradost.cloudstream3.alkawthar` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
