@@ -6,8 +6,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URI
 
 class AlkawtharProvider : MainAPI() {
     override var lang = "ar"
@@ -35,8 +35,36 @@ class AlkawtharProvider : MainAPI() {
             Regex("""(?i)\| قناة الکوثر الفضائية|قناة الکوثر الفضائية|قناة الکوثر|الكوثر|الفيلم الايراني|الفيلم السينمائي|الفيلم الوثائقي|الفيلم الروائي|الفيلم|مسلسل|فيلم""")
             , ""
         ).trim()
-        res = res.replace(Regex("""^[\s\-–—:،,\"']+|[\s\-–—:،,\"']+$"""), "").trim()
+        res = res.replace(Regex("""^[\s\-–—:،,"']+|[\s\-–—:،,"']+$"""), "").trim()
         return res
+    }
+
+    private fun fixUrl(url: String): String {
+        return when {
+            url.startsWith("http") -> url
+            url.startsWith("/") -> "$mainUrl$url"
+            url.isNotEmpty() -> "$mainUrl/$url"
+            else -> ""
+        }
+    }
+
+    private fun extractPoster(doc: Document): String {
+        // Priority 1: og:image meta tag
+        doc.selectFirst("meta[property=og:image], meta[property=og:image:secure_url]")?.attr("content")
+            ?.takeIf { it.startsWith("http") }?.let { return it }
+        // Priority 2: twitter:image
+        doc.selectFirst("meta[name=twitter:image]")?.attr("content")
+            ?.takeIf { it.startsWith("http") }?.let { return it }
+        // Priority 3: JSON-LD thumbnailUrl
+        Regex(""""thumbnailUrl"\s*:\s*"([^"]+)""").find(doc.html())?.groupValues?.get(1)
+            ?.takeIf { it.startsWith("http") }?.let { return it }
+        // Priority 4: link[rel=image_src]
+        doc.selectFirst("link[rel=image_src]")?.attr("href")
+            ?.takeIf { it.startsWith("http") }?.let { return it }
+        // Priority 5: video poster
+        doc.selectFirst("video[poster]")?.attr("poster")?.takeIf { it.isNotEmpty() }
+            ?.let { return fixUrl(it) }
+        return ""
     }
 
     private fun parseEpisodeNumber(text: String, url: String? = null): Int? {
@@ -51,6 +79,55 @@ class AlkawtharProvider : MainAPI() {
         return Regex("""\b(\d{1,3})\b""").find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
+    /** Crawl all episodes from a category URL (supports multiple pages). */
+    private suspend fun crawlCategoryEpisodes(
+        baseCatUrl: String,
+        requestHeaders: Map<String, String>
+    ): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+        var currentPage = 1
+        val maxPages = 10
+
+        while (currentPage <= maxPages) {
+            val pageUrl = "$baseCatUrl/$currentPage"
+            val pageDoc = try {
+                app.get(pageUrl, headers = requestHeaders).document
+            } catch (e: Exception) { break }
+
+            val pageLinks = pageDoc.select("a[href*='/news/']").toList()
+            if (pageLinks.isEmpty()) break
+
+            var newAdded = 0
+            pageLinks.forEach { link ->
+                val epUrl = link.attr("abs:href").ifEmpty { fixUrl(link.attr("href")) }
+                if (epUrl.isEmpty() || episodes.any { it.data == epUrl }) return@forEach
+
+                val epText = (link.selectFirst("h2, h3, h4, .news-title, .title")?.text() ?: link.text()).trim()
+                if (epText.length < 2) return@forEach
+
+                val epImg = link.selectFirst("img")?.let {
+                    val src = it.attr("src").ifEmpty { it.attr("data-src") }
+                    fixUrl(src).takeIf { s -> s.startsWith("http") } ?: ""
+                }
+
+                val epNum = parseEpisodeNumber(epText, epUrl) ?: (episodes.size + 1)
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epText
+                        this.episode = epNum
+                        if (!epImg.isNullOrEmpty()) this.posterUrl = epImg
+                    }
+                )
+                newAdded++
+            }
+
+            if (newAdded == 0) break
+            currentPage++
+        }
+
+        return episodes
+    }
+
     private fun Element.toSearchResponse(): SearchResponse? {
         val link = if (this.tagName() == "a") this else this.selectFirst("a") ?: return null
         val href = link.attr("abs:href").ifEmpty {
@@ -59,34 +136,22 @@ class AlkawtharProvider : MainAPI() {
         }
         if (href.isEmpty() || (!href.contains("/news/") && !href.contains("/category/"))) return null
 
-        val rawText = (link.selectFirst("h1, h2, h3, h4, .title, .text, strong")?.text() ?: link.text()).trim()
+        val rawText = (link.selectFirst("h1, h2, h3, h4, .title, .news-title, .text, strong")?.text() ?: link.text()).trim()
         if (rawText.length < 3) return null
 
         val title = rawText.cleanTitle().ifEmpty { rawText }
         val posterUrl = link.selectFirst("img")?.let {
             val src = it.attr("src").ifEmpty { it.attr("data-src") }
-            if (src.startsWith("http")) src else if (src.isNotEmpty()) "$mainUrl$src" else ""
+            fixUrl(src).takeIf { s -> s.startsWith("http") } ?: ""
         } ?: ""
 
         val isCategory = href.contains("/category/")
         val isMovie = href.contains("/news/") && (rawText.contains("فيلم") || rawText.contains("الفيلم") || rawText.contains("وثائقي"))
 
         return when {
-            isCategory -> {
-                newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                    this.posterUrl = posterUrl
-                }
-            }
-            isMovie -> {
-                newMovieSearchResponse(title, href, TvType.Movie) {
-                    this.posterUrl = posterUrl
-                }
-            }
-            else -> {
-                newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                    this.posterUrl = posterUrl
-                }
-            }
+            isCategory -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) { this.posterUrl = posterUrl }
+            isMovie -> newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = posterUrl }
+            else -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) { this.posterUrl = posterUrl }
         }
     }
 
@@ -137,99 +202,72 @@ class AlkawtharProvider : MainAPI() {
 
         val doc = app.get(url, headers = requestHeaders).document
 
-        // Case 1: Category URL (Series with multi-page episode catalog)
+        // === Case 1: Category URL (series/episode catalog page) ===
         if (url.contains("/category/")) {
-            val rawTitle = doc.title().substringBefore("|").trim()
+            val rawTitle = doc.selectFirst("h1")?.text()?.trim()
+                ?: doc.title().substringBefore("|").trim()
             val title = rawTitle.cleanTitle().ifEmpty { rawTitle }
 
-            val episodes = mutableListOf<Episode>()
+            val posterUrl = extractPoster(doc)
             val baseUrlWithoutPage = url.replace(Regex("""/\d+$"""), "")
-            var currentPage = 1
-            val maxPages = 6
-
-            while (currentPage <= maxPages) {
-                val pageUrl = "$baseUrlWithoutPage/$currentPage"
-                val pageDoc = if (currentPage == 1) doc else {
-                    try {
-                        app.get(pageUrl, headers = requestHeaders).document
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: break
-
-                val pageLinks = pageDoc.select("a[href*='/news/']").toList()
-                if (pageLinks.isEmpty()) break
-
-                var newAdded = 0
-                pageLinks.forEach { link ->
-                    val epUrl = link.attr("abs:href").ifEmpty { "$mainUrl${link.attr("href")}" }
-                    val epText = link.text().trim()
-                    if (epText.length >= 3 && !episodes.any { it.data == epUrl }) {
-                        val epNum = parseEpisodeNumber(epText, epUrl) ?: (episodes.size + 1)
-                        val epImg = link.selectFirst("img")?.attr("src")?.let {
-                            if (it.startsWith("http")) it else "$mainUrl$it"
-                        }
-
-                        episodes.add(
-                            newEpisode(epUrl) {
-                                this.name = epText.cleanTitle().ifEmpty { "الحلقة $epNum" }
-                                this.episode = epNum
-                                this.posterUrl = epImg
-                            }
-                        )
-                        newAdded++
-                    }
-                }
-
-                if (newAdded == 0) break
-                currentPage++
-            }
-
+            val episodes = crawlCategoryEpisodes(baseUrlWithoutPage, requestHeaders)
             val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
-            val posterUrl = sortedEpisodes.firstOrNull()?.posterUrl ?: ""
+            val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
 
-            return newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                sortedEpisodes
-            ) {
-                this.posterUrl = posterUrl
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+                this.posterUrl = finalPoster
             }
         }
 
-        // Case 2: Article / Single Episode / Movie URL (/news/{id})
-        val rawTitle = doc.selectFirst("h1, .title, .headTitle")?.text()?.trim()
+        // === Case 2: Article / Series overview URL (/news/{id}) ===
+        val rawTitle = doc.selectFirst("h1, .news-title, .headTitle")?.text()?.trim()
             ?: doc.title().substringBefore("|").trim()
         val title = rawTitle.cleanTitle().ifEmpty { rawTitle }
+        val posterUrl = extractPoster(doc)
+        val plot = doc.selectFirst("meta[name=description]")?.attr("content")?.trim()
+            ?: doc.selectFirst(".body, .content, .description, p")?.text()?.trim() ?: ""
 
-        val posterUrl = doc.selectFirst("video")?.attr("poster")
-            ?: doc.selectFirst(".image img, .news-image img, img[src*='alkawthartv.ir']")?.attr("src")
-            ?: ""
+        // Check if this article links to an /epi/ page → series overview with sub-category
+        val epiId = Regex("""alkawthartv\.ir/epi/(\d+)""").find(doc.html())?.groupValues?.get(1)
+        if (epiId != null) {
+            val epiDoc = try {
+                app.get("$mainUrl/epi/$epiId", headers = requestHeaders).document
+            } catch (e: Exception) { null }
 
-        val plot = doc.selectFirst(".body, .content, .description, p")?.text()?.trim() ?: ""
+            val subCategoryId = epiDoc?.let {
+                Regex("""/category/(\d+)""").find(it.html())?.groupValues?.get(1)
+            }
 
+            if (subCategoryId != null) {
+                val episodes = crawlCategoryEpisodes("$mainUrl/category/$subCategoryId", requestHeaders)
+                val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
+                val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
+
+                return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+                    this.posterUrl = finalPoster
+                    this.plot = plot
+                }
+            }
+        }
+
+        // === Case 3: Single episode or movie ===
         val isMovie = rawTitle.contains("فيلم") || rawTitle.contains("الفيلم") || rawTitle.contains("وثائقي")
-
         return if (isMovie) {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = if (posterUrl.startsWith("http")) posterUrl else if (posterUrl.isNotEmpty()) "$mainUrl$posterUrl" else ""
+                this.posterUrl = posterUrl
                 this.plot = plot
             }
         } else {
+            val epNum = parseEpisodeNumber(rawTitle) ?: 1
             newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                listOf(
-                    newEpisode(url) {
-                        this.name = title
-                        this.episode = 1
-                        this.posterUrl = if (posterUrl.startsWith("http")) posterUrl else if (posterUrl.isNotEmpty()) "$mainUrl$posterUrl" else ""
-                    }
-                )
+                title, url, TvType.TvSeries,
+                listOf(newEpisode(url) {
+                    this.name = rawTitle
+                    this.episode = epNum
+                    this.posterUrl = posterUrl
+                })
             ) {
-                this.posterUrl = if (posterUrl.startsWith("http")) posterUrl else if (posterUrl.isNotEmpty()) "$mainUrl$posterUrl" else ""
+                this.posterUrl = posterUrl
                 this.plot = plot
             }
         }
@@ -247,19 +285,37 @@ class AlkawtharProvider : MainAPI() {
         val doc = app.get(data, headers = requestHeaders).document
         val html = doc.html()
 
-        // 1. Direct video or source tag
-        val videoUrl = doc.selectFirst("video")?.attr("src")?.takeIf { it.isNotEmpty() }
-            ?: doc.selectFirst("source")?.attr("src")?.takeIf { it.isNotEmpty() }
+        // 1. JSON-LD contentUrl (most reliable — server-set direct mp4)
+        val jsonLdUrl = Regex(""""contentUrl"\s*:\s*"([^"]+)""").find(html)?.groupValues?.get(1)
+        if (!jsonLdUrl.isNullOrEmpty() && jsonLdUrl.startsWith("http")) {
+            callback(newExtractorLink(name, name, jsonLdUrl) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.P720.value
+            })
+            return true
+        }
+
+        // 2. og:video meta tag
+        val ogVideo = doc.selectFirst("meta[property=og:video], meta[property=og:video:secure_url]")?.attr("content")
+        if (!ogVideo.isNullOrEmpty() && ogVideo.startsWith("http")) {
+            callback(newExtractorLink(name, name, ogVideo) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.P720.value
+            })
+            return true
+        }
+
+        // 3. Direct video/source tag or mp4 pattern in HTML
+        val videoUrl = doc.selectFirst("video[src]")?.attr("src")?.takeIf { it.isNotEmpty() }
+            ?: doc.selectFirst("source[src]")?.attr("src")?.takeIf { it.isNotEmpty() }
             ?: Regex("""https?://[^\s"']+\.mp4[^\s"']*""", RegexOption.IGNORE_CASE).find(html)?.value
 
         if (!videoUrl.isNullOrEmpty()) {
             val fullVideoUrl = if (videoUrl.startsWith("http")) videoUrl else "$mainUrl$videoUrl"
-            callback(
-                newExtractorLink(name, name, fullVideoUrl) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.P720.value
-                }
-            )
+            callback(newExtractorLink(name, name, fullVideoUrl) {
+                this.referer = "$mainUrl/"
+                this.quality = Qualities.P720.value
+            })
             return true
         }
 
