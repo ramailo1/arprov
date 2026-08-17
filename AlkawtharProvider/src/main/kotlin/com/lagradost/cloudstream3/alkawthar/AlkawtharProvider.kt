@@ -2,6 +2,7 @@
 
 package com.lagradost.cloudstream3.alkawthar
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -16,6 +17,10 @@ class AlkawtharProvider : MainAPI() {
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
+
+    companion object {
+        const val TAG = "AlkawtharProvider"
+    }
 
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -88,13 +93,20 @@ class AlkawtharProvider : MainAPI() {
         var currentPage = 1
         val maxPages = 10
 
+        Log.d(TAG, "crawlCategoryEpisodes: starting for $baseCatUrl")
+
         while (currentPage <= maxPages) {
             val pageUrl = "$baseCatUrl/$currentPage"
+            Log.d(TAG, "crawlCategoryEpisodes: fetching page $currentPage -> $pageUrl")
             val pageDoc = try {
                 app.get(pageUrl, headers = requestHeaders).document
-            } catch (e: Exception) { break }
+            } catch (e: Exception) {
+                Log.e(TAG, "crawlCategoryEpisodes: error fetching $pageUrl", e)
+                break
+            }
 
             val pageLinks = pageDoc.select("a[href*='/news/']").toList()
+            Log.d(TAG, "crawlCategoryEpisodes: page $currentPage found ${pageLinks.size} links")
             if (pageLinks.isEmpty()) break
 
             var newAdded = 0
@@ -111,6 +123,7 @@ class AlkawtharProvider : MainAPI() {
                 }
 
                 val epNum = parseEpisodeNumber(epText, epUrl) ?: (episodes.size + 1)
+                Log.d(TAG, "crawlCategoryEpisodes: adding ep $epNum - $epText -> $epUrl")
                 episodes.add(
                     newEpisode(epUrl) {
                         this.name = epText
@@ -121,10 +134,12 @@ class AlkawtharProvider : MainAPI() {
                 newAdded++
             }
 
+            Log.d(TAG, "crawlCategoryEpisodes: page $currentPage added $newAdded new episodes (total: ${episodes.size})")
             if (newAdded == 0) break
             currentPage++
         }
 
+        Log.d(TAG, "crawlCategoryEpisodes: done, total episodes = ${episodes.size}")
         return episodes
     }
 
@@ -204,6 +219,7 @@ class AlkawtharProvider : MainAPI() {
 
         // === Case 1: Category URL (series/episode catalog page) ===
         if (url.contains("/category/")) {
+            Log.d(TAG, "load: Case 1 - category URL: $url")
             val rawTitle = doc.selectFirst("h1")?.text()?.trim()
                 ?: doc.title().substringBefore("|").trim()
             val title = rawTitle.cleanTitle().ifEmpty { rawTitle }
@@ -214,6 +230,7 @@ class AlkawtharProvider : MainAPI() {
             val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
             val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
 
+            Log.d(TAG, "load: Case 1 - returning ${sortedEpisodes.size} episodes for '$title'")
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = finalPoster
             }
@@ -227,22 +244,31 @@ class AlkawtharProvider : MainAPI() {
         val plot = doc.selectFirst("meta[name=description]")?.attr("content")?.trim()
             ?: doc.selectFirst(".body, .content, .description, p")?.text()?.trim() ?: ""
 
+        Log.d(TAG, "load: Case 2 - news URL: $url")
+        Log.d(TAG, "load: rawTitle = '$rawTitle'")
+
         // Check if this article links to an /epi/ page → series overview with sub-category
         val epiId = Regex("""alkawthartv\.ir/epi/(\d+)""").find(doc.html())?.groupValues?.get(1)
+        Log.d(TAG, "load: epiId found = $epiId")
         if (epiId != null) {
             val epiDoc = try {
                 app.get("$mainUrl/epi/$epiId", headers = requestHeaders).document
-            } catch (e: Exception) { null }
+            } catch (e: Exception) {
+                Log.e(TAG, "load: failed to fetch epi page", e)
+                null
+            }
 
             val subCategoryId = epiDoc?.let {
                 Regex("""/category/(\d+)""").find(it.html())?.groupValues?.get(1)
             }
+            Log.d(TAG, "load: subCategoryId found = $subCategoryId")
 
             if (subCategoryId != null) {
                 val episodes = crawlCategoryEpisodes("$mainUrl/category/$subCategoryId", requestHeaders)
                 val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
                 val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
 
+                Log.d(TAG, "load: Case 2 via sub-category - returning ${sortedEpisodes.size} episodes")
                 return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
                     this.posterUrl = finalPoster
                     this.plot = plot
@@ -251,14 +277,17 @@ class AlkawtharProvider : MainAPI() {
         }
 
         // === Case 3: Single episode or movie ===
+        Log.d(TAG, "load: Case 3 - single episode/movie. isMovie check on '$rawTitle'")
         val isMovie = rawTitle.contains("فيلم") || rawTitle.contains("الفيلم") || rawTitle.contains("وثائقي")
         return if (isMovie) {
+            Log.d(TAG, "load: returning as Movie")
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = posterUrl
                 this.plot = plot
             }
         } else {
             val epNum = parseEpisodeNumber(rawTitle) ?: 1
+            Log.d(TAG, "load: returning as single TvSeries episode, epNum=$epNum")
             newTvSeriesLoadResponse(
                 title, url, TvType.TvSeries,
                 listOf(newEpisode(url) {
