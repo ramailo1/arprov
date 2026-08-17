@@ -247,32 +247,38 @@ class AlkawtharProvider : MainAPI() {
         Log.d(TAG, "load: Case 2 - news URL: $url")
         Log.d(TAG, "load: rawTitle = '$rawTitle'")
 
-        // Check if this article links to an /epi/ page → series overview with sub-category
-        val epiId = Regex("""alkawthartv\.ir/epi/(\d+)""").find(doc.html())?.groupValues?.get(1)
-        Log.d(TAG, "load: epiId found = $epiId")
-        if (epiId != null) {
-            val epiDoc = try {
-                app.get("$mainUrl/epi/$epiId", headers = requestHeaders).document
-            } catch (e: Exception) {
-                Log.e(TAG, "load: failed to fetch epi page", e)
-                null
-            }
+        var subCategoryId = if (url.contains("/epi/") || url.contains("/episode/")) {
+            Regex("""/category/(\d+)""").find(doc.html())?.groupValues?.get(1)
+        } else {
+            null
+        }
 
-            val subCategoryId = epiDoc?.let {
-                Regex("""/category/(\d+)""").find(it.html())?.groupValues?.get(1)
-            }
-            Log.d(TAG, "load: subCategoryId found = $subCategoryId")
-
-            if (subCategoryId != null) {
-                val episodes = crawlCategoryEpisodes("$mainUrl/category/$subCategoryId", requestHeaders)
-                val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
-                val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
-
-                Log.d(TAG, "load: Case 2 via sub-category - returning ${sortedEpisodes.size} episodes")
-                return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
-                    this.posterUrl = finalPoster
-                    this.plot = plot
+        if (subCategoryId == null) {
+            val epiId = Regex("""alkawthartv\.ir/epi/(\d+)""").find(doc.html())?.groupValues?.get(1)
+            Log.d(TAG, "load: epiId found = $epiId")
+            if (epiId != null) {
+                val epiDoc = try {
+                    app.get("$mainUrl/epi/$epiId", headers = requestHeaders).document
+                } catch (e: Exception) {
+                    Log.e(TAG, "load: failed to fetch epi page", e)
+                    null
                 }
+                subCategoryId = epiDoc?.let {
+                    Regex("""/category/(\d+)""").find(it.html())?.groupValues?.get(1)
+                }
+            }
+        }
+        Log.d(TAG, "load: subCategoryId found = $subCategoryId")
+
+        if (subCategoryId != null) {
+            val episodes = crawlCategoryEpisodes("$mainUrl/category/$subCategoryId", requestHeaders)
+            val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
+            val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
+
+            Log.d(TAG, "load: Case 2 via sub-category - returning ${sortedEpisodes.size} episodes")
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+                this.posterUrl = finalPoster
+                this.plot = plot
             }
         }
 
