@@ -5,8 +5,6 @@ package com.lagradost.cloudstream3.egydead
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.DubStatus
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -113,6 +111,24 @@ class EgyDeadProvider : MainAPI() {
             "$res (مدبلج)"
         } else {
             res
+        }
+    }
+
+    private fun List<Element>.sortSeasons(): List<Element> {
+        return this.sortedWith { a, b ->
+            val sA = parseSeasonNumber(a.text(), a.attr("abs:href"))
+            val sB = parseSeasonNumber(b.text(), b.attr("abs:href"))
+            if (sA != null && sB != null) return@sortedWith sA.compareTo(sB)
+            if (sA != null) return@sortedWith -1
+            if (sB != null) return@sortedWith 1
+
+            val yA = a.text().getIntFromText() ?: a.attr("abs:href").getIntFromText()
+            val yB = b.text().getIntFromText() ?: b.attr("abs:href").getIntFromText()
+            if (yA != null && yB != null) return@sortedWith yA.compareTo(yB)
+            if (yA != null) return@sortedWith -1
+            if (yB != null) return@sortedWith 1
+
+            0
         }
     }
     
@@ -252,7 +268,6 @@ class EgyDeadProvider : MainAPI() {
             ?: doc.title().substringBefore("|").substringBefore("-").trim()
 
         val isDubbed = url.contains("-ar") || url.contains("مدبلج") || rawTitle.contains("مدبلج")
-        val isJapanese = url.contains("-jp") || url.contains("الياباني") || rawTitle.contains("الياباني")
         val title = rawTitle.cleanTitle(isDubbed)
 
         val isMovie = !url.contains("/serie/") && !url.contains("/season/") && !url.contains("/episode/")
@@ -277,35 +292,39 @@ class EgyDeadProvider : MainAPI() {
                 this.year = year
                 this.recommendations = recommendations
             }
-        } else {
-            val allSeasonElements = doc.select("div.seasons-list a")
-            
-            // Filter seasons based on the variant (Dubbed vs Japanese vs Subbed)
-            val filteredSeasonLinks = if (allSeasonElements.isNotEmpty()) {
-                allSeasonElements.filter { el ->
-                    val href = el.attr("abs:href")
-                    val text = el.text()
-                    if (isDubbed) {
-                        href.contains("-ar") || href.contains("مدبلج") || text.contains("مدبلج")
-                    } else if (isJapanese) {
-                        href.contains("-jp") || href.contains("الياباني") || text.contains("الياباني")
-                    } else {
-                        !href.contains("-ar") && !href.contains("مدبلج") && !text.contains("مدبلج") &&
-                        !href.contains("-jp") && !text.contains("الياباني")
-                    }
-                }
-            } else {
-                emptyList()
-            }
+        }
 
-            val episodes = mutableListOf<Episode>()
+        val isAnime = url.contains("انمي") || url.contains("anime") || rawTitle.contains("انمي") || tags.any { it.contains("انمي") || it.contains("أنمي") }
+        val allSeasonElements = doc.select("div.seasons-list a")
 
-            if (filteredSeasonLinks.isNotEmpty()) {
-                filteredSeasonLinks.forEachIndexed { index, seasonEl ->
+        // Separate Dubbed and Subbed seasons from the franchise/series
+        val dubSeasonElements = allSeasonElements.filter { el ->
+            val href = el.attr("abs:href")
+            val text = el.text()
+            href.contains("-ar") || href.contains("مدبلج") || text.contains("مدبلج")
+        }.sortSeasons()
+
+        val subSeasonElements = allSeasonElements.filter { el ->
+            val href = el.attr("abs:href")
+            val text = el.text()
+            !href.contains("-ar") && !href.contains("مدبلج") && !text.contains("مدبلج") &&
+            !href.contains("-jp") && !text.contains("الياباني")
+        }.sortSeasons()
+
+        val subEpisodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+
+        suspend fun loadSeasonEpisodes(
+            seasonElements: List<Element>,
+            targetList: MutableList<Episode>,
+            isDubList: Boolean
+        ) {
+            if (seasonElements.isNotEmpty()) {
+                seasonElements.forEachIndexed { index, seasonEl ->
                     val sUrl = seasonEl.attr("abs:href")
                     val sText = seasonEl.text()
                     val parsedSeason = parseSeasonNumber(sText, sUrl) ?: (index + 1)
-                    
+
                     val sDoc = if (sUrl == url) doc else {
                         try {
                             app.get(sUrl, headers = requestHeaders).document
@@ -321,10 +340,10 @@ class EgyDeadProvider : MainAPI() {
                             val epText = ep.text()
                             val epNum = parseEpisodeNumber(epText, epUrl) ?: 1
                             var epName = epText.trim().ifEmpty { "Episode $epNum" }
-                            if (isDubbed && !epName.contains("مدبلج")) {
+                            if (isDubList && !epName.contains("مدبلج")) {
                                 epName = "$epName (مدبلج)"
                             }
-                            episodes.add(
+                            targetList.add(
                                 newEpisode(epUrl) {
                                     this.name = epName
                                     this.season = parsedSeason
@@ -335,35 +354,63 @@ class EgyDeadProvider : MainAPI() {
                         }
                     }
                 }
-            } else {
-                val episodeElements = doc.select("div.episodes-list a")
-                val seasonNum = parseSeasonNumber(rawTitle, url) ?: 1
-                episodeElements.forEach { ep ->
-                    val epUrl = ep.attr("abs:href")
-                    val epText = ep.text()
-                    val epNum = parseEpisodeNumber(epText, epUrl) ?: 1
-                    var epName = epText.trim().ifEmpty { "Episode $epNum" }
-                    if (isDubbed && !epName.contains("مدبلج")) {
-                        epName = "$epName (مدبلج)"
-                    }
-                    episodes.add(
-                        newEpisode(epUrl) {
-                            this.name = epName
-                            this.season = seasonNum
-                            this.episode = epNum
-                            this.posterUrl = posterUrl
-                        }
-                    )
-                }
             }
+        }
 
-            val distinctEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))
+        // Load both Sub and Dub lists if available
+        loadSeasonEpisodes(subSeasonElements, subEpisodes, isDubList = false)
+        loadSeasonEpisodes(dubSeasonElements, dubEpisodes, isDubList = true)
+
+        // Fallback for standalone season pages (if seasons-list was empty)
+        if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
+            val epElements = doc.select("div.episodes-list a")
+            val seasonNum = parseSeasonNumber(rawTitle, url) ?: 1
+            epElements.forEach { ep ->
+                val epUrl = ep.attr("abs:href")
+                val epText = ep.text()
+                val epNum = parseEpisodeNumber(epText, epUrl) ?: 1
+                var epName = epText.trim().ifEmpty { "Episode $epNum" }
+                if (isDubbed && !epName.contains("مدبلج")) {
+                    epName = "$epName (مدبلج)"
+                }
+                val epObj = newEpisode(epUrl) {
+                    this.name = epName
+                    this.season = seasonNum
+                    this.episode = epNum
+                    this.posterUrl = posterUrl
+                }
+                if (isDubbed) dubEpisodes.add(epObj) else subEpisodes.add(epObj)
+            }
+        }
+
+        val distinctSub = subEpisodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))
+        val distinctDub = dubEpisodes.distinctBy { it.data }.sortedWith(compareBy({ it.season }, { it.episode }))
+
+        if (isAnime) {
+            return newAnimeLoadResponse(title, url, TvType.Anime) {
+                this.posterUrl = posterUrl
+                this.tags = tags
+                this.plot = synopsis
+                this.year = year
+                this.recommendations = recommendations
+                if (distinctSub.isNotEmpty()) addEpisodes(DubStatus.Subbed, distinctSub)
+                if (distinctDub.isNotEmpty()) addEpisodes(DubStatus.Dubbed, distinctDub)
+            }
+        } else {
+            // For standard TV Series
+            val combinedEpisodes = if (isDubbed && distinctDub.isNotEmpty()) {
+                distinctDub
+            } else if (distinctSub.isNotEmpty()) {
+                distinctSub
+            } else {
+                distinctDub
+            }
 
             return newTvSeriesLoadResponse(
                 title,
                 url,
                 TvType.TvSeries,
-                distinctEpisodes
+                combinedEpisodes
             ) {
                 this.posterUrl = posterUrl
                 this.tags = tags
