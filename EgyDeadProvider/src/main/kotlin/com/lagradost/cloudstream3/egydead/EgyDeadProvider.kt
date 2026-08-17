@@ -7,11 +7,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.DubStatus
 import org.jsoup.nodes.Element
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
-import okhttp3.Headers
+import java.net.URI
 import kotlinx.coroutines.delay
 
 class EgyDeadProvider : MainAPI() {
@@ -36,12 +34,86 @@ class EgyDeadProvider : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
+    private val arabicOrdinals = listOf(
+        listOf("الأول", "الاول", "أولى", "اولى", "أول", "اول", "1") to 1,
+        listOf("الثاني", "التاني", "ثانية", "تانية", "ثاني", "تاني", "2") to 2,
+        listOf("الثالث", "التالت", "ثالثة", "تالتة", "ثالث", "تالت", "3") to 3,
+        listOf("الرابع", "رابعة", "رابع", "4") to 4,
+        listOf("الخامس", "خامسة", "خامس", "5") to 5,
+        listOf("السادس", "سادسة", "سادس", "6") to 6,
+        listOf("السابع", "سابعة", "سابع", "7") to 7,
+        listOf("الثامن", "ثامنة", "ثامن", "8") to 8,
+        listOf("التاسع", "تاسعة", "تاسع", "9") to 9,
+        listOf("العاشر", "عاشرة", "عاشر", "10") to 10,
+        listOf("الحادي عشر", "الحادية عشرة", "11") to 11,
+        listOf("الثاني عشر", "الثانية عشرة", "12") to 12,
+        listOf("الثالث عشر", "الثالثة عشرة", "13") to 13,
+        listOf("الرابع عشر", "الرابعة عشرة", "14") to 14,
+        listOf("الخامس عشر", "الخامسة عشرة", "15") to 15,
+        listOf("السادس عشر", "السادسة عشرة", "16") to 16,
+        listOf("السابع عشر", "السابعة عشرة", "17") to 17,
+        listOf("الثامن عشر", "الثامنة عشرة", "18") to 18,
+        listOf("التاسع عشر", "التاسعة عشرة", "19") to 19,
+        listOf("العشرون", "العشرين", "20") to 20
+    )
+
     private fun String.getIntFromText(): Int? {
         return Regex("""\d+""").find(this)?.groupValues?.firstOrNull()?.toIntOrNull()
     }
-    
-    private fun String.cleanTitle(): String {
-        return this.replace("جميع مواسم مسلسل|مترجم كامل|مشاهدة فيلم|مشاهدة عرض|مترجم|انمي|الموسم.*|مترجمة كاملة|مسلسل|كاملة|برنامج".toRegex(), "").trim()
+
+    private fun parseSeasonNumber(title: String, url: String? = null): Int? {
+        val text = (title + " " + (url ?: "")).lowercase()
+        
+        // 1. Check URL patterns like -s01, -s1, /season-1/, s02e01, etc.
+        val urlMatch = (url ?: "").let {
+            Regex("""[-_/](?:s|season|part|sezon)[-_]?(\d{1,2})(?:[-_/]|$)""", RegexOption.IGNORE_CASE).find(it)
+        }
+        if (urlMatch != null) {
+            val n = urlMatch.groupValues[1].toIntOrNull()
+            if (n != null && n in 1..49) return n
+        }
+
+        // 2. Check Arabic ordinals with season/part keyword
+        for ((words, num) in arabicOrdinals) {
+            for (w in words) {
+                if (Regex("""(?:الموسم|الجزء|موسم|جزء|season|part)\s+$w""", RegexOption.IGNORE_CASE).containsMatchIn(text)
+                    || (text.contains(w) && (text.contains("موسم") || text.contains("الموسم") || text.contains("جزء") || text.contains("الجزء")))) {
+                    return num
+                }
+            }
+        }
+
+        // 3. Digits after season/part keywords
+        val digitMatch = Regex("""(?:الموسم|الجزء|موسم|جزء|season|part|s)\s*[:\-]?\s*(\d{1,2})(?:\D|$)""", RegexOption.IGNORE_CASE).find(text)
+        if (digitMatch != null) {
+            val n = digitMatch.groupValues[1].toIntOrNull()
+            if (n != null && n in 1..49) return n
+        }
+
+        return null
+    }
+
+    private fun parseEpisodeNumber(text: String, url: String? = null): Int? {
+        val urlEp = (url ?: "").let {
+            Regex("""(?:e|ep|episode)[-_]?(\d{1,4})""", RegexOption.IGNORE_CASE).find(it)?.groupValues?.get(1)?.toIntOrNull()
+        }
+        if (urlEp != null) return urlEp
+
+        val match = Regex("""(?:الحلقة|حلقه|الحلقه|حلقة|episode|ep)\s*[:\-]?\s*(\d{1,4})""", RegexOption.IGNORE_CASE).find(text)
+        return match?.groupValues?.get(1)?.toIntOrNull() ?: text.getIntFromText()
+    }
+
+    private fun String.cleanTitle(isDubbed: Boolean = false): String {
+        var res = this.replace(
+            Regex("""(?i)جميع مواسم مسلسل|جميع مواسم انمي|جميع مواسم|مترجم كامل|مترجمة كاملة|مشاهدة فيلم|مشاهدة عرض|مشاهدة مسلسل|مشاهدة|مترجم|مترجمة|مدبلج كامل|مدبلجة كاملة|مدبلج|مدبلجة|مسلسل|انمي|برنامج|كاملة|كامل|اون لاين|اونلاين|تحميل""")
+            , ""
+        ).trim()
+        res = res.replace(Regex("""^[\s\-–—]+|[\s\-–—]+$"""), "").trim()
+        return if (isDubbed && !res.contains("مدبلج")) {
+            "$res (مدبلج)"
+        } else {
+            res
+        }
     }
     
     private fun Element.toSearchResponse(): SearchResponse? {
@@ -49,24 +121,43 @@ class EgyDeadProvider : MainAPI() {
         if (link == null) return null
         
         val href = link.attr("href").takeIf { it.isNotEmpty() && it.contains("egydead") } ?: return null
-        val title = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).cleanTitle()
+        val rawTitle = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).trim()
+        if (rawTitle.isEmpty()) return null
+
+        val isDub = rawTitle.contains("مدبلج", ignoreCase = true) || href.contains("-ar") || href.contains("مدبلج")
+        val isSub = rawTitle.contains("مترجم", ignoreCase = true) || (!isDub && !href.contains("-jp") && !rawTitle.contains("الياباني"))
+        val title = rawTitle.cleanTitle(isDub)
         if (title.isEmpty()) return null
         
-        val posterUrl = link.selectFirst("img")?.attr("src") ?: ""
+        val posterUrl = link.selectFirst("img")?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
+        } ?: ""
         
-        // Determine type based on URL or category
+        val isAnime = href.contains("انمي") || href.contains("anime") || rawTitle.contains("انمي")
+        val isSeries = href.contains("/serie/") || href.contains("/season/") || href.contains("/episode/")
         val tvType = when {
-            href.contains("/serie/") || href.contains("/season/") -> TvType.TvSeries
-            href.contains("/episode/") -> TvType.TvSeries
+            isAnime -> TvType.Anime
+            isSeries -> TvType.TvSeries
             else -> TvType.Movie
         }
         
-        return newMovieSearchResponse(
-            title,
-            href,
-            tvType,
-        ) {
-            this.posterUrl = posterUrl
+        return when (tvType) {
+            TvType.Anime -> {
+                newAnimeSearchResponse(title, href, TvType.Anime) {
+                    this.posterUrl = posterUrl
+                    this.addDubStatus(dubExist = isDub, subExist = isSub)
+                }
+            }
+            TvType.TvSeries -> {
+                newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                    this.posterUrl = posterUrl
+                }
+            }
+            else -> {
+                newMovieSearchResponse(title, href, TvType.Movie) {
+                    this.posterUrl = posterUrl
+                }
+            }
         }
     }
 
@@ -138,30 +229,32 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        delay((1500..2500).random().toLong())
+        delay((1000..2000).random().toLong())
         
         val doc = app.get(url, headers = requestHeaders).document
 
         // Redirect individual episode pages to their main series/season page for Netflix layout
         if (url.contains("/episode/")) {
-            
-            // Refined breadcrumb logic: Find the first link that is specifically a series or season, avoiding categories
             val breadcrumbLinks = doc.select(".breadcrumbs-single a")
-            val seriesUrl = breadcrumbLinks.find { 
+            // Find specific season first (reversed search), or series
+            val redirectUrl = breadcrumbLinks.reversed().find { 
                 val href = it.attr("abs:href")
-                (href.contains("/serie/") || href.contains("/season/")) && !href.contains("/series-category/") 
+                (href.contains("/season/") || href.contains("/serie/")) && !href.contains("/series-category/") 
             }?.attr("abs:href")
-            
-            val fallbackLink = doc.selectFirst("a[href*='/serie/']:not([href*='/series-category/']):not([href$='/serie/']), a[href*='/season/']:not([href$='/season/'])")?.attr("abs:href")
-            
-            val redirectUrl = seriesUrl ?: fallbackLink
+            ?: doc.selectFirst("a[href*='/season/']:not([href$='/season/']), a[href*='/serie/']:not([href*='/series-category/']):not([href$='/serie/'])")?.attr("abs:href")
             
             if (!redirectUrl.isNullOrEmpty() && redirectUrl != url && !redirectUrl.endsWith("/episode/")) {
                 return load(redirectUrl)
             }
         }
 
-        val title = (doc.selectFirst("div.singleTitle em") ?: doc.selectFirst("h1.singleTitle") ?: doc.selectFirst(".breadcrumbs-single li:last-child") ?: doc.selectFirst("h1"))?.text()?.cleanTitle() ?: ""
+        val rawTitle = doc.selectFirst("div.singleTitle em, div.singleTitle, .breadcrumbs-single li.current, h1")?.text()?.trim()
+            ?: doc.title().substringBefore("|").substringBefore("-").trim()
+
+        val isDubbed = url.contains("-ar") || url.contains("مدبلج") || rawTitle.contains("مدبلج")
+        val isJapanese = url.contains("-jp") || url.contains("الياباني") || rawTitle.contains("الياباني")
+        val title = rawTitle.cleanTitle(isDubbed)
+
         val isMovie = !url.contains("/serie/") && !url.contains("/season/") && !url.contains("/episode/")
 
         val posterUrl = doc.selectFirst("div.single-thumbnail img, div.Poster img")?.let { 
@@ -185,37 +278,82 @@ class EgyDeadProvider : MainAPI() {
                 this.recommendations = recommendations
             }
         } else {
-            val seasonLinks = doc.select("div.seasons-list a")
+            val allSeasonElements = doc.select("div.seasons-list a")
             
-            val episodes = if (seasonLinks.isNotEmpty()) {
-                seasonLinks.mapNotNull {
-                    val sUrl = it.attr("abs:href")
-                    val sNum = it.text().getIntFromText() ?: 1
-                    val sDoc = app.get(sUrl, headers = requestHeaders).document
-                    val episodeElements = sDoc.select("div.episodes-list a")
-                    episodeElements.mapNotNull { ep ->
-                        val epUrl = ep.attr("abs:href")
-                        val epNum = ep.text().getIntFromText() ?: 1
+            // Filter seasons based on the variant (Dubbed vs Japanese vs Subbed)
+            val filteredSeasonLinks = if (allSeasonElements.isNotEmpty()) {
+                allSeasonElements.filter { el ->
+                    val href = el.attr("abs:href")
+                    val text = el.text()
+                    if (isDubbed) {
+                        href.contains("-ar") || href.contains("مدبلج") || text.contains("مدبلج")
+                    } else if (isJapanese) {
+                        href.contains("-jp") || href.contains("الياباني") || text.contains("الياباني")
+                    } else {
+                        !href.contains("-ar") && !href.contains("مدبلج") && !text.contains("مدبلج") &&
+                        !href.contains("-jp") && !text.contains("الياباني")
+                    }
+                }
+            } else {
+                emptyList()
+            }
+
+            val episodes = mutableListOf<Episode>()
+
+            if (filteredSeasonLinks.isNotEmpty()) {
+                filteredSeasonLinks.forEachIndexed { index, seasonEl ->
+                    val sUrl = seasonEl.attr("abs:href")
+                    val sText = seasonEl.text()
+                    val parsedSeason = parseSeasonNumber(sText, sUrl) ?: (index + 1)
+                    
+                    val sDoc = if (sUrl == url) doc else {
+                        try {
+                            app.get(sUrl, headers = requestHeaders).document
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+
+                    if (sDoc != null) {
+                        val epElements = sDoc.select("div.episodes-list a")
+                        epElements.forEach { ep ->
+                            val epUrl = ep.attr("abs:href")
+                            val epText = ep.text()
+                            val epNum = parseEpisodeNumber(epText, epUrl) ?: 1
+                            var epName = epText.trim().ifEmpty { "Episode $epNum" }
+                            if (isDubbed && !epName.contains("مدبلج")) {
+                                epName = "$epName (مدبلج)"
+                            }
+                            episodes.add(
+                                newEpisode(epUrl) {
+                                    this.name = epName
+                                    this.season = parsedSeason
+                                    this.episode = epNum
+                                    this.posterUrl = posterUrl
+                                }
+                            )
+                        }
+                    }
+                }
+            } else {
+                val episodeElements = doc.select("div.episodes-list a")
+                val seasonNum = parseSeasonNumber(rawTitle, url) ?: 1
+                episodeElements.forEach { ep ->
+                    val epUrl = ep.attr("abs:href")
+                    val epText = ep.text()
+                    val epNum = parseEpisodeNumber(epText, epUrl) ?: 1
+                    var epName = epText.trim().ifEmpty { "Episode $epNum" }
+                    if (isDubbed && !epName.contains("مدبلج")) {
+                        epName = "$epName (مدبلج)"
+                    }
+                    episodes.add(
                         newEpisode(epUrl) {
-                            this.name = "Episode $epNum"
-                            this.season = sNum
+                            this.name = epName
+                            this.season = seasonNum
                             this.episode = epNum
                             this.posterUrl = posterUrl
                         }
-                    }
-                }.flatten()
-            } else {
-                val episodeElements = doc.select("div.episodes-list a")
-                val seasonNum = url.substringAfter("-s", "").substringBefore("/").toIntOrNull() ?: 1
-                episodeElements.mapNotNull { ep ->
-                    val epUrl = ep.attr("abs:href")
-                    val epNum = ep.text().getIntFromText() ?: 1
-                    newEpisode(epUrl) {
-                        this.name = "Episode $epNum"
-                        this.season = seasonNum
-                        this.episode = epNum
-                        this.posterUrl = posterUrl
-                    }
+                    )
                 }
             }
 
@@ -246,19 +384,47 @@ class EgyDeadProvider : MainAPI() {
         val requestHeaders = headers.toMutableMap()
         requestHeaders["User-Agent"] = randomUserAgent
         
-        delay((1500..2500).random().toLong())
+        delay((1000..2000).random().toLong())
         
         val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
-        doc.select(".donwload-servers-list > li, ul.download a").forEach { element ->
-            val url = element.select("a").attr("href")
-            loadExtractor(url, data, subtitleCallback, callback)
-        }
-        doc.select("ul.serversList > li, div.ServersList li").forEach { li ->
-            val iframeUrl = li.attr("data-link")
-            if(iframeUrl.isNotEmpty()) {
-                loadExtractor(iframeUrl, data, subtitleCallback, callback)
+        
+        val seenStreamUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val seenServerKeys = mutableSetOf<String>()
+
+        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
+            if (seenStreamUrls.add(link.url)) {
+                callback(link)
             }
         }
+
+        fun extractServerKey(link: String): String {
+            val cleaned = link.substringBefore("?").trimEnd('/')
+            val lastSegment = cleaned.substringAfterLast('/')
+            val host = runCatching { URI(link).host?.replace("www.", "") ?: "" }.getOrDefault("")
+            return "$host:$lastSegment"
+        }
+
+        // 1. Streaming servers (ul.serversList, div.ServersList)
+        doc.select("ul.serversList > li, div.ServersList li").forEach { li ->
+            val iframeUrl = li.attr("data-link").trim()
+            if (iframeUrl.isNotEmpty() && !iframeUrl.startsWith("javascript")) {
+                val key = extractServerKey(iframeUrl)
+                seenServerKeys.add(key)
+                loadExtractor(iframeUrl, data, subtitleCallback, wrappedCallback)
+            }
+        }
+
+        // 2. Download servers (.donwload-servers-list, ul.download) - only if not already loaded as stream
+        doc.select(".donwload-servers-list > li a, ul.download a").forEach { element ->
+            val url = element.attr("href").trim()
+            if (url.isNotEmpty() && !url.startsWith("javascript") && !url.contains("egydead")) {
+                val key = extractServerKey(url)
+                if (seenServerKeys.add(key)) {
+                    loadExtractor(url, data, subtitleCallback, wrappedCallback)
+                }
+            }
+        }
+
         return true
     }
 }
