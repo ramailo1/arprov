@@ -149,7 +149,7 @@ class AlkawtharProvider : MainAPI() {
             val rel = link.attr("href")
             if (rel.startsWith("http")) rel else "$mainUrl$rel"
         }
-        if (href.isEmpty() || (!href.contains("/news/") && !href.contains("/category/"))) return null
+        if (!href.matches(Regex(""".*/(?:news|category)/\d+.*"""))) return null
 
         val rawText = (link.selectFirst("h1, h2, h3, h4, .title, .news-title, .text, strong")?.text() ?: link.text()).trim()
         if (rawText.length < 3) return null
@@ -244,43 +244,31 @@ class AlkawtharProvider : MainAPI() {
         val plot = doc.selectFirst("meta[name=description]")?.attr("content")?.trim()
             ?: doc.selectFirst(".body, .content, .description, p")?.text()?.trim() ?: ""
 
-        Log.d(TAG, "load: Case 2 - news URL: $url")
+        Log.d(TAG, "load: Case 2 - news/epi URL: $url")
         Log.d(TAG, "load: rawTitle = '$rawTitle'")
 
-        var subCategoryId = if (url.contains("/epi/") || url.contains("/episode/")) {
-            Regex("""/category/(\d+)""").find(doc.html())?.groupValues?.get(1)
-        } else {
-            null
-        }
+        // Universal sub-category detection: find any category link in doc that isn't the main top categories
+        val excludedCats = setOf("625", "627", "628", "629")
+        val subCategoryId = Regex("""/category/(\d+)""").findAll(doc.html())
+            .mapNotNull { it.groupValues[1] }
+            .firstOrNull { it !in excludedCats }
 
-        if (subCategoryId == null) {
-            val epiId = Regex("""alkawthartv\.ir/epi/(\d+)""").find(doc.html())?.groupValues?.get(1)
-            Log.d(TAG, "load: epiId found = $epiId")
-            if (epiId != null) {
-                val epiDoc = try {
-                    app.get("$mainUrl/epi/$epiId", headers = requestHeaders).document
-                } catch (e: Exception) {
-                    Log.e(TAG, "load: failed to fetch epi page", e)
-                    null
-                }
-                subCategoryId = epiDoc?.let {
-                    Regex("""/category/(\d+)""").find(it.html())?.groupValues?.get(1)
-                }
-            }
-        }
         Log.d(TAG, "load: subCategoryId found = $subCategoryId")
 
         if (subCategoryId != null) {
             val episodes = crawlCategoryEpisodes("$mainUrl/category/$subCategoryId", requestHeaders)
-            val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
-            val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
+            if (episodes.isNotEmpty()) {
+                val sortedEpisodes = episodes.distinctBy { it.data }.sortedWith(compareBy({ it.episode ?: 1 }))
+                val finalPoster = posterUrl.ifEmpty { sortedEpisodes.firstOrNull()?.posterUrl ?: "" }
 
-            Log.d(TAG, "load: Case 2 via sub-category - returning ${sortedEpisodes.size} episodes")
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
-                this.posterUrl = finalPoster
-                this.plot = plot
+                Log.d(TAG, "load: Case 2 via sub-category $subCategoryId - returning ${sortedEpisodes.size} episodes")
+                return newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+                    this.posterUrl = finalPoster
+                    this.plot = plot
+                }
             }
         }
+
 
         // === Case 3: Single episode or movie ===
         Log.d(TAG, "load: Case 3 - single episode/movie. isMovie check on '$rawTitle'")
