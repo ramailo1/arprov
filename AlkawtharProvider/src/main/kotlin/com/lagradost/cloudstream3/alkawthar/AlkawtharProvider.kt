@@ -320,25 +320,26 @@ class AlkawtharProvider : MainAPI() {
 
         val doc = app.get(data, headers = requestHeaders).document
         val html = doc.html()
+        var foundAny = false
 
         // 1. JSON-LD contentUrl (most reliable — server-set direct mp4)
-        val jsonLdUrl = Regex(""""contentUrl"\s*:\s*"([^"]+)""").find(html)?.groupValues?.get(1)
+        val jsonLdUrl = Regex(""""contentUrl"\s*:\s*"([^"]+)"""").find(html)?.groupValues?.get(1)
         if (!jsonLdUrl.isNullOrEmpty() && jsonLdUrl.startsWith("http")) {
             callback(newExtractorLink(name, name, jsonLdUrl) {
                 this.referer = "$mainUrl/"
                 this.quality = Qualities.P720.value
             })
-            return true
+            foundAny = true
         }
 
         // 2. og:video meta tag
         val ogVideo = doc.selectFirst("meta[property=og:video], meta[property=og:video:secure_url]")?.attr("content")
-        if (!ogVideo.isNullOrEmpty() && ogVideo.startsWith("http")) {
+        if (!ogVideo.isNullOrEmpty() && ogVideo.startsWith("http") && ogVideo != jsonLdUrl) {
             callback(newExtractorLink(name, name, ogVideo) {
                 this.referer = "$mainUrl/"
                 this.quality = Qualities.P720.value
             })
-            return true
+            foundAny = true
         }
 
         // 3. Direct video/source tag or mp4 pattern in HTML
@@ -352,9 +353,73 @@ class AlkawtharProvider : MainAPI() {
                 this.referer = "$mainUrl/"
                 this.quality = Qualities.P720.value
             })
-            return true
+            foundAny = true
         }
 
-        return false
+        // 4. Namasha iframe embed extractor (used by multi-episode series like سيدة القصر)
+        val namashaIframe = doc.selectFirst("iframe[src*='namasha.com']")?.attr("src")
+        val namashaId = if (!namashaIframe.isNullOrEmpty()) {
+            Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(namashaIframe)?.groupValues?.get(1)
+        } else {
+            Regex("""namasha\.com/(?:embed|v)/([a-zA-Z0-9]+)""").find(html)?.groupValues?.get(1)
+        }
+
+        if (namashaId != null) {
+            Log.d(TAG, "loadLinks: found Namasha ID $namashaId")
+            val watchDoc = try {
+                app.get("https://www.namasha.com/v/$namashaId", headers = mapOf(
+                    "User-Agent" to userAgents.random(),
+                    "Referer" to "https://www.alkawthartv.ir/"
+                )).document
+            } catch (e: Exception) {
+                Log.e(TAG, "loadLinks: error fetching namasha watch page", e)
+                null
+            }
+
+            if (watchDoc != null) {
+                val watchHtml = watchDoc.html()
+                val dlLinks = Regex("""href="(https://www\.namasha\.com/videos/dl/[^"]+)"""").findAll(watchHtml)
+                    .map { it.groupValues[1] }.distinct().toList()
+
+                dlLinks.forEach { dlUrl ->
+                    val quality = when {
+                        dlUrl.contains("1080p") -> Qualities.P1080.value
+                        dlUrl.contains("720p") -> Qualities.P720.value
+                        dlUrl.contains("480p") -> Qualities.P480.value
+                        dlUrl.contains("360p") -> Qualities.P360.value
+                        dlUrl.contains("240p") -> Qualities.P240.value
+                        else -> Qualities.P720.value
+                    }
+                    val qualityLabel = when {
+                        dlUrl.contains("1080p") -> "1080p"
+                        dlUrl.contains("720p") -> "720p"
+                        dlUrl.contains("480p") -> "480p"
+                        dlUrl.contains("360p") -> "360p"
+                        dlUrl.contains("240p") -> "240p"
+                        else -> "720p"
+                    }
+                    callback(newExtractorLink(name, "$name $qualityLabel", dlUrl) {
+                        this.referer = "https://www.namasha.com/"
+                        this.quality = quality
+                    })
+                    foundAny = true
+                }
+
+                // If no dl links, check for direct cdn mp4
+                if (!foundAny) {
+                    val cdnMp4 = Regex("""https://[^\s"']+\.namasha\.com/videos/[0-9]+\.mp4""").find(watchHtml)?.value
+                    if (!cdnMp4.isNullOrEmpty()) {
+                        callback(newExtractorLink(name, name, cdnMp4) {
+                            this.referer = "https://www.namasha.com/"
+                            this.quality = Qualities.P720.value
+                        })
+                        foundAny = true
+                    }
+                }
+            }
+        }
+
+        return foundAny
     }
 }
+
