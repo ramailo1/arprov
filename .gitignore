@@ -33,6 +33,8 @@ tmp/
 temp/
 *.tmp
 *.temp
+tmp_*.js
+tmp_*.ps1
 
 # Python
 __pycache__/

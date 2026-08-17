@@ -5,6 +5,7 @@ package com.lagradost.cloudstream3.egydead
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.DubStatus
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -430,6 +431,85 @@ class EgyDeadProvider : MainAPI() {
         }
     }
     
+    private val streamhgDomains = listOf(
+        "hanerix.com", "vibuxer.com", "hgplaycdn.com"
+    )
+
+    private val streamhgEmbedHosts = streamhgDomains + listOf("hgcloud.to", "hglink.to")
+
+    private val packerHeader = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c]);return p}('"
+    private val packerSplitEnd = "'.split('|'))"
+
+    private suspend fun unpackPacker(html: String): String? {
+        val start = html.indexOf(packerHeader)
+        if (start < 0) return null
+        val end = html.indexOf(packerSplitEnd, start)
+        if (end < 0) return null
+        val sepStart = html.lastIndexOf("',", end)
+        if (sepStart < start) return null
+        val sep = html.substring(sepStart + 2, end)
+        val sepMatch = Regex("^(\\d+),(\\d+),'([\\s\\S]*)$").find(sep) ?: return null
+        val a = sepMatch.groupValues[1].toInt()
+        val c = sepMatch.groupValues[2].toInt()
+        val k = sepMatch.groupValues[3].split("|")
+        if (c > k.size) return null
+        var p = html.substring(start + packerHeader.length, sepStart)
+        for (i in c - 1 downTo 0) {
+            val ki = k.getOrNull(i) ?: continue
+            if (ki.isEmpty()) continue
+            p = p.replace(Regex("\\b" + i.toString(a) + "\\b"), ki)
+        }
+        return p
+    }
+
+    private suspend fun resolveStreamHg(
+        embedUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val fileId = embedUrl.substringAfterLast('/').substringBefore('?')
+        if (fileId.isEmpty()) return
+
+        for (domain in streamhgDomains) {
+            try {
+                val pageUrl = "https://$domain/e/$fileId"
+                val page = app.get(
+                    pageUrl,
+                    headers = headers.toMutableMap().apply {
+                        this["User-Agent"] = userAgents.random()
+                        this["Referer"] = embedUrl.substringBeforeLast('/')
+                    }
+                )
+                if (!page.text.contains(packerHeader)) continue
+                val unpacked = unpackPacker(page.text) ?: continue
+                val linksMatch = Regex("var links=\\{([\\s\\S]*?)\\};").find(unpacked) ?: continue
+                val block = linksMatch.groupValues[1]
+                fun linkValue(name: String): String? {
+                    return Regex("\"$name\":\"([^\"]*)\"").find(block)?.groupValues?.get(1)
+                }
+                val hls4 = linkValue("hls4")
+                val hls3 = linkValue("hls3")
+                val hls2 = linkValue("hls2")
+                val rawUrl = hls4 ?: hls3 ?: hls2 ?: continue
+                val streamUrl = if (rawUrl.startsWith("http")) rawUrl else "https://$domain$rawUrl"
+                callback(
+                    newExtractorLink(
+                        "StreamHG",
+                        "StreamHG",
+                        streamUrl,
+                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8
+                    ) {
+                        referer = pageUrl
+                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value
+                    }
+                )
+                return
+            } catch (e: Exception) {
+                // try next domain
+            }
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -466,7 +546,12 @@ class EgyDeadProvider : MainAPI() {
             if (iframeUrl.isNotEmpty() && !iframeUrl.startsWith("javascript")) {
                 val key = extractServerKey(iframeUrl)
                 seenServerKeys.add(key)
-                loadExtractor(iframeUrl, data, subtitleCallback, wrappedCallback)
+                val host = runCatching { URI(iframeUrl).host?.replace("www.", "") ?: "" }.getOrDefault("")
+                if (streamhgEmbedHosts.any { host.endsWith(it) }) {
+                    resolveStreamHg(iframeUrl, subtitleCallback, wrappedCallback)
+                } else {
+                    loadExtractor(iframeUrl, data, subtitleCallback, wrappedCallback)
+                }
             }
         }
 
@@ -476,7 +561,12 @@ class EgyDeadProvider : MainAPI() {
             if (url.isNotEmpty() && !url.startsWith("javascript") && !url.contains("egydead")) {
                 val key = extractServerKey(url)
                 if (seenServerKeys.add(key)) {
-                    loadExtractor(url, data, subtitleCallback, wrappedCallback)
+                    val host = runCatching { URI(url).host?.replace("www.", "") ?: "" }.getOrDefault("")
+                    if (streamhgEmbedHosts.any { host.endsWith(it) }) {
+                        resolveStreamHg(url, subtitleCallback, wrappedCallback)
+                    } else {
+                        loadExtractor(url, data, subtitleCallback, wrappedCallback)
+                    }
                 }
             }
         }
