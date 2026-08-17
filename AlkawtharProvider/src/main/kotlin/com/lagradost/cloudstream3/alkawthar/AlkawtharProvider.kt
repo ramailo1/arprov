@@ -12,7 +12,7 @@ import java.net.URI
 class AlkawtharProvider : MainAPI() {
     override var lang = "ar"
     override var mainUrl = "https://www.alkawthartv.ir"
-    override var name = "قناة الكوثر"
+    override var name = "Alkawthar (قناة الكوثر)"
     override val usesWebView = false
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie)
