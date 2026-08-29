@@ -13,7 +13,7 @@ import kotlinx.coroutines.delay
 
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://egydead.rip"
+    override var mainUrl = "https://tv10.egydead.live"
     override var name = "EgyDead"
     override val usesWebView = false
     override val hasMainPage = true
