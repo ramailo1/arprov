@@ -14,7 +14,8 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- AUTO DOMAIN POOL ----------
     private val domainPool = listOf(
-        "https://mycima.fan",
+        "https://mycima.gdn",
+        "https://mycima.agency",
         "https://mycima.study"
     )
 
@@ -162,7 +163,11 @@ class MyCimaProvider : MainAPI() {
     private suspend fun safeGet(url: String): Document? {
         if (!ensureDomain()) return null
 
-        val fullUrl = if (url.startsWith("http")) url else activeDomain + url
+        val fullUrl = if (url.startsWith("http")) {
+            url.replace(Regex("^https?://[^/]+"), activeDomain)
+        } else {
+            "$activeDomain${if (url.startsWith("/")) "" else "/"}$url"
+        }
         
         // Thread-safe rate limiting: serialize all requests with 2s gap
         rateLimitMutex.withLock {
@@ -225,14 +230,18 @@ class MyCimaProvider : MainAPI() {
 
     // ---------- MAIN PAGE ----------
     override val mainPage = mainPageOf(
-       "$mainUrl/" to "الرئيسية",
-       "$mainUrl/movies/" to "أفلام",
-       "$mainUrl/episodes/" to "مسلسلات"
-     )
-
+        "/" to "الرئيسية",
+        "/movies/" to "أفلام",
+        "/episodes/" to "مسلسلات"
+    )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val baseUrl = if (request.data.startsWith("http")) request.data else "$mainUrl${request.data}"
+        val path = if (request.data.startsWith("http")) {
+            runCatching { java.net.URI(request.data).rawPath }.getOrDefault(request.data)
+        } else {
+            request.data
+        }
+        val baseUrl = "$activeDomain${if (path.startsWith("/")) "" else "/"}$path"
         val url = if (page > 1) {
             "${baseUrl.removeSuffix("/")}/page/$page/"
         } else {
