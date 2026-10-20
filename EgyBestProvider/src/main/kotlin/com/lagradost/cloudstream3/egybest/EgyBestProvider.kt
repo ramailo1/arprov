@@ -159,7 +159,7 @@ class EgyBestProvider : MainAPI() {
 
     // ======= MAIN PAGE =======
     override val mainPage = mainPageOf(
-        "$mainUrl/recent" to "أحدث الاضافات",
+        "$mainUrl/" to "أحدث الاضافات",
         "$mainUrl/category/movies/" to "أفلام",
         "$mainUrl/series/" to "مسلسلات",
         "$mainUrl/category/anime/" to "انمي",
@@ -435,6 +435,20 @@ class EgyBestProvider : MainAPI() {
 
 
 
+    private fun decodeServerUrl(url: String): String {
+        if (!url.contains("watch/?url=")) return url
+        val b64 = url.substringAfter("watch/?url=").substringBefore("&")
+        if (b64.isBlank()) return url
+        return try {
+            val decodedQuery = URLDecoder.decode(b64, "UTF-8")
+            val bytes = android.util.Base64.decode(decodedQuery, android.util.Base64.DEFAULT)
+            val decoded = String(bytes, Charsets.UTF_8).trim()
+            if (decoded.startsWith("http")) decoded else url
+        } catch (_: Exception) {
+            url
+        }
+    }
+
     // ======= LOAD LINKS =======
     @TargetApi(Build.VERSION_CODES.O)
     override suspend fun loadLinks(
@@ -466,8 +480,11 @@ class EgyBestProvider : MainAPI() {
         }
 
         // 3. Flatten and load all extractors
-        extractorUrls.distinct().forEach { url ->
-            loadExtractor(fixUrl(url), data, subtitleCallback, callback)
+        extractorUrls.distinct().forEach { rawUrl ->
+            val resolvedUrl = decodeServerUrl(fixUrl(rawUrl))
+            if (resolvedUrl.startsWith("http") && !resolvedUrl.contains("about:blank")) {
+                loadExtractor(resolvedUrl, data, subtitleCallback, callback)
+            }
         }
 
         return true
