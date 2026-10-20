@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.withPermit
 
 class TopCinemaProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://topcima.online"
+    override var mainUrl = "https://topcinema.bond"
     override var name = "TopCinema"
     override val usesWebView = false
     override val hasMainPage = true

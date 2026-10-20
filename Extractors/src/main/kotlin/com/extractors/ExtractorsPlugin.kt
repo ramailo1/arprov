@@ -45,5 +45,6 @@ class ExtractorsPlugin : BasePlugin() {
         registerExtractorAPI(MegaMaxTo())
         registerExtractorAPI(MegaMaxCc())
         registerExtractorAPI(MegaMaxMe())
+        registerExtractorAPI(MegaTukTuk())
     }
 }

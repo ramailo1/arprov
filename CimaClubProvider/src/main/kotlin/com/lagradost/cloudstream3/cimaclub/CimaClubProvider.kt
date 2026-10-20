@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 
 class CimaClubProvider : MainAPI() {
 
-    override var mainUrl = "https://ciimaclub.us"
+    override var mainUrl = "https://cimaclub.homes"
     override var name = "CimaClub"
     override var lang = "ar"
     override val hasMainPage = true

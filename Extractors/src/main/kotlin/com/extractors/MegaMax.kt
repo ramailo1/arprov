@@ -197,3 +197,8 @@ class MegaMaxMe : MegaMax() {
     override val name = "MegaMax"
     override val mainUrl = "https://megamax.me"
 }
+
+class MegaTukTuk : MegaMax() {
+    override val name = "MegaMax"
+    override val mainUrl = "https://megatuktuk.store"
+}

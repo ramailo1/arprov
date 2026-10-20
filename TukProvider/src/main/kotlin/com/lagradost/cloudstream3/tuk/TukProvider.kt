@@ -9,7 +9,7 @@ import org.jsoup.nodes.Element
 import android.util.Base64
 
 class TukProvider : MainAPI() {
-    override var mainUrl = "https://tuk.cam"
+    override var mainUrl = "https://tuktukhd.com"
     override var name = "Tuk (Tuk Tuk Cinema)"
     override var lang = "ar"
     override val hasMainPage = true
@@ -22,17 +22,18 @@ class TukProvider : MainAPI() {
     )
 
     private val cfKiller = CloudflareKiller()
+    private val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
     override val mainPage = mainPageOf(
         "$mainUrl/recent/" to "المضاف حديثاً",
-        "$mainUrl/category/movies/" to "أفلام",
-        "$mainUrl/category/series/" to "مسلسلات",
-        "$mainUrl/category/anime/" to "أنمي"
+        "$mainUrl/category/movies-2/" to "أفلام",
+        "$mainUrl/category/series-1/" to "مسلسلات",
+        "$mainUrl/sercat/قائمة-الانمي/" to "أنمي"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) request.data else "${request.data.removeSuffix("/")}/page/$page/"
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = mapOf("User-Agent" to USER_AGENT)).document
         
         val items = doc.select(".Block--Item").mapNotNull { element ->
             element.toSearchResponse()
@@ -43,7 +44,7 @@ class TukProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val doc = app.get(searchUrl).document
+        val doc = app.get(searchUrl, headers = mapOf("User-Agent" to USER_AGENT)).document
         
         return doc.select(".Block--Item").mapNotNull { element ->
             element.toSearchResponse()
@@ -53,7 +54,9 @@ class TukProvider : MainAPI() {
     private fun Element.toSearchResponse(): SearchResponse? {
         val a = this.selectFirst("a") ?: return null
         val href = fixUrl(a.attr("href"))
-        val title = this.selectFirst(".Block--Info h3")?.text()?.trim() ?: return null
+        val title = this.selectFirst(".Block--Info h2.title, .Block--Info h2, .Block--Info h3")?.text()?.trim()
+            ?: a.attr("title").trim()
+        if (title.isBlank()) return null
         val posterUrl = this.selectFirst(".Poster--Block img")?.let { img ->
             img.attr("data-src").ifBlank { img.attr("src") }
         }
@@ -72,7 +75,7 @@ class TukProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = mapOf("User-Agent" to USER_AGENT)).document
         
         val title = doc.selectFirst("h1.post-title")?.text()?.trim() ?: return null
         val posterUrl = doc.selectFirst(".MainSingle .image img")?.let { img ->
@@ -109,7 +112,7 @@ class TukProvider : MainAPI() {
             if (episodes.size <= 1 && url.contains("episode")) {
                 val seriesLink = doc.select(".breadcrumb a[href*='/series/']").attr("href")
                 if (seriesLink.isNotBlank()) {
-                    val seriesDoc = app.get(seriesLink).document
+                    val seriesDoc = app.get(seriesLink, headers = mapOf("User-Agent" to USER_AGENT)).document
                     seriesDoc.select(".allepcont .row a").forEach { ep ->
                         val href = ep.attr("href")
                         if (href.isNotBlank()) {
@@ -161,10 +164,10 @@ class TukProvider : MainAPI() {
     ): Boolean {
         val watchUrl = if (data.endsWith("/watch/")) data else "${data.removeSuffix("/")}/watch/"
         val doc = try {
-            app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/")).document
+            app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/", "User-Agent" to USER_AGENT)).document
         } catch (e: Exception) {
             try {
-                app.get(data, headers = mapOf("Referer" to "$mainUrl/")).document
+                app.get(data, headers = mapOf("Referer" to "$mainUrl/", "User-Agent" to USER_AGENT)).document
             } catch (e2: Exception) {
                 return false
             }
@@ -184,11 +187,21 @@ class TukProvider : MainAPI() {
             }
         }
 
-        // Fallback: check all iframes
+        // Check iframes
         doc.select("iframe").forEach { iframe ->
             val src = iframe.attr("src").trim()
             val link = if (src.startsWith("//")) "https:$src" else src
             if (link.isNotBlank() && !link.contains("ads") && !link.contains("youtube") && !link.startsWith("javascript")) {
+                loadExtractor(link, watchUrl, subtitleCallback, callback)
+            }
+        }
+
+        // Check json-ld / schema for embedUrl
+        val docHtml = doc.html()
+        val embedRegex = Regex("""["']embedUrl["']\s*:\s*["']([^"']+)["']""")
+        embedRegex.findAll(docHtml).forEach { match ->
+            val link = match.groupValues[1].trim()
+            if (link.isNotBlank()) {
                 loadExtractor(link, watchUrl, subtitleCallback, callback)
             }
         }
