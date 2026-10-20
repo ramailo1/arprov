@@ -160,26 +160,36 @@ class TukProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val watchUrl = if (data.endsWith("/watch/")) data else "${data.removeSuffix("/")}/watch/"
-        val doc = app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/")).document
+        val doc = try {
+            app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/")).document
+        } catch (e: Exception) {
+            try {
+                app.get(data, headers = mapOf("Referer" to "$mainUrl/")).document
+            } catch (e2: Exception) {
+                return false
+            }
+        }
 
-        doc.select(".watch--servers--list .server--item").amap { li ->
+        doc.select(".watch--servers--list .server--item, [data-link], [data-linkbase64]").amap { li ->
             val b64 = li.attr("data-linkbase64")
-            val link = if (b64.isNotBlank()) {
-                String(Base64.decode(b64, Base64.DEFAULT))
+            val rawLink = if (b64.isNotBlank()) {
+                runCatching { String(Base64.decode(b64, Base64.DEFAULT)) }.getOrDefault("")
             } else {
                 li.attr("data-link")
             }
 
-            if (link.isNotBlank()) {
+            val link = if (rawLink.startsWith("//")) "https:$rawLink" else rawLink
+            if (link.isNotBlank() && !link.startsWith("javascript")) {
                 loadExtractor(link, watchUrl, subtitleCallback, callback)
             }
         }
 
         // Fallback: check all iframes
         doc.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank() && !src.contains("ads")) {
-                loadExtractor(src, watchUrl, subtitleCallback, callback)
+            val src = iframe.attr("src").trim()
+            val link = if (src.startsWith("//")) "https:$src" else src
+            if (link.isNotBlank() && !link.contains("ads") && !link.contains("youtube") && !link.startsWith("javascript")) {
+                loadExtractor(link, watchUrl, subtitleCallback, callback)
             }
         }
 

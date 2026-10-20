@@ -367,12 +367,17 @@ class TopCinemaProvider : MainAPI() {
                     rawUrl.contains("reviewrate.net") || rawUrl.contains("gamehub.cam") -> {
                         scrapeM3u8(rawUrl, "ReviewRate", callback)
                     }
-                    rawUrl.contains("filemoon") || rawUrl.contains("moonplayer") -> {
-                        safeExtract(rawUrl, subtitleCallback, callback)
-                    }
                     else -> {
                         safeExtract(rawUrl, subtitleCallback, callback)
                     }
+                }
+            }
+
+            // Fallback: check iframes on watch page
+            doc.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src").trim()
+                if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("google") && !src.startsWith("javascript")) {
+                    safeExtract(src, subtitleCallback, callback)
                 }
             }
         }
@@ -384,10 +389,11 @@ class TopCinemaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val link = if (url.startsWith("//")) "https:$url" else url
         try {
-            loadExtractor(url, "https://topcima.online/", subtitleCallback, callback)
+            loadExtractor(link, "https://topcima.online/", subtitleCallback, callback)
         } catch (e: Exception) {
-            scrapeM3u8(url, "Direct", callback)
+            scrapeM3u8(link, "Direct", callback)
         }
     }
 

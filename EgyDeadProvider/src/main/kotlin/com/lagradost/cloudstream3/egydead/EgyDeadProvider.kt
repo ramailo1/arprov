@@ -2,14 +2,20 @@
 
 package com.lagradost.cloudstream3.egydead
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.DubStatus
 import org.jsoup.nodes.Element
 import java.net.URI
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class EgyDeadProvider : MainAPI() {
     override var lang = "ar"
@@ -137,7 +143,8 @@ class EgyDeadProvider : MainAPI() {
         val link = if (this.tagName() == "a") this else this.selectFirst("a")
         if (link == null) return null
         
-        val href = link.attr("href").takeIf { it.isNotEmpty() && it.contains("egydead") } ?: return null
+        val rawHref = link.attr("abs:href").ifEmpty { link.attr("href") }
+        val href = rawHref.takeIf { it.isNotEmpty() && (it.contains("egydead") || it.startsWith("http")) } ?: return null
         val rawTitle = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).trim()
         if (rawTitle.isEmpty()) return null
 
@@ -431,11 +438,54 @@ class EgyDeadProvider : MainAPI() {
         }
     }
     
+    data class MegaMaxInertia(
+        @JsonProperty("props") val props: MegaMaxProps? = null
+    )
+
+    data class MegaMaxProps(
+        @JsonProperty("streams") val streams: MegaMaxStreams? = null
+    )
+
+    data class MegaMaxStreams(
+        @JsonProperty("data") val data: List<MegaMaxQuality>? = null
+    )
+
+    data class MegaMaxQuality(
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("resolution") val resolution: String? = null,
+        @JsonProperty("mirrors") val mirrors: List<MegaMaxMirror>? = null
+    )
+
+    data class MegaMaxMirror(
+        @JsonProperty("driver") val driver: String? = null,
+        @JsonProperty("link") val link: String? = null
+    )
+
+    private fun getQualityFromName(label: String?): Int {
+        return when {
+            label == null -> Qualities.Unknown.value
+            label.contains("1080") -> Qualities.P1080.value
+            label.contains("720") -> Qualities.P720.value
+            label.contains("480") -> Qualities.P480.value
+            label.contains("360") -> Qualities.P360.value
+            label.contains("2160") || label.contains("4k", ignoreCase = true) -> Qualities.P2160.value
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    private suspend fun <A, B> Iterable<A>.parMap(f: suspend (A) -> B): List<B> =
+        coroutineScope {
+            map { async { f(it) } }.awaitAll()
+        }
+
     private val streamhgDomains = listOf(
         "hanerix.com", "vibuxer.com", "hgplaycdn.com"
     )
 
-    private val streamhgEmbedHosts = streamhgDomains + listOf("hgcloud.to", "hglink.to")
+    private val streamhgEmbedHosts = streamhgDomains + listOf(
+        "hgcloud.to", "hglink.to", "streamwish.to", "streamwish.com", "streamwish.net",
+        "strwish.com", "awish.pro", "dwish.pro", "mwish.pro"
+    )
 
     private val packerHeader = "eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c]);return p}('"
     private val packerSplitEnd = "'.split('|'))"
@@ -462,10 +512,50 @@ class EgyDeadProvider : MainAPI() {
         return p
     }
 
+    private suspend fun resolveStreamRuby(
+        embedUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+        qualityVal: Int = Qualities.Unknown.value
+    ) {
+        try {
+            val page = app.get(
+                embedUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgents.random(),
+                    "Referer" to embedUrl
+                )
+            ).text
+
+            val unpacked = unpackPacker(page) ?: page
+            val m3u8Url = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(unpacked)?.groupValues?.get(1)
+                ?: Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(unpacked)?.groupValues?.get(0)
+
+            if (!m3u8Url.isNullOrEmpty()) {
+                callback(
+                    newExtractorLink(
+                        "StreamRuby",
+                        "StreamRuby",
+                        m3u8Url,
+                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = embedUrl
+                        this.quality = qualityVal
+                    }
+                )
+            } else {
+                loadExtractor(embedUrl, embedUrl, subtitleCallback, callback)
+            }
+        } catch (e: Exception) {
+            // Ignore error
+        }
+    }
+
     private suspend fun resolveStreamHg(
         embedUrl: String,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        qualityVal: Int = Qualities.Unknown.value
     ) {
         val fileId = embedUrl.substringAfterLast('/').substringBefore('?')
         if (fileId.isEmpty()) return
@@ -488,9 +578,9 @@ class EgyDeadProvider : MainAPI() {
                     return Regex("\"$name\":\"([^\"]*)\"").find(block)?.groupValues?.get(1)
                 }
                 val hls4 = linkValue("hls4")
-                val hls3 = linkValue("hls3")
                 val hls2 = linkValue("hls2")
-                val rawUrl = hls4 ?: hls3 ?: hls2 ?: continue
+                val hls3 = linkValue("hls3")
+                val rawUrl = hls4 ?: hls2 ?: hls3 ?: continue
                 val streamUrl = if (rawUrl.startsWith("http")) rawUrl else "https://$domain$rawUrl"
                 callback(
                     newExtractorLink(
@@ -499,14 +589,97 @@ class EgyDeadProvider : MainAPI() {
                         streamUrl,
                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8
                     ) {
-                        referer = pageUrl
-                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value
+                        this.referer = pageUrl
+                        this.quality = qualityVal
                     }
                 )
                 return
             } catch (e: Exception) {
                 // try next domain
             }
+        }
+        loadExtractor(embedUrl, embedUrl, subtitleCallback, callback)
+    }
+
+    private suspend fun resolveMegaMax(
+        embedUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val pageUrl = embedUrl.replace("/download/", "/iframe/")
+        try {
+            val resp = app.get(
+                pageUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgents.random(),
+                    "Referer" to mainUrl
+                )
+            )
+            val html = resp.text
+
+            val version = Regex(""""version"\s*:\s*"([^"]+)"""").find(html)?.groupValues?.get(1)
+            val rawComp = Regex(""""component"\s*:\s*"([^"]+)"""").find(html)?.groupValues?.get(1) ?: "files/mirror/video"
+            val component = rawComp.replace("\\/", "/")
+
+            val jsonText = if (!version.isNullOrEmpty()) {
+                val inertiaResp = app.get(
+                    pageUrl,
+                    headers = mapOf(
+                        "User-Agent" to userAgents.random(),
+                        "Referer" to pageUrl,
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "X-Inertia" to "true",
+                        "X-Inertia-Version" to version,
+                        "X-Inertia-Partial-Component" to component,
+                        "X-Inertia-Partial-Data" to "streams"
+                    )
+                )
+                inertiaResp.text
+            } else {
+                html
+            }
+
+            val parsedData = tryParseJson<MegaMaxInertia>(jsonText)
+            val qualities = parsedData?.props?.streams?.data
+
+            if (!qualities.isNullOrEmpty()) {
+                qualities.parMap { q ->
+                    val qualityVal = getQualityFromName(q.label ?: q.resolution)
+                    q.mirrors?.parMap mirrorLoop@{ mirror ->
+                        val rawLink = mirror.link ?: return@mirrorLoop
+                        val link = if (rawLink.startsWith("//")) "https:$rawLink" else rawLink
+                        val host = runCatching { URI(link).host?.replace("www.", "") ?: "" }.getOrDefault("")
+                        val driver = mirror.driver?.lowercase() ?: ""
+
+                        if (streamhgEmbedHosts.any { host.endsWith(it) } || driver == "streamhg" || link.contains("streamwish")) {
+                            resolveStreamHg(link, subtitleCallback, callback, qualityVal)
+                        } else if (host.contains("stmruby") || host.contains("streamruby") || driver == "streamruby") {
+                            resolveStreamRuby(link, subtitleCallback, callback, qualityVal)
+                        } else {
+                            loadExtractor(link, pageUrl, subtitleCallback, callback)
+                        }
+                    }
+                }
+            } else {
+                val linkMatches = Regex(""""link"\s*:\s*"([^"]+)"""").findAll(jsonText).map {
+                    it.groupValues[1].replace("\\/", "/")
+                }.toList()
+
+                linkMatches.parMap { rawLink ->
+                    val link = if (rawLink.startsWith("//")) "https:$rawLink" else rawLink
+                    val host = runCatching { URI(link).host?.replace("www.", "") ?: "" }.getOrDefault("")
+
+                    if (streamhgEmbedHosts.any { host.endsWith(it) } || link.contains("streamwish")) {
+                        resolveStreamHg(link, subtitleCallback, callback)
+                    } else if (host.contains("stmruby") || host.contains("streamruby")) {
+                        resolveStreamRuby(link, subtitleCallback, callback)
+                    } else {
+                        loadExtractor(link, pageUrl, subtitleCallback, callback)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            loadExtractor(embedUrl, mainUrl, subtitleCallback, callback)
         }
     }
 
@@ -522,10 +695,23 @@ class EgyDeadProvider : MainAPI() {
         
         delay((1000..2000).random().toLong())
         
-        val doc = app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
+        val postDoc = try {
+            app.post(data, data = mapOf("View" to "1"), headers = requestHeaders).document
+        } catch (e: Exception) {
+            null
+        }
+        val doc = if (postDoc?.selectFirst("ul.serversList, div.ServersList, .donwload-servers-list, [data-link]") != null) {
+            postDoc
+        } else {
+            try {
+                app.get(data, headers = requestHeaders).document
+            } catch (e: Exception) {
+                postDoc ?: return false
+            }
+        }
         
         val seenStreamUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        val seenServerKeys = mutableSetOf<String>()
+        val seenServerKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         val wrappedCallback: (ExtractorLink) -> Unit = { link ->
             if (seenStreamUrls.add(link.url)) {
@@ -540,33 +726,48 @@ class EgyDeadProvider : MainAPI() {
             return "$host:$lastSegment"
         }
 
-        // 1. Streaming servers (ul.serversList, div.ServersList)
-        doc.select("ul.serversList > li, div.ServersList li").forEach { li ->
-            val iframeUrl = li.attr("data-link").trim()
+        fun isMegaMax(link: String): Boolean {
+            val lower = link.lowercase()
+            return lower.contains("/iframe/") || lower.contains("/download/") || lower.contains("megamax")
+        }
+
+        val serverCandidates = mutableListOf<String>()
+
+        // 1. Streaming servers (ul.serversList, div.ServersList, [data-link])
+        doc.select("ul.serversList [data-link], div.ServersList [data-link], ul.serversList > li, div.ServersList li").forEach { el ->
+            val iframeUrl = el.attr("data-link").trim().ifEmpty { el.attr("href").trim() }
             if (iframeUrl.isNotEmpty() && !iframeUrl.startsWith("javascript")) {
-                val key = extractServerKey(iframeUrl)
-                seenServerKeys.add(key)
-                val host = runCatching { URI(iframeUrl).host?.replace("www.", "") ?: "" }.getOrDefault("")
-                if (streamhgEmbedHosts.any { host.endsWith(it) }) {
-                    resolveStreamHg(iframeUrl, subtitleCallback, wrappedCallback)
-                } else {
-                    loadExtractor(iframeUrl, data, subtitleCallback, wrappedCallback)
-                }
+                serverCandidates.add(iframeUrl)
             }
         }
 
-        // 2. Download servers (.donwload-servers-list, ul.download) - only if not already loaded as stream
+        // 2. Download servers (.donwload-servers-list, ul.download)
         doc.select(".donwload-servers-list > li a, ul.download a").forEach { element ->
             val url = element.attr("href").trim()
             if (url.isNotEmpty() && !url.startsWith("javascript") && !url.contains("egydead")) {
-                val key = extractServerKey(url)
-                if (seenServerKeys.add(key)) {
-                    val host = runCatching { URI(url).host?.replace("www.", "") ?: "" }.getOrDefault("")
-                    if (streamhgEmbedHosts.any { host.endsWith(it) }) {
-                        resolveStreamHg(url, subtitleCallback, wrappedCallback)
-                    } else {
-                        loadExtractor(url, data, subtitleCallback, wrappedCallback)
-                    }
+                serverCandidates.add(url)
+            }
+        }
+
+        // 3. Fallback: check iframes on page (excluding trailers/ads)
+        doc.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src").trim()
+            if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("google") && !src.contains("egydead") && !src.startsWith("javascript")) {
+                serverCandidates.add(src)
+            }
+        }
+
+        // Process all candidates concurrently with deduplication
+        serverCandidates.distinct().parMap { url ->
+            val link = if (url.startsWith("//")) "https:$url" else url
+            val key = extractServerKey(link)
+            if (seenServerKeys.add(key)) {
+                val host = runCatching { URI(link).host?.replace("www.", "") ?: "" }.getOrDefault("")
+                when {
+                    isMegaMax(link) -> resolveMegaMax(link, subtitleCallback, wrappedCallback)
+                    streamhgEmbedHosts.any { host.endsWith(it) } || link.contains("streamwish") -> resolveStreamHg(link, subtitleCallback, wrappedCallback)
+                    host.contains("stmruby") || host.contains("streamruby") -> resolveStreamRuby(link, subtitleCallback, wrappedCallback)
+                    else -> loadExtractor(link, data, subtitleCallback, wrappedCallback)
                 }
             }
         }

@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 
 class GogoAnimeProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://gogoanimez.to"
+    override var mainUrl = "https://gogoanimes.cv"
     override var name = "GogoAnime"
     override val usesWebView = true
     override val hasMainPage = true

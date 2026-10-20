@@ -11,7 +11,7 @@ import org.jsoup.nodes.Element
 
 class GateAnimeProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://f.gateanime.com"
+    override var mainUrl = "https://gateanime.com"
     override var name = "GateAnime"
     override val usesWebView = false
     override val hasMainPage = true
@@ -124,16 +124,31 @@ class GateAnimeProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        doc.select(
-            "li:contains(Fembed), li:contains(خيارات 1), li:contains(Uptostream), li:contains(Dood), li:contains(Uqload), li:contains(Drive)"
-        ).forEach {
-                val id = it.attr("data-tplayernv")
-                val iframeLink = doc.select("div#$id").html().replace(".*src=\"|\".*|#038;|amp;".toRegex(), "").replace("<noscript>.*".toRegex(),"")
-                var sourceUrl = app.get(iframeLink).document.select("iframe").attr("src")
-                if(sourceUrl.contains("ok.ru")) sourceUrl = "https:$sourceUrl"
-                if(sourceUrl.contains("drive.google.com")) sourceUrl = "https://gdriveplayer.to/embed2.php?link=$sourceUrl"
-                loadExtractor(sourceUrl, data, subtitleCallback, callback)
+        doc.select("ul.optnslst li, .playex li, [data-tplayernv]").forEach {
+            val id = it.attr("data-tplayernv")
+            val iframeLink = doc.select("div#$id").html().replace(".*src=\"|\".*|#038;|amp;".toRegex(), "").replace("<noscript>.*".toRegex(),"")
+            if (iframeLink.isNotBlank() && iframeLink.startsWith("http")) {
+                try {
+                    var sourceUrl = app.get(iframeLink).document.select("iframe").attr("src")
+                    if (sourceUrl.startsWith("//")) sourceUrl = "https:$sourceUrl"
+                    if (sourceUrl.contains("ok.ru") && !sourceUrl.startsWith("http")) sourceUrl = "https:$sourceUrl"
+                    if (sourceUrl.contains("drive.google.com")) sourceUrl = "https://gdriveplayer.to/embed2.php?link=$sourceUrl"
+                    if (sourceUrl.startsWith("http")) {
+                        loadExtractor(sourceUrl, data, subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                    loadExtractor(iframeLink, data, subtitleCallback, callback)
+                }
             }
+        }
+
+        doc.select("iframe[src]").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("http") && !src.contains("ads") && !src.contains("facebook")) {
+                loadExtractor(src, data, subtitleCallback, callback)
+            }
+        }
         return true
     }
 }

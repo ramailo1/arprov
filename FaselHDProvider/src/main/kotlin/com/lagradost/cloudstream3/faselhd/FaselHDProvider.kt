@@ -654,6 +654,7 @@ class FaselHDProvider : MainAPI() {
         resolvedHost?.let { return it }
         val hosts = listOf(
             mainUrl,
+            "https://www.fasel-hd.co",
             "https://web6712x.faselhdx.bid",
             "https://www.fasel-hd.cam",
             "https://web31818x.faselhdx.bid"
@@ -681,7 +682,7 @@ class FaselHDProvider : MainAPI() {
     }
 
     private fun normalizeUrl(url: String, host: String): String {
-        if (!url.contains(baseDomain)) return url
+        if (!url.contains(baseDomain) && !url.contains("fasel-hd")) return url
         val old = runCatching { java.net.URL(url) }.getOrNull() ?: return url
         return url.replace("${old.protocol}://${old.host}", host)
     }
@@ -790,7 +791,7 @@ class FaselHDProvider : MainAPI() {
                         cookieManager.setCookie(cookieHost, cookieString)
                         
                         // Also mirror to mainHost if it's a domain cookie or on same base
-                        if (host.endsWith(baseDomain) && cookieHost != normalizedTarget) {
+                        if ((host.endsWith(baseDomain) || host.contains("fasel-hd")) && cookieHost != normalizedTarget) {
                             cookieManager.setCookie(normalizedTarget, cookieString)
                         }
                         count++

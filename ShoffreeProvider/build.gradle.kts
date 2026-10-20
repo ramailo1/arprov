@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 cloudstream {
     authors = listOf("extentuin")
@@ -6,7 +6,7 @@ cloudstream {
     language = "ar"
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime")
-    iconUrl = "https://shoffree.sbs/assets/images/icon-512x512.png"
+    iconUrl = "https://shoffree.cc/assets/images/icon-512x512.png"
 }
 android {
     namespace = "com.lagradost.cloudstream3.shoffree"

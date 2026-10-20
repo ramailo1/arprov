@@ -224,7 +224,9 @@ class CimaClubProvider : MainAPI() {
                 "vudeo", "uqload", "luluvdo", "listeamed", "megaup",
                 "1cloudfile", "multiup", "wasuytm", "vidmoly", "streamtape",
                 "dood", "embed", "mega", "stream", "hd", "fembed", "govad",
-                "hglink", "dsvplay", "obhitv", "somfr", "tubeload", "wishfast"
+                "hglink", "dsvplay", "obhitv", "somfr", "tubeload", "wishfast",
+                "megamax", "streamwish", "streamruby", "stmruby", "hanerix",
+                "vibuxer", "hgplaycdn", "rubystream", "strwish"
             )
             return hosts.any { url.contains(it, ignoreCase = true) }
         }

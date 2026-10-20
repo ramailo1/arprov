@@ -264,6 +264,9 @@ class ArabSeedProvider : MainAPI() {
                     if (link.contains("/download/?download_url=")) {
                         link = link.substringAfter("download_url=").substringBefore("&")
                     }
+                    if (link.contains("%3A%2F%2F") || link.contains("%2F")) {
+                        link = runCatching { java.net.URLDecoder.decode(link, "UTF-8") }.getOrDefault(link)
+                    }
                     if (link.isNotEmpty()) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     }
@@ -308,6 +311,9 @@ class ArabSeedProvider : MainAPI() {
         var finalUrl = src
         if (finalUrl.contains("/watch/?url=")) {
             finalUrl = finalUrl.substringAfter("url=")
+        }
+        if (finalUrl.contains("%3A%2F%2F") || finalUrl.contains("%2F")) {
+            finalUrl = runCatching { java.net.URLDecoder.decode(finalUrl, "UTF-8") }.getOrDefault(finalUrl)
         }
         if (finalUrl.startsWith("//")) {
             finalUrl = "https:$finalUrl"

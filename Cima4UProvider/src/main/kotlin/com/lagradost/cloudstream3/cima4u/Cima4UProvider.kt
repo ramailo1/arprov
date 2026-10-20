@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.amap
 import org.jsoup.nodes.Element
 
 class Cima4UProvider : MainAPI() {
-    override var mainUrl = "https://cfu.cam"
+    override var mainUrl = "https://cimafu.live"
     override var name = "Cima4U"
     override var lang = "ar"
     override val hasMainPage = true
@@ -466,12 +466,27 @@ class Cima4UProvider : MainAPI() {
             else -> "$data/watch/"
         }
 
-        val doc = app.get(watchUrl).document
+        val doc = try {
+            app.get(watchUrl, headers = mapOf("Referer" to "$mainUrl/")).document
+        } catch (e: Exception) {
+            try {
+                app.get(data, headers = mapOf("Referer" to "$mainUrl/")).document
+            } catch (e2: Exception) {
+                return false
+            }
+        }
 
         // Avoid duplicates if a server is listed in multiple places
-        val visited = mutableSetOf<String>()
+        val visited = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-        suspend fun loadLink(url: String) {
+        suspend fun loadLink(rawUrl: String) {
+            var url = rawUrl.trim()
+            if (url.isEmpty() || url.startsWith("javascript")) return
+            if (url.startsWith("//")) url = "https:$url"
+            if (url.contains("/watch/?url=")) url = url.substringAfter("url=")
+            if (url.contains("%3A%2F%2F") || url.contains("%2F")) {
+                url = runCatching { java.net.URLDecoder.decode(url, "UTF-8") }.getOrDefault(url)
+            }
             if (url.startsWith("http") && visited.add(url)) {
                 loadExtractor(url, watchUrl, subtitleCallback, callback)
             }
@@ -482,9 +497,12 @@ class Cima4UProvider : MainAPI() {
             loadLink(iframe.attr("src"))
         }
 
-        // AJAX server list
-        doc.select(".serversWatchSide li").forEach { li ->
-            val url = li.attr("data-url").ifBlank { li.attr("url") }.ifBlank { li.attr("data-src") }
+        // AJAX / dynamic server list
+        doc.select(".serversWatchSide li, .serversList li, [data-url], [data-src], [data-link]").forEach { li ->
+            val url = li.attr("data-url")
+                .ifBlank { li.attr("data-link") }
+                .ifBlank { li.attr("url") }
+                .ifBlank { li.attr("data-src") }
             loadLink(url)
         }
 
@@ -497,7 +515,8 @@ class Cima4UProvider : MainAPI() {
             "a[href*=\"cybervynx\"], " +
             "a[href*=\"lulustream\"], " +
             "a[href*=\"filemoon\"], " +
-            "a[href*=\"streamtape\"]"
+            "a[href*=\"streamtape\"], " +
+            "a[href*=\"download\"]"
         ).forEach { link ->
             val href = link.attr("href")
             // Filter out known broken/ad links

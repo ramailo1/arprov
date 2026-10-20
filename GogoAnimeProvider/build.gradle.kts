@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 cloudstream {
     authors = listOf("ramailo1")
@@ -6,7 +6,7 @@ cloudstream {
     language = "ar"
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "ONA", "Special")
-    iconUrl = "https://gogoanimez.to/favicon.ico"
+    iconUrl = "https://gogoanimes.cv/favicon.ico"
 }
 
 android {

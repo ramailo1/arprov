@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 cloudstream {
     description = "Advanced Arabic Extractors Collection - 29 extractors with encryption support, multi-quality support, and error handling"

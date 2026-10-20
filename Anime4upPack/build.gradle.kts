@@ -1,4 +1,4 @@
-version = 10
+version = 11
 
 cloudstream {
     description = "Anime4up and Witanime - Clean, Organized, and High-Performance - (Working)"

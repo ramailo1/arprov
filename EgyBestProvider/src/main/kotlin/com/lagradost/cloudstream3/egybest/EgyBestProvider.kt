@@ -12,7 +12,7 @@ import org.jsoup.select.Elements
 
 class EgyBestProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://egibest.net"
+    override var mainUrl = "https://egibest.cyou"
     override var name = "EgyBest"
 
     override val usesWebView = false
@@ -449,17 +449,25 @@ class EgyBestProvider : MainAPI() {
         val extractorUrls = mutableListOf<String>()
 
         // 1. Server list items
-        doc.select("ul#watch-servers-list li, .servList li").forEach { li ->
-            Regex("loadIframe\\(this, '(.*?)'\\)").find(li.attr("onclick"))?.groupValues?.getOrNull(1)?.let { extractorUrls.add(it) }
+        doc.select("ul#watch-servers-list li, .servList li, [onclick*='loadIframe']").forEach { li ->
+            val onclick = li.attr("onclick")
+            Regex("""(?:loadIframe|loadServer|openServer)\s*\(\s*[^,]+,\s*['"](.*?)['"]""").find(onclick)?.groupValues?.getOrNull(1)?.let { extractorUrls.add(it) }
+                ?: li.attr("data-src").takeIf { it.isNotBlank() }?.let { extractorUrls.add(it) }
+                ?: li.attr("data-url").takeIf { it.isNotBlank() }?.let { extractorUrls.add(it) }
         }
 
         // 2. Direct iframe
-        doc.select("iframe#videoPlayer").mapNotNull { it.attr("src").takeIf { src -> src.isNotBlank() } }
-            .forEach { extractorUrls.add(it) }
+        doc.select("iframe#videoPlayer, iframe[src]").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.isNotBlank() && !src.contains("ads") && !src.contains("facebook")) {
+                if (src.startsWith("//")) src = "https:$src"
+                extractorUrls.add(src)
+            }
+        }
 
         // 3. Flatten and load all extractors
         extractorUrls.distinct().forEach { url ->
-            loadExtractor(fixUrl(url), subtitleCallback, callback)
+            loadExtractor(fixUrl(url), data, subtitleCallback, callback)
         }
 
         return true

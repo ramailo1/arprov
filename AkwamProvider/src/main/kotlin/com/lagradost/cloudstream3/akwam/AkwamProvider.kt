@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 
 class AkwamProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://ak.sv"
+    override var mainUrl = "https://akwam.ss"
     override var name = "Akwam"
     override val usesWebView = false
     override val hasMainPage = true
@@ -194,22 +194,27 @@ class AkwamProvider : MainAPI() {
             }
         }.flatten()
 
-        links.map {
-            val linkDoc = app.get(it.first).document
-            val button = linkDoc.select("div.btn-loader > a")
-            val url = button.attr("href")
+        links.forEach {
+            try {
+                val linkDoc = app.get(it.first).document
+                val button = linkDoc.select("div.btn-loader > a")
+                val url = button.attr("href")
 
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    url,
-                    ExtractorLinkType.VIDEO
-                ) {
-                    quality = it.second.value
-                    referer = this@AkwamProvider.mainUrl
+                if (url.isNotBlank() && url.startsWith("http")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            this.name,
+                            url,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            quality = it.second.value
+                            referer = this@AkwamProvider.mainUrl
+                        }
+                    )
                 }
-            )
+            } catch (e: Exception) {
+            }
         }
         return true
     }

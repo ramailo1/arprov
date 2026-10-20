@@ -10,7 +10,7 @@ import org.jsoup.nodes.Element
 
 class FushaarProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://s.fushar.video"
+    override var mainUrl = "https://u.fushar.video"
     override var name = "Fushaar"
     override val usesWebView = true
     override val hasMainPage = true
@@ -155,6 +155,15 @@ class FushaarProvider : MainAPI() {
             .distinct().forEach { playerUrl ->
                 if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
             }
+
+        // Method 4: Check iframes on page
+        doc.select("iframe[src]").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("http")) {
+                if (loadExtractorDirect(src, data, subtitleCallback, callback)) anySuccess = true
+            }
+        }
 
         return anySuccess
     }

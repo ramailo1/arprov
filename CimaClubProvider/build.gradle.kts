@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 10
+version = 11
 
 // Dependencies are needed for cloudstream to be able to fetch this extension
 cloudstream {

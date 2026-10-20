@@ -19,5 +19,31 @@ class ExtractorsPlugin : BasePlugin() {
         registerExtractorAPI(Aflamy("https://w.shadwo.pro"))
         registerExtractorAPI(Aflamy("https://w.dazzwo.pro"))
         registerExtractorAPI(Aflamy("https://w.dazwo.pro"))
+
+        // StreamWish / StreamHG and mirrors
+        registerExtractorAPI(StreamWish())
+        registerExtractorAPI(StreamHg())
+        registerExtractorAPI(WishFast())
+        registerExtractorAPI(Hanerix())
+        registerExtractorAPI(Vibuxer())
+        registerExtractorAPI(HgPlayCdn())
+        registerExtractorAPI(HgCloud())
+        registerExtractorAPI(HgLink())
+        registerExtractorAPI(StrWish())
+        registerExtractorAPI(Awish())
+        registerExtractorAPI(Dwish())
+        registerExtractorAPI(Mwish())
+        registerExtractorAPI(SwishSrv())
+
+        // StreamRuby and mirrors
+        registerExtractorAPI(StreamRuby())
+        registerExtractorAPI(StmRuby())
+        registerExtractorAPI(RubyStream())
+
+        // MegaMax and mirrors
+        registerExtractorAPI(MegaMax())
+        registerExtractorAPI(MegaMaxTo())
+        registerExtractorAPI(MegaMaxCc())
+        registerExtractorAPI(MegaMaxMe())
     }
 }

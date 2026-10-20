@@ -45,7 +45,7 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 
 class ShoffreeProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://shoffree.sbs"
+    override var mainUrl = "https://shoffree.cc"
     override var name = "Shoffree"
     override val usesWebView = true
     override val hasMainPage = true

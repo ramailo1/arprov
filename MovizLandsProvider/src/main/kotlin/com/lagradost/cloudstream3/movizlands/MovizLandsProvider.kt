@@ -16,7 +16,7 @@ import android.annotation.SuppressLint
 
 class MovizLandsProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://en.movizlands.com"
+    override var mainUrl = "https://www.moviz.land"
     override var name = "MovizLands"
     override val usesWebView = false
     override val hasMainPage = true
@@ -45,14 +45,19 @@ class MovizLandsProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val title = select("h3, .BlockTitle").text()
+        val title = select("h3, .BlockTitle, .movie-slide-title, .search-card-title, h1, h2").text().ifEmpty {
+            attr("data-title")
+        }
         val img = select("img").first()
-        val posterUrl = img?.attr("data-src")?.ifEmpty { null } ?: img?.attr("abs:src")
-        val year = select(".WatchTime, .InfoEndBlock li:last-child, .RestInformation li:last-child").text()?.getIntFromText()
-        var quality = select(".Quality, .RestInformation li:first-child").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
-        val tvtype = if(title.contains("فيلم")) TvType.Movie else TvType.TvSeries
+        val posterUrl = img?.attr("data-src")?.ifEmpty { null } 
+            ?: img?.attr("abs:src")
+            ?: img?.attr("src")
+            ?: attr("data-image").ifEmpty { null }
+        val year = select(".WatchTime, .InfoEndBlock li:last-child, .RestInformation li:last-child, .search-card-year").text()?.getIntFromText()
+        var quality = select(".Quality, .RestInformation li:first-child, .search-card-quality").text()?.replace(" |-|1080p|720p".toRegex(), "")?.replace("BluRay","BLURAY")
+        val tvtype = if(title.contains("فيلم") || !title.contains("مسلسل")) TvType.Movie else TvType.TvSeries
         
-        val url = select("a").first()?.attr("abs:href") ?: return null
+        val url = select("a").first()?.attr("abs:href") ?: attr("data-url").ifEmpty { null } ?: return null
 
         return newMovieSearchResponse(
             title.cleanTitle(),
@@ -64,20 +69,19 @@ class MovizLandsProvider : MainAPI() {
             this.quality = getQualityFromString(quality)
         }
     }
+
     override val mainPage = mainPageOf(
-        "$mainUrl/home13/" to "الرئيسية",
-        "$mainUrl/category/افلام-اجنبي/" to "افلام اجنبي",
-        "$mainUrl/last/" to "أضيف حديثا",
-        "$mainUrl/category/مسلسلات-اسيوية/" to "مسلسلات اسيوية",
-        "$mainUrl/category/مسلسلات-اجنبي/" to "مسلسلات اجنبي",
-        "$mainUrl/category/مسلسلات-انمي/" to "مسلسلات انمي",
-        "$mainUrl/category/افلام-اسيوي/" to "افلام اسيوي",
+        "$mainUrl/movies/" to "افلام",
+        "$mainUrl/series/" to "مسلسلات",
+        "$mainUrl/browse/" to "تصفح الكل",
+        "$mainUrl/sports/" to "رياضة",
+        "$mainUrl/kids/" to "اطفال",
     )
 
     override suspend fun getMainPage(page: Int, request : MainPageRequest): HomePageResponse {
         val url = if (page <= 1) request.data else "${request.data}page/$page/"
         val doc = app.get(url).document   
-        val list = doc.select("div.Small--Box, .BlockItem").mapNotNull { element ->
+        val list = doc.select("div.Small--Box, .BlockItem, article.movie-slide, article.search-card, article").mapNotNull { element ->
             element.toSearchResponse()
         }
         return newHomePageResponse(request.name, list)
@@ -86,20 +90,10 @@ class MovizLandsProvider : MainAPI() {
     @SuppressLint("SuspiciousIndentation")
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.replace(" ".toRegex(), "%20")
-        val result = arrayListOf<SearchResponse>()
-
-        val rlist = setOf(
-            "$mainUrl/?s=$q",
-        )
-        rlist.forEach{ docs ->
-            val d = app.get(docs).document
-            d.select("div.Small--Box").mapNotNull {
-                it.toSearchResponse()?.let {
-            it1 -> result.add(it1)
-            }
-            }
+        val d = app.get("$mainUrl/?s=$q").document
+        return d.select("div.Small--Box, article.search-card, article.movie-slide, article").mapNotNull {
+            it.toSearchResponse()
         }
-    return result
     }
 
 private val seasonPatterns = arrayOf(
@@ -133,31 +127,35 @@ private fun getSeasonFromString(sName: String): Int {
         var doc = app.get(url).document
         
         // Poster (Prioritize data-src)
-        val posterUrl = doc.select(".MainSingle .image img").attr("data-src").ifEmpty {
-            doc.select(".MainSingle .image img").attr("src")
+        val posterUrl = doc.select(".MainSingle .image img, .video-poster img, article img, meta[property='og:image']").attr("data-src").ifEmpty {
+            doc.select(".MainSingle .image img, .video-poster img, article img").attr("src").ifEmpty {
+                doc.select("meta[property='og:image']").attr("content")
+            }
         }
 
         // Title
-        var title = doc.select("h1.PostTitle").text().cleanTitle()
+        var title = doc.select("h1.PostTitle, h1.video-title, h1").text().cleanTitle()
         
         // Year
-        val year = doc.select(".RightTaxContent li:has(.fa-calendar) a").text()?.getIntFromText()
+        val year = doc.select(".RightTaxContent li:has(.fa-calendar) a, .video-meta").text()?.getIntFromText()
         
         // Plot
-        val synopsis = doc.select(".StoryArea").text()
+        val synopsis = doc.select(".StoryArea, .video-description, meta[property='og:description']").attr("content").ifEmpty {
+            doc.select(".StoryArea, .video-description").text()
+        }
         
         // Tags
-        var tags = doc.select(".RightTaxContent li:has(.fa-bars) a").map { it.text() }
+        var tags = doc.select(".RightTaxContent li:has(.fa-bars) a, .video-genres a, .video-tags a").map { it.text() }
         
         // Recommendations
-        val recommendations = doc.select(".mitatagall .Small--Box, .otherser .Small--Box").mapNotNull {
+        val recommendations = doc.select(".mitatagall .Small--Box, .otherser .Small--Box, article.movie-slide").mapNotNull {
             it.toSearchResponse()
         }
 
-        val isMovie = title.contains("عرض|فيلم".toRegex()) || doc.select(".mitatagall").isEmpty()
+        val isMovie = title.contains("عرض|فيلم".toRegex()) || !title.contains("مسلسل")
 
         return if (isMovie) {
-            newMovieLoadResponse(title, url, TvType.Movie, doc.select(".BTNSDownWatch a.watch").attr("abs:href")) {
+            newMovieLoadResponse(title, url, TvType.Movie, doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href")) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.tags = tags
@@ -166,29 +164,18 @@ private fun getSeasonFromString(sName: String): Int {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElements = doc.select(".allepcont a")
+            val episodeElements = doc.select(".allepcont a, .episodes-list a, .EpisodesList .EpisodeItem")
             
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { element ->
-                    val epUrl = element.attr("abs:href")
-                    if (epUrl.isNotEmpty()) {
-                        episodes.add(
-                            newEpisode(epUrl) {
-                                this.episode = element.select(".epnum").text().getIntFromText()
-                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text() }
-                                this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
-                            }
-                        )
-                    }
-                }
-            } else {
-                 doc.select(".EpisodesList .EpisodeItem").forEach { element ->
-                    val epUrl = element.select("a").attr("abs:href")
+                    val aTag = if (element.tagName() == "a") element else element.selectFirst("a")
+                    val epUrl = aTag?.attr("abs:href") ?: ""
                     if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
                         episodes.add(
                             newEpisode(epUrl) {
-                                this.episode = element.select("em").text().getIntFromText()
-                                this.name = element.text()
+                                this.episode = element.select(".epnum, em").text().getIntFromText()
+                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text() }
+                                this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
                             }
                         )
                     }
@@ -214,21 +201,30 @@ private fun getSeasonFromString(sName: String): Int {
     ): Boolean {
         val doc = app.get(data).document
         
-        val watchUrl = if (doc.select("ul#watch li").isNotEmpty()) {
+        val watchUrl = if (doc.select("ul#watch li, .server-card").isNotEmpty()) {
             data
         } else {
-            doc.select(".BTNSDownWatch a.watch").attr("abs:href").takeIf { it.isNotEmpty() }
+            doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
                 ?: doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
                 ?: if (data.endsWith("/watch/")) data else "${data.trimEnd('/')}/watch/"
         }
 
         val watchDoc = if (watchUrl == data) doc else app.get(watchUrl).document
         
-        watchDoc.select("ul#watch li").forEach { li ->
-            val serverUrl = li.attr("data-watch")
-            val serverName = li.text().trim()
+        watchDoc.select("ul#watch li, .server-card, a[data-src], div[data-src], button[data-src]").forEach { el ->
+            val serverUrl = el.attr("data-src").ifEmpty { el.attr("data-watch") }
             if (serverUrl.startsWith("http")) {
                 loadExtractor(serverUrl, data, subtitleCallback) { link ->
+                    callback(link)
+                }
+            }
+        }
+
+        watchDoc.select("iframe[src]").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("http")) {
+                loadExtractor(src, data, subtitleCallback) { link ->
                     callback(link)
                 }
             }

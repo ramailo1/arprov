@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 
 class WitAnime : Anime4upProvider() {
     override var name = "WitAnime"
-    override var mainUrl = "https://witanime.com"
+    override var mainUrl = "https://www.witanime.net"
 }
 
 open class Anime4upProvider : MainAPI() {
@@ -164,19 +164,25 @@ open class Anime4upProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // New Logic: Iterate over UL li elements with data-watch attribute
-        for (li in doc.select("ul#episode-servers li[data-watch]")) {
-            val link = li.attr("data-watch")
-            if (link.isNotBlank()) {
+        for (li in doc.select("ul#episode-servers li[data-watch], ul#episode-servers li, [data-watch], [data-embed]")) {
+            val link = li.attr("data-watch").ifBlank { li.attr("data-embed") }.ifBlank { li.selectFirst("a")?.attr("href") ?: "" }
+            if (link.isNotBlank() && link.startsWith("http")) {
                 loadExtractor(link, data, subtitleCallback, callback)
                 
-                // Add specific handling for megamax if needed, or if the user wants the /e/ variant for megamax
                 if (link.contains("megamax.me/iframe/")) {
                      val id = link.substringAfter("/iframe/").substringBefore("\"").substringBefore("'")
                      if(id.isNotEmpty()) {
                          loadExtractor("https://megamax.me/e/$id", data, subtitleCallback, callback)
                      }
                 }
+            }
+        }
+
+        doc.select("iframe[src]").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("http")) {
+                loadExtractor(src, data, subtitleCallback, callback)
             }
         }
         return true
