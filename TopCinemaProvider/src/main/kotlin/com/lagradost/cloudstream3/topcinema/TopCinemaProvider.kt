@@ -21,9 +21,9 @@ import kotlinx.coroutines.sync.withPermit
 
 class TopCinemaProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://topcinema.bond"
+    override var mainUrl = "https://topcinema.film"
     override var name = "TopCinema"
-    override val usesWebView = false
+    override val usesWebView = true
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.Anime)
 
@@ -53,11 +53,8 @@ class TopCinemaProvider : MainAPI() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class WpPost(
         @JsonProperty("id") val id: Int,
-        @JsonProperty("date") val date: String,
-        @JsonProperty("slug") val slug: String,
         @JsonProperty("link") val link: String,
         @JsonProperty("title") val title: WpTitle,
-        @JsonProperty("content") val content: WpTitle?, 
         @JsonProperty("categories") val categories: List<Int>?,
         @JsonProperty("yoast_head_json") val yoastHead: YoastHead?,
         @JsonProperty("_embedded") val embedded: WpEmbedded?
@@ -65,7 +62,7 @@ class TopCinemaProvider : MainAPI() {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class YoastHead(
-        @JsonProperty("og_image") val ogImage: List<Map<String, Any>>? // Handling as generic map to be safe
+        @JsonProperty("og_image") val ogImage: List<Map<String, Any>>?
     )
 
     private fun String.cleanTitle(): String {
@@ -107,81 +104,42 @@ class TopCinemaProvider : MainAPI() {
         }
     }
 
-    // Map keywords/names to WordPress Category IDs
+    // Map keywords/names to WordPress Category IDs on topcinema.film
     override val mainPage = mainPageOf(
         "" to "الأحدث",
-        "70137" to "مسلسلات رمضان 2026",
-        "1207" to "أفلام أجنبية",
-        "20349" to "أفلام عربية",
-        "1895" to "أفلام أنمي",
-        "4" to "مسلسلات أجنبية",
-        "17979" to "مسلسلات عربية",
-        "38" to "مسلسلات أنمي",
-        "59186" to "مسلسلات كورية"
+        "3" to "أفلام أجنبية",
+        "4" to "أفلام آسيوية",
+        "5" to "أفلام أنمي",
+        "7" to "مسلسلات أجنبية",
+        "9" to "مسلسلات آسيوية",
+        "8" to "مسلسلات أنمي"
     )
-
-    companion object {
-        private val cacheMutex = Mutex()
-        private var cachedHomePage: HomePageResponse? = null
-        private var lastCacheTime: Long = 0
-        private const val CACHE_TTL = 60 * 1000 // 60 seconds
-        
-        // Limit global parallel category fetches to avoid server throttling
-        private val categorySemaphore = Semaphore(3)
-    }
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val now = System.currentTimeMillis()
-        
-        // Handle concurrent calls by waiting for the same lock and reusing cache
-        cacheMutex.withLock {
-            if (cachedHomePage != null && (now - lastCacheTime) < CACHE_TTL) {
-                return cachedHomePage!!
-            }
-            
-            val result = fetchMainPageInternal()
-            
-            cachedHomePage = result
-            lastCacheTime = System.currentTimeMillis()
-            return result
+        val categoryId = request.data
+        val url = if (categoryId.isEmpty()) {
+            "$mainUrl/wp-json/wp/v2/posts?page=$page&per_page=15&_embed"
+        } else {
+            "$mainUrl/wp-json/wp/v2/posts?categories=$categoryId&page=$page&per_page=15&_embed"
+        }
+
+        return try {
+            val responseText = app.get(url, headers = headers).text
+            val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
+            val searchResponses = response.mapNotNull { it.toSearchResponse() }
+            newHomePageResponse(request.name, searchResponses, hasNext = searchResponses.size >= 15)
+        } catch (e: Exception) {
+            newHomePageResponse(request.name, emptyList())
         }
     }
 
-    private suspend fun fetchMainPageInternal(): HomePageResponse = coroutineScope {
-        val items = mainPage.map { (name, data) ->
-            async {
-                categorySemaphore.withPermit {
-                    try {
-                        val url = if (data.isEmpty()) {
-                            "$mainUrl/wp-json/wp/v2/posts?per_page=10&_embed"
-                        } else {
-                            "$mainUrl/wp-json/wp/v2/posts?categories=$data&per_page=10&_embed"
-                        }
-
-                        val responseText = app.get(url).text
-                        val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
-                        val searchResponses = response.mapNotNull { it.toSearchResponse() }
-                        
-                        if (searchResponses.isNotEmpty()) {
-                            HomePageList(name, searchResponses)
-                        } else null
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-            }
-        }.awaitAll().filterNotNull()
-
-        newHomePageResponse(items)
-    }
-
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=10&_embed"
+        val url = "$mainUrl/wp-json/wp/v2/posts?search=$query&per_page=15&_embed"
         return try {
-            val responseText = app.get(url).text
+            val responseText = app.get(url, headers = headers).text
             val response = mapper.readValue(responseText, object : com.fasterxml.jackson.core.type.TypeReference<List<WpPost>>() {})
             response.mapNotNull { it.toSearchResponse() } 
         } catch (e: Exception) {
@@ -351,17 +309,42 @@ class TopCinemaProvider : MainAPI() {
 
         if (watchResponse != null && watchResponse.code == 200) {
             val doc = watchResponse.document
-            val activeIframeUrl = doc.selectFirst("div.WatchIframe iframe, .player-embed iframe")?.attr("src") ?: ""
+            val activeIframeUrl = doc.selectFirst("div.player--iframe iframe, div.WatchIframe iframe, .player-embed iframe, iframe")?.attr("src") ?: ""
             if (activeIframeUrl.isNotEmpty()) {
                 safeExtract(activeIframeUrl, subtitleCallback, callback)
             }
 
+            // AJAX server items (Single/Server.php)
+            val serverItems = doc.select("li.server--item, .watch--servers--list li")
+            val postId = serverItems.firstOrNull()?.attr("data-id")
+                ?: Regex("""id\s*:\s*['"]?(\d+)""").find(doc.html())?.groupValues?.get(1)
+
+            if (postId != null && serverItems.isNotEmpty()) {
+                val ajaxUrl = "$mainUrl/wp-content/themes/movies2023/Ajaxat/Single/Server.php"
+                for (li in serverItems) {
+                    val serverIndex = li.attr("data-server")
+                    if (serverIndex.isEmpty() || serverIndex == "0") continue
+                    try {
+                        val resp = app.post(
+                            ajaxUrl,
+                            data = mapOf("id" to postId, "i" to serverIndex),
+                            headers = headers + mapOf("Referer" to watchUrl, "X-Requested-With" to "XMLHttpRequest")
+                        ).document
+                        val iframeSrc = resp.selectFirst("iframe")?.attr("src")
+                        if (!iframeSrc.isNullOrBlank()) {
+                            safeExtract(iframeSrc, subtitleCallback, callback)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+            }
+
             val servers = doc.select("ul#watch > li, .servers-list li, [data-watch]")
-            servers.forEach { li ->
+            for (li in servers) {
                 val rawUrl = li.attr("data-watch").trim().ifEmpty {
                     li.select("noscript iframe, iframe").attr("src").trim()
                 }
-                if (rawUrl.isEmpty() || rawUrl == pageUrl || rawUrl == watchUrl) return@forEach
+                if (rawUrl.isEmpty() || rawUrl == pageUrl || rawUrl == watchUrl) continue
 
                 when {
                     rawUrl.contains("reviewrate.net") || rawUrl.contains("gamehub.cam") -> {
@@ -374,7 +357,7 @@ class TopCinemaProvider : MainAPI() {
             }
 
             // Fallback: check iframes on watch page
-            doc.select("iframe").forEach { iframe ->
+            for (iframe in doc.select("iframe")) {
                 val src = iframe.attr("src").trim()
                 if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("google") && !src.startsWith("javascript")) {
                     safeExtract(src, subtitleCallback, callback)
@@ -391,7 +374,7 @@ class TopCinemaProvider : MainAPI() {
     ) {
         val link = if (url.startsWith("//")) "https:$url" else url
         try {
-            loadExtractor(link, "https://topcima.online/", subtitleCallback, callback)
+            loadExtractor(link, "$mainUrl/", subtitleCallback, callback)
         } catch (e: Exception) {
             scrapeM3u8(link, "Direct", callback)
         }
@@ -405,7 +388,7 @@ class TopCinemaProvider : MainAPI() {
         try {
             val text = app.get(
                 url,
-                headers = headers + mapOf("Referer" to "https://topcima.online/")
+                headers = headers + mapOf("Referer" to "$mainUrl/")
             ).text
 
             val m3u8 = Regex("""["']?(https?://[^"'\s]+\.m3u8[^"'\s]*)["']?""")
