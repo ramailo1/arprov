@@ -2,11 +2,11 @@ version = 10
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "CimaLeek Provider - (Working)"
+    description = "CimaLeek Provider - (Under Maintenance / Turnstile Protection)"
 
     language = "ar"
 	
-    status = 3
+    status = 2
 
     tvTypes = listOf( "TvSeries" , "Movie", "Anime" )
 

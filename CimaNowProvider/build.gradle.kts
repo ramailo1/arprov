@@ -2,11 +2,11 @@ version = 25
 
 cloudstream {
     authors = listOf( "ramailo1" )
-    description = "CimaNow Provider"
+    description = "CimaNow Provider - (Under Maintenance / Players Offline)"
 
 	language = "ar"
 	
-    status = 1
+    status = 2
 
     tvTypes = listOf( "TvSeries" , "Movie" )
 

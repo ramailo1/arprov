@@ -102,60 +102,62 @@ class TukProvider : MainAPI() {
         val plot = doc.selectFirst(".story p")?.text()?.trim()
         val year = doc.selectFirst(".RightTaxContent a[href*='release-year']")?.text()?.filter { it.isDigit() }?.toIntOrNull()
 
-        val isSeries = (doc.selectFirst(".Episodes--Box, .Episodes--List, a[href*='/series/']") != null || url.contains("series")) && !doc.selectFirst(".catssection a[href*='/movies/']").let { it != null }
+        val isSeries = (doc.selectFirst(".Episodes--Box, .Episodes--List, a[href*='/series/'], section.SeriesEpisodes, .SeriesEpisodeCard") != null || 
+            url.contains("series") || url.contains("الحلقة") || title.contains("الحلقة") || title.contains("مسلسل")) && 
+            doc.selectFirst(".catssection a[href*='/movies/']") == null
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
             
-            // Try to find full list on the page
-            doc.select(".allepcont .row a").forEach { ep ->
-                val href = ep.attr("href")
-                if (href.isNotBlank()) {
-                    val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
-                    val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
+            fun extractEpisodesFromDoc(d: org.jsoup.nodes.Document): List<Episode> {
+                return d.select("a.SeriesEpisodeCard, section.SeriesEpisodes a, .allepcont .row a, .allepcont a, div.SeriesEpisodesGrid a").mapNotNull { ep ->
+                    val href = ep.attr("href")
+                    if (href.isBlank()) return@mapNotNull null
+                    val epTitle = ep.selectFirst("h3, .ep-info h2")?.text()?.trim() ?: ep.attr("title").trim()
+                    val epNum = ep.selectFirst(".SeriesEpisodeNumber strong")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                        ?: ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull()
+                        ?: Regex("""الحلقة\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
                         ?: epTitle.filter { it.isDigit() }.toIntOrNull()
-                    val epThumb = ep.selectFirst(".image img")?.let { img ->
+                    val epThumb = ep.selectFirst("img")?.let { img ->
                         img.attr("data-src").ifBlank { img.attr("src") }
                     }
-                    
-                    episodes.add(newEpisode(href) {
+                    val seasonNum = Regex("""الموسم\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: Regex("""الموسم\s*(\d+)""").find(d.title())?.groupValues?.get(1)?.toIntOrNull()
+                        ?: 1
+
+                    newEpisode(fixUrl(href)) {
                         this.name = if (epNum != null) "Episode $epNum" else epTitle
                         this.episode = epNum
-                        this.posterUrl = epThumb
-                    })
+                        this.season = seasonNum
+                        this.posterUrl = epThumb?.let { fixUrl(it) }
+                    }
                 }
             }
+
+            episodes.addAll(extractEpisodesFromDoc(doc))
             
-            // If we are on an episode page and have few episodes, try to find the "Main Series" link in breadcrumbs to get full list
-            if (episodes.size <= 1 && url.contains("episode")) {
-                val seriesLink = doc.select(".breadcrumb a[href*='/series/']").attr("href")
-                if (seriesLink.isNotBlank()) {
-                    val seriesDoc = safeGet(seriesLink, url)
-                    seriesDoc.select(".allepcont .row a").forEach { ep ->
-                        val href = ep.attr("href")
-                        if (href.isNotBlank()) {
-                            val epTitle = ep.selectFirst(".ep-info h2")?.text()?.trim() ?: ""
-                            val epNum = ep.selectFirst(".epnum")?.ownText()?.filter { it.isDigit() }?.toIntOrNull() 
-                                ?: epTitle.filter { it.isDigit() }.toIntOrNull()
-                            val epThumb = ep.selectFirst(".image img")?.let { img ->
-                                img.attr("data-src").ifBlank { img.attr("src") }
-                            }
-                            
-                            episodes.add(newEpisode(href) {
-                                this.name = if (epNum != null) "Episode $epNum" else epTitle
-                                this.episode = epNum
-                                this.posterUrl = epThumb
-                            })
-                        }
+            // If on an episode page and have few/no episodes, follow breadcrumbs series or season link
+            if (episodes.size <= 1) {
+                val seriesLinks = doc.select(".breadcrumb a[href*='/series/'], .Breadcrumbs a[href*='/series/'], a[href*='/series/']")
+                // Prefer season link (last link) or main series link
+                val seriesLink = seriesLinks.lastOrNull()?.attr("href") ?: seriesLinks.firstOrNull()?.attr("href")
+                if (!seriesLink.isNullOrBlank() && fixUrl(seriesLink) != url) {
+                    val seriesDoc = safeGet(fixUrl(seriesLink), url)
+                    val fetched = extractEpisodesFromDoc(seriesDoc)
+                    if (fetched.isNotEmpty()) {
+                        episodes.clear()
+                        episodes.addAll(fetched)
                     }
                 }
             }
             
             // If still empty, add itself
             if (episodes.isEmpty()) {
+                val epNum = Regex("""الحلقة\s*(\d+)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: title.filter { it.isDigit() }.toIntOrNull()
                 episodes.add(newEpisode(url) {
                     this.name = title
-                    this.episode = title.filter { it.isDigit() }.toIntOrNull()
+                    this.episode = epNum
                     this.posterUrl = posterUrl
                 })
             }

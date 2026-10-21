@@ -71,7 +71,6 @@ graph TD
 ### ✅ نشطة ومحسنة
 | الإضافة | النوع | اسم الحزمة |
 | :--- | :--- | :--- |
-| **Cima4u Forum** | أفلام ومسلسلات مميزة | `com.lagradost.cloudstream3.cima4uforum` |
 | **ArabSeed** | أفلام ومسلسلات | `com.lagradost.cloudstream3.arabseed` |
 | **Akwam** | ترفيه عام | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | عربي وعالمي | `com.lagradost.cloudstream3.faselhd` |
@@ -79,15 +78,12 @@ graph TD
 | **MovizLand** | أفلام ومسلسلات | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimaclub` |
-| **CimaLeek** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimaleek` |
-| **CimaNow** | أفلام ومسلسلات | `com.lagradost.cloudstream3.cimanow` |
 | **QisatTv** | مسلسلات وقصص | `com.lagradost.cloudstream3.qisat` |
 | **Fushaar** | أفلام ومسلسلات | `com.lagradost.cloudstream3.fushaar` |
 | **EgyBest** | أفلام ومسلسلات | `com.lagradost.cloudstream3.egybest` |
 | **EgyDead** | أفلام ومسلسلات | `com.lagradost.cloudstream3.egydead` |
 | **MyCima** | أفلام ومسلسلات | `com.lagradost.cloudstream3.mycima` |
 | **Shahid4u** | أفلام ومسلسلات | `com.lagradost.cloudstream3.shahid4u` |
-| **GateAnime** | أنمي وأفلام | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | أنمي متخصص | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.tuk` |
 | **TopCinema** | أفلام ومسلسلات | `com.lagradost.cloudstream3.topcinema` |
@@ -101,18 +97,19 @@ graph TD
 > [!NOTE]
 > **Fushaar**: قد تفتقد بعض الملصقات. هذه مشكلة من الموقع المصدر وليس من الإضافة.
 
-> [!TIP]
-> **رمضان 2026**: يتوفر الآن مسلسلات رمضان 2026 على إضافتي **CimaNow** و **ArabSeed**. قم بتحميلهما لمشاهدة أحدث المحتويات الرمضانية!
-
 ### 🛠️ قيد التطوير (قريباً)
 - [ ] **Extra Sourced Providers** - `أفلام ومسلسلات`
 > [!TIP]
 > **هل لديك اقتراح؟** إذا كنت ترغب في رؤية موقع معين مضافاً كإضافة، تفضل بفتح "Issue" أو تواصل معنا!
-### 🚫 محظورة / لا تعمل
-هذه الإضافات محظورة حالياً من قِبل مواقعها (مثلاً: حماية Cloudflare، الحظر الجغرافي) أو تعاني من مشاكل كبيرة.
+### 🚫 محظورة / متوقفة / تحت الصيانة
+هذه الإضافات متوقفة حالياً لانتهاء نطاقات مواقعها أو خضوع مشغلاتها للصيانة وتغيير الحمايات.
 
 | الإضافة | السبب | الحالة |
 | :--- | :--- | :--- |
+| **GateAnime** | توقف الموقع وانتهاء النطاق ولا يوجد بديل | `Disabled` |
+| **Cima4u Forum** | توقف المنتدى وموقعه القديم ولا يوجد بديل حالياً | `Disabled` |
+| **CimaNow** | توقف المشغلات العامة من الموقع (تحت الصيانة) | `Under Maintenance` |
+| **CimaLeek** | تغيير نظام السيرفرات وحماية Turnstile (تحت الصيانة) | `Under Maintenance` |
 | **AnimeBlkom** | حظر Cloudflare | `Disabled` |
 | **FajerShow** | حظر Cloudflare | `Disabled` |
 | **ShahidMBC** | حظر جغرافي / DRM | `Disabled` |

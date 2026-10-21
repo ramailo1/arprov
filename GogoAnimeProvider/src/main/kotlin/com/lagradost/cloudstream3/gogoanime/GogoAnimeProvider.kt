@@ -261,6 +261,32 @@ class GogoAnimeProvider : MainAPI() {
                             Log.d("GogoAnime", "Sources response: ${sourcesJson.take(1000)}")
                             val json = org.json.JSONObject(sourcesJson)
                             val sourcesList = mutableListOf<org.json.JSONObject>()
+                            val enc = json.optString("enc", "")
+                            if (enc.isNotBlank()) {
+                                try {
+                                    val keyBytes = "i?LMTAx0Q6,:}50U".toByteArray(Charsets.UTF_8).copyOf(32)
+                                    val ivBytes = "W0;27ToaUpl_P%'c".toByteArray(Charsets.UTF_8).copyOf(16)
+                                    val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+                                    val keySpec = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+                                    val ivSpec = javax.crypto.spec.IvParameterSpec(ivBytes)
+                                    cipher.init(javax.crypto.Cipher.DECRYPT_MODE, keySpec, ivSpec)
+                                    val b64 = enc.replace('-', '+').replace('_', '/')
+                                    val decodedBytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                                    val decryptedJsonStr = String(cipher.doFinal(decodedBytes), Charsets.UTF_8)
+                                    Log.d("GogoAnime", "Decrypted enc: $decryptedJsonStr")
+                                    val decJson = org.json.JSONObject(decryptedJsonStr)
+                                    val file = decJson.optString("file", "")
+                                    if (file.isNotBlank()) {
+                                        sourcesList.add(org.json.JSONObject().apply {
+                                            put("file", file)
+                                            put("type", if (file.contains(".m3u8")) "hls" else "mp4")
+                                            put("label", "Master")
+                                        })
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("GogoAnime", "Failed to decrypt enc: ${e.message}")
+                                }
+                            }
                             json.optJSONArray("sources")?.let { arr ->
                                 for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { sourcesList.add(it) }
                             }

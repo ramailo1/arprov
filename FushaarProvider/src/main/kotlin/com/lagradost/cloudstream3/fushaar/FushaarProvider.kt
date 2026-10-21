@@ -28,12 +28,17 @@ class FushaarProvider : MainAPI() {
         val posterUrl = img.attr("data-src").ifBlank { img.attr("src") }
         val title = img.attr("alt")
         
-        return newMovieSearchResponse(
-            title,
-            fixUrl(url),
-            TvType.Movie,
-        ) {
-            this.posterUrl = fixUrl(posterUrl)
+        val isSeries = title.contains("مسلسل") || title.contains("الحلقة") || url.contains("مسلسل") || url.contains("series")
+        val type = if (isSeries) TvType.TvSeries else TvType.Movie
+
+        return if (isSeries) {
+            newTvSeriesSearchResponse(title, fixUrl(url), type) {
+                this.posterUrl = fixUrl(posterUrl)
+            }
+        } else {
+            newMovieSearchResponse(title, fixUrl(url), type) {
+                this.posterUrl = fixUrl(posterUrl)
+            }
         }
     }
 
@@ -53,28 +58,114 @@ class FushaarProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.replace(" ", "+")
-        return app.get("$mainUrl/?s=$q").document.select("article.poster").mapNotNull {
+        return app.get("$mainUrl/?s=$q").document.select("article.poster, li.video-grid").mapNotNull {
             it.toSearchResponse()
         }
     }
 
-
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
-        val title = doc.select("div.info-warpper h1").text().ifBlank { doc.title() }
+        val rawTitle = doc.select("div.info-warpper h1, h1").text().ifBlank { doc.title() }
         val posterUrl = doc.selectFirst("meta[property=\"og:image\"]")?.attr("content")
-        val year = doc.select("div.date, div.year").text().getIntFromText() ?: title.getIntFromText()
+        val year = doc.select("div.date, div.year").text().getIntFromText() ?: rawTitle.getIntFromText()
         val synopsis = doc.select("div.details > p, div.description").text()
         val tags = doc.select("div.categories a, div.tags a").map { it.text() }
         val recommendations = doc.select("li.video-grid").mapNotNull { element ->
             element.toSearchResponse()
         }
 
+        val isCategoryPage = url.contains("/category/") && !url.contains("/category/مسلسلات-اون-لاين-online-series/")
+        val breadcrumbs = doc.select("ol.breadcrumbs a, .breadcrumbs a")
+        val seriesCrumb = breadcrumbs.firstOrNull { 
+            val h = it.attr("href")
+            h.contains("/category/") && 
+            !h.contains("/category/مسلسلات-اون-لاين-online-series/") && 
+            !h.contains("/category/افلام-اون-لاين-online-movies/") &&
+            h != "$mainUrl/"
+        }
+        val isSeries = isCategoryPage || seriesCrumb != null || 
+            rawTitle.contains("مسلسل") || rawTitle.contains("الحلقة") || 
+            url.contains("مسلسل") || url.contains("الحلقة")
+
+        if (isSeries) {
+            val seriesUrl = if (isCategoryPage) url else seriesCrumb?.attr("href")
+            val cleanTitle = seriesCrumb?.text()?.ifBlank { null } 
+                ?: rawTitle.substringBefore("الحلقة").trim()
+            val episodes = mutableListOf<Episode>()
+            val targetUrl = seriesUrl ?: url
+            var nextEpPageUrl: String? = targetUrl
+            var epPage = 1
+
+            while (nextEpPageUrl != null && epPage <= 10) {
+                val epDoc = if (epPage == 1 && targetUrl == url) doc else try {
+                    app.get(fixUrl(nextEpPageUrl)).document
+                } catch (_: Exception) { null }
+
+                val items = epDoc?.select("li.video-grid") ?: emptyList()
+                if (items.isEmpty()) break
+
+                items.forEach { element ->
+                    val a = element.selectFirst("div.thumb > a") ?: element.selectFirst("a") ?: return@forEach
+                    val epHref = fixUrl(a.attr("href"))
+                    val img = a.selectFirst("img")
+                    val epPoster = img?.attr("data-src")?.ifBlank { img.attr("src") }
+                    val epTitle = img?.attr("alt")?.ifBlank { a.attr("title") } ?: a.text()
+                    val epNum = Regex("""الحلقة\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: Regex("""\d+""").find(epTitle)?.groupValues?.firstOrNull()?.toIntOrNull()
+                    val seasonNum = Regex("""الموسم\s*(\d+)""").find(epTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    episodes.add(
+                        newEpisode(epHref) {
+                            this.name = epTitle
+                            this.episode = epNum
+                            this.season = seasonNum
+                            this.posterUrl = epPoster?.let { fixUrl(it) }
+                        }
+                    )
+                }
+
+                val nextLink = epDoc?.selectFirst("a.next, .pagination a.next, a[rel='next']")?.attr("href")
+                if (!nextLink.isNullOrBlank() && nextLink != nextEpPageUrl) {
+                    nextEpPageUrl = nextLink
+                    epPage++
+                } else {
+                    nextEpPageUrl = null
+                }
+            }
+
+            if (episodes.isEmpty()) {
+                val watchUrl = doc.selectFirst("a.video-play-button, a#play-video")?.attr("href") ?: url
+                val epNum = Regex("""الحلقة\s*(\d+)""").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""\d+""").find(rawTitle)?.groupValues?.firstOrNull()?.toIntOrNull() ?: 1
+                val seasonNum = Regex("""الموسم\s*(\d+)""").find(rawTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                episodes.add(
+                    newEpisode(fixUrl(watchUrl)) {
+                        this.name = rawTitle
+                        this.episode = epNum
+                        this.season = seasonNum
+                        this.posterUrl = posterUrl?.let { fixUrl(it) }
+                    }
+                )
+            }
+
+            return newTvSeriesLoadResponse(
+                cleanTitle,
+                url,
+                TvType.TvSeries,
+                episodes.distinctBy { it.data }.reversed()
+            ) {
+                this.posterUrl = posterUrl?.let { fixUrl(it) }
+                this.year = year
+                this.plot = synopsis
+                this.tags = tags
+                this.recommendations = recommendations
+            }
+        }
+
         // The "watch" page might be different. Let's find the play button.
         val watchUrl = doc.selectFirst("a.video-play-button, a#play-video")?.attr("href") ?: url
 
         return newMovieLoadResponse(
-            title,
+            rawTitle,
             url,
             TvType.Movie,
             fixUrl(watchUrl)

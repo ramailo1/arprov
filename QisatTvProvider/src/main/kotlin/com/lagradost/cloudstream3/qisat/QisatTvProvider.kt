@@ -46,7 +46,7 @@ class QisatTvProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "/yeni-bolumler/" to "أحدث الحلقات",
         "/diziler/" to "المسلسلات التركية",
-        "/category/filmler/" to "افلام تركية"
+        "/movies/" to "افلام تركية"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

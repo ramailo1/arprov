@@ -124,29 +124,35 @@ class ArabSeedProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = safeGet(url)
-        val html = doc.toString()
-        val title = doc.selectFirst(".post__name")?.text()?.cleanTitle() ?: doc.select("h1").text()
+        val seriesLink = doc.selectFirst("a[href*='/series/']")?.attr("href")?.let { fixUrl(it) }
+        val targetUrl = seriesLink ?: url
+        val targetDoc = if (seriesLink != null && seriesLink != url) safeGet(seriesLink, url) else doc
 
-        val seasonTabs = doc.select("#seasons__list li[data-season]")
-        val isMovie = seasonTabs.isEmpty()
+        val title = targetDoc.selectFirst(".post__name")?.text()?.cleanTitle()
+            ?: doc.selectFirst(".post__name")?.text()?.cleanTitle()
+            ?: doc.select("h1").text().cleanTitle()
 
-        val posterUrl = doc.selectFirst(".images__loader img")?.attr("data-src")
-            ?: doc.selectFirst(".poster__single img")?.attr("src")
-            ?: doc.selectFirst(".poster__single img")?.attr("data-src")
-            ?: doc.selectFirst(".poster img")?.attr("data-src")
-            ?: doc.selectFirst(".single__poster img")?.attr("data-src")
+        val seasonTabs = targetDoc.select("#seasons__list li[data-season], .seasons__list li[data-season], li[data-season]")
+        val isMovie = seasonTabs.isEmpty() && !targetUrl.contains("/series/") && !url.contains("مسلسل")
+
+        val posterUrl = targetDoc.selectFirst(".images__loader img")?.attr("data-src")
+            ?: targetDoc.selectFirst(".poster__single img")?.attr("src")
+            ?: targetDoc.selectFirst(".poster__single img")?.attr("data-src")
+            ?: targetDoc.selectFirst(".poster img")?.attr("data-src")
+            ?: targetDoc.selectFirst(".single__poster img")?.attr("data-src")
+            ?: targetDoc.selectFirst("img[data-src]")?.attr("data-src")
             ?: doc.selectFirst("img[data-src]")?.attr("data-src")
-            ?: doc.selectFirst(".images__loader img")?.attr("src")
 
-        val synopsis = doc.select(".single__contents").text()
+        val synopsis = targetDoc.select(".single__contents").text()
             .replace("قصة العرض :", "")
             .replace("قصة العرض", "")
             .trim()
 
-        val year = doc.select("a[href*='/release-year/']").text().getIntFromText()
-        val tags = doc.select("a[href*='/genre/']").map { it.text() }
+        val year = targetDoc.select("a[href*='/release-year/']").text().getIntFromText()
+            ?: doc.select("a[href*='/release-year/']").text().getIntFromText()
+        val tags = targetDoc.select("a[href*='/genre/']").map { it.text() }
 
-        val actors = doc.select("a[href*='/actor/']").mapNotNull {
+        val actors = targetDoc.select("a[href*='/actor/']").mapNotNull {
             val name = it.selectFirst("h3")?.text() ?: return@mapNotNull null
             val image = it.selectFirst("img")?.attr("data-src") ?: it.selectFirst("img")?.attr("src")
             val roleString = it.selectFirst("span")?.text()
@@ -154,7 +160,7 @@ class ArabSeedProvider : MainAPI() {
             ActorData(actor = mainActor, roleString = roleString)
         }
 
-        val recommendations = doc.select("a.movie__block").mapNotNull {
+        val recommendations = targetDoc.select("a.movie__block").mapNotNull {
             it.toSearchResponse()
         }
 
@@ -173,69 +179,81 @@ class ArabSeedProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val csrfToken = extractToken(html)
-            val seriesId = seasonTabs.firstOrNull()?.attr("data-series")
-                ?: doc.selectFirst("#seasons__list li")?.attr("data-series")
-
             val episodes = arrayListOf<Episode>()
-            val defaultHtml = doc.selectFirst(".episodes__list")?.html() ?: ""
 
-            for ((index, tab) in seasonTabs.withIndex()) {
-                val seasonId = tab.attr("data-season")
-                val seasonNumber = index + 1
-                val isSelected = tab.hasClass("selected")
+            if (seasonTabs.isNotEmpty()) {
+                for ((index, tab) in seasonTabs.withIndex()) {
+                    val seasonId = tab.attr("data-season")
+                    val seasonNumber = tab.text().getIntFromText() ?: (index + 1)
 
-                val episodesHtml = if (isSelected && defaultHtml.isNotEmpty()) {
-                    defaultHtml
-                } else if (seriesId != null && csrfToken != null) {
-                    try {
-                        val resp = app.post(
-                            "$mainUrl/season__episodes/",
-                            data = mapOf(
-                                "series_id" to seriesId,
-                                "season_id" to seasonId,
-                                "csrf_token" to csrfToken
-                            ),
-                            headers = mapOf(
-                                "Referer" to url,
-                                "User-Agent" to USER_AGENT,
-                                "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
+                    if (seasonId.isNotBlank()) {
+                        try {
+                            val resp = app.post(
+                                "$mainUrl/wp-admin/admin-ajax.php",
+                                data = mapOf(
+                                    "action" to "load_episodes",
+                                    "season" to seasonId,
+                                    "page" to "1"
+                                ),
+                                headers = mapOf(
+                                    "Referer" to targetUrl,
+                                    "User-Agent" to USER_AGENT,
+                                    "Content-Type" to "application/x-www-form-urlencoded"
+                                )
                             )
-                        )
-                        JSONObject(resp.text).optString("html", "")
-                    } catch (e: Exception) {
-                        ""
-                    }
-                } else {
-                    ""
-                }
-
-                if (episodesHtml.isNotEmpty()) {
-                    val episodeDoc = Jsoup.parse(episodesHtml)
-                    for (a in episodeDoc.select("a[href]")) {
-                        val href = fixUrl(a.attr("href"))
-                        if (href.contains("الحلقة", ignoreCase = true)
-                            || href.contains("%d8%a7%d9%84%d8%ad%d9%84%d9%82%d8%a9", ignoreCase = true)
-                        ) {
-                            val episodeName = a.text()
-                            val episodeNumber = a.selectFirst("b")?.text()?.toIntOrNull()
-                                ?: episodeName.getIntFromText()
-                            episodes.add(
-                                newEpisode(href) {
-                                    this.name = episodeName
-                                    this.episode = episodeNumber
-                                    this.season = seasonNumber
-                                }
-                            )
+                            val episodeDoc = Jsoup.parse(resp.text)
+                            for (a in episodeDoc.select("a[href]")) {
+                                val href = fixUrl(a.attr("href"))
+                                val episodeName = a.text().trim()
+                                val episodeNumber = a.selectFirst("b")?.text()?.toIntOrNull()
+                                    ?: episodeName.getIntFromText()
+                                episodes.add(
+                                    newEpisode(href) {
+                                        this.name = if (episodeNumber != null) "الحلقة $episodeNumber" else episodeName
+                                        this.episode = episodeNumber
+                                        this.season = seasonNumber
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {
+                            // ignore season episode load error
                         }
                     }
                 }
             }
 
+            // Fallback: Check if page itself has episodes listed
+            if (episodes.isEmpty()) {
+                for (a in targetDoc.select("#episodes_container a, .episodes__list a, .Episodes--List a, a[href*='الحلقة']")) {
+                    val href = fixUrl(a.attr("href"))
+                    val episodeName = a.text().trim()
+                    val episodeNumber = episodeName.getIntFromText()
+                    episodes.add(
+                        newEpisode(href) {
+                            this.name = if (episodeNumber != null) "الحلقة $episodeNumber" else episodeName
+                            this.episode = episodeNumber
+                            this.season = 1
+                        }
+                    )
+                }
+            }
+
+            // Fallback if still empty: add the current URL as episode
+            if (episodes.isEmpty() && url.contains("الحلقة")) {
+                val epNum = url.getIntFromText()
+                episodes.add(
+                    newEpisode(url) {
+                        this.name = if (epNum != null) "الحلقة $epNum" else title
+                        this.episode = epNum
+                        this.season = 1
+                    }
+                )
+            }
+
             val sortedEpisodes = episodes.distinctBy { it.data }
                 .sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }))
 
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, sortedEpisodes) {
+            newTvSeriesLoadResponse(title, targetUrl, TvType.TvSeries, sortedEpisodes) {
                 this.posterUrl = posterUrl
                 this.tags = tags
                 this.plot = synopsis

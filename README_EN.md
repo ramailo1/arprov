@@ -71,48 +71,46 @@ graph TD
 ### ✅ Active & Optimized
 | Provider | Genre | Package Name |
 | :--- | :--- | :--- |
-| **Cima4u Forum** | Premium Movies/Series | `com.lagradost.cloudstream3.cima4uforum` |
 | **ArabSeed** | Movies & Series | `com.lagradost.cloudstream3.arabseed` |
 | **Akwam** | General Entertainment | `com.lagradost.cloudstream3.akwam` |
 | **FaselHD** | Arabic & International | `com.lagradost.cloudstream3.faselhd` |
 | **Anime4up** | Anime & Movies | `com.lagradost.cloudstream3` |
-| **Animeiat** | Dedicated Anime | `com.lagradost.cloudstream3.animeiat` |
 | **MovizLand** | Movies & Series | `com.lagradost.cloudstream3.movizlands` |
 | **Cima4U** | Movies & Series | `com.lagradost.cloudstream3.cima4u` |
 | **CimaClub** | Movies & Series | `com.lagradost.cloudstream3.cimaclub` |
-| **CimaLeek** | Movies & Series | `com.lagradost.cloudstream3.cimaleek` |
-| **CimaNow** | Movies & Series | `com.lagradost.cloudstream3.cimanow` |
 | **QisatTv** | Series & Story | `com.lagradost.cloudstream3.qisat` |
 | **Fushaar** | Movies & Series | `com.lagradost.cloudstream3.fushaar` |
 | **EgyBest** | Movies & Series | `com.lagradost.cloudstream3.egybest` |
 | **EgyDead** | Movies & Series | `com.lagradost.cloudstream3.egydead` |
 | **MyCima** | Movies & Series | `com.lagradost.cloudstream3.mycima` |
 | **Shahid4u** | Movies & Series | `com.lagradost.cloudstream3.shahid4u` |
-| **GateAnime** | Anime & Movies | `com.lagradost.cloudstream3.gateanime` |
 | **RistoAnime** | Dedicated Anime | `com.lagradost.cloudstream3.ristoanime` |
 | **Tuk Tuk Cinema** | Movies & Series | `com.lagradost.cloudstream3.tuk` |
 | **TopCinema** | Movies & Series | `com.lagradost.cloudstream3.topcinema` |
 | **Shoffree** | Movies & Series | `com.lagradost.cloudstream3.shoffree` |
 | **Alkawthar TV** | Series, Movies & Documentaries | `com.lagradost.cloudstream3.alkawthar` |
+| **GogoAnime** | Anime (Sub/Dub) | `com.lagradost.cloudstream3.gogoanime` |
 
 > [!NOTE]
 > **Fushaar**: Some posters may be missing. This is an issue with the source website, not the extension.
-
-> [!TIP]
-> **Ramadan 2026**: Ramadan 2026 series are now available on **CimaNow** and **ArabSeed** providers. Download them to watch the latest Ramadan content!
 
 ### 🛠️ In Development (Coming Soon)
 - [ ] **Extra Sourced Providers** - `Movies & Series`
 > [!TIP]
 > **Have a suggestion?** If you'd like to see a specific website added as a provider, feel free to open an issue or reach out!
-### 🚫 Blocked / Not Working
-These providers are currently blocked by their respective websites (e.g., Cloudflare, geoblocking) or have significant issues.
+### 🚫 Blocked / Discontinued / Under Maintenance
+These providers are currently blocked, discontinued due to expired domains, or undergoing provider server maintenance.
 
 | Provider | Reason | Status |
 | :--- | :--- | :--- |
+| **GateAnime** | Domain expired and website discontinued with no alternative | `Disabled` |
+| **Cima4u Forum** | Forum website shut down with no current alternative | `Disabled` |
+| **CimaNow** | Public player servers disabled / undergoing maintenance | `Under Maintenance` |
+| **CimaLeek** | Turnstile protection and server system overhaul | `Under Maintenance` |
 | **AnimeBlkom** | Cloudflare Block | `Disabled` |
 | **FajerShow** | Cloudflare Block | `Disabled` |
 | **ShahidMBC** | Geo-blocked / DRM | `Disabled` |
+| **Animeiat** | Website Closed | `Disabled` |
 
 ---
 

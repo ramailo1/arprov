@@ -346,12 +346,13 @@ class ShoffreeProvider : MainAPI() {
         val plot = doc.selectFirst("meta[property='og:description']")?.attr("content") ?: ""
         val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
         
-        val id = extractId(url)
-        val slug = extractSlug(url)
-        val watchUrl = if (id.isNotBlank() && slug.isNotBlank()) {
-            "$mainUrl/watch/movie/$id/$slug"
+        val watchHref = doc.selectFirst("a[href*='/watch/']")?.attr("href")
+        val watchUrl = if (!watchHref.isNullOrBlank()) {
+            fixUrl(watchHref)
         } else {
-            url
+            val id = extractId(url)
+            val slug = extractSlug(url)
+            if (id.isNotBlank() && slug.isNotBlank()) "$mainUrl/watch/movie/$id/$slug" else url
         }
         
         println("ShoffreeProvider: Movie: $title ($year), watchUrl: $watchUrl")
@@ -379,53 +380,72 @@ class ShoffreeProvider : MainAPI() {
         val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
         println("ShoffreeProvider: Type=${if (isAnime) "Anime" else "TvSeries"}")
 
-        val seasonCards = doc.select("#seasons-area .season-card-unified, #seasons-area .season-card, .seasons-area a, .seasons-list a, .season-list-item, .season-card")
-        println("ShoffreeProvider: Found ${seasonCards.size} season card(s)")
-
         val allEpisodes = mutableListOf<Episode>()
 
-        if (seasonCards.isEmpty()) {
-            val firstEpLink = doc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
-            if (firstEpLink != null) {
-                val watchUrl = firstEpLink.attr("href")
-                println("ShoffreeProvider: Single season — first episode link: $watchUrl")
-                try {
-                    val watchDoc = app.get(watchUrl).document
-                    val eps = extractEpisodesFromSidebar(watchDoc, title)
-                    eps.forEach { it.season = 1 }
-                    allEpisodes.addAll(eps)
-                } catch (e: Exception) {
-                    println("ShoffreeProvider: Failed to fetch watch page sidebar: ${e.message}")
+        // 1. Direct page episode links (new theme)
+        val directEpisodeLinks = doc.select("#episodes-area a[href*='/watch/'], #episodes_serie a[href*='/watch/'], .shoffree-item a[href*='/watch/'], a[href*='/watch/']").filter { el ->
+            val href = el.attr("href")
+            val text = el.text()
+            (href.contains("episode-") || href.contains("/episode/") || text.contains("الحلقة")) && !text.contains("مشاهدة الآن")
+        }
+
+        if (directEpisodeLinks.isNotEmpty()) {
+            directEpisodeLinks.forEach { el ->
+                val epUrl = fixUrl(el.attr("href"))
+                val text = el.text().trim()
+                val epNum = Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""/episode/(\d+)""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
+                val epName = if (epNum != null) "الحلقة $epNum" else text
+                allEpisodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = epNum
+                        this.season = 1
+                    }
+                )
+            }
+        }
+
+        // 2. Fallback to season cards or sidebar if no direct episodes
+        if (allEpisodes.isEmpty()) {
+            val seasonCards = doc.select("#seasons-area .season-card-unified, #seasons-area .season-card, .seasons-area a, .seasons-list a, .season-list-item, .season-card")
+            if (seasonCards.isEmpty()) {
+                val firstEpLink = doc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
+                if (firstEpLink != null) {
+                    val watchUrl = firstEpLink.attr("href")
+                    try {
+                        val watchDoc = app.get(watchUrl).document
+                        val eps = extractEpisodesFromSidebar(watchDoc, title)
+                        eps.forEach { it.season = 1 }
+                        allEpisodes.addAll(eps)
+                    } catch (e: Exception) {
+                        println("ShoffreeProvider: Failed to fetch watch page sidebar: ${e.message}")
+                    }
                 }
             } else {
-                println("ShoffreeProvider: No episode links found on series page")
-            }
-        } else {
-            for (card in seasonCards) {
-                val link = card.selectFirst("a[href]")?.attr("href") ?: continue
-                val label = card.selectFirst(".s-year")?.text() ?: ""
-                val seasonNum = extractSeasonNumber(label)
-                println("ShoffreeProvider: Season $seasonNum ($label) -> $link")
+                for (card in seasonCards) {
+                    val link = card.selectFirst("a[href]")?.attr("href") ?: continue
+                    val label = card.selectFirst(".s-year")?.text() ?: ""
+                    val seasonNum = extractSeasonNumber(label)
 
-                try {
-                    val seasonDoc = if (link == url) doc else app.get(link).document
-                    val epLink = seasonDoc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
-                    if (epLink != null) {
-                        val watchDoc = app.get(epLink.attr("href")).document
-                        val eps = extractEpisodesFromSidebar(watchDoc, title)
-                        eps.forEach { it.season = seasonNum }
-                        allEpisodes.addAll(eps)
-                        println("ShoffreeProvider: Season $seasonNum -> ${eps.size} episodes")
-                    } else {
-                        println("ShoffreeProvider: No episode links for season $seasonNum")
+                    try {
+                        val seasonDoc = if (link == url) doc else app.get(link).document
+                        val epLink = seasonDoc.selectFirst("a[href*='/watch/'][href*='/episode/'], a[href*='/watch/']:not([href*='/movie/']):not([href*='/wrestling/']):not([href*='/theater/'])")
+                        if (epLink != null) {
+                            val watchDoc = app.get(epLink.attr("href")).document
+                            val eps = extractEpisodesFromSidebar(watchDoc, title)
+                            eps.forEach { it.season = seasonNum }
+                            allEpisodes.addAll(eps)
+                        }
+                    } catch (e: Exception) {
+                        println("ShoffreeProvider: Failed to load season $seasonNum: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    println("ShoffreeProvider: Failed to load season $seasonNum: ${e.message}")
                 }
             }
         }
 
-        val sorted = allEpisodes.sortedBy { (it.season ?: 1) * 10000 + (it.episode ?: 0) }
+        val sorted = allEpisodes.distinctBy { it.data }.sortedBy { (it.season ?: 1) * 10000 + (it.episode ?: 0) }
         println("ShoffreeProvider: \"$title\" total=${sorted.size} episodes across seasons")
 
         return newTvSeriesLoadResponse(title, url, tvType, sorted) {

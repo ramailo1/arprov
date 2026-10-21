@@ -141,11 +141,7 @@ class CimaClubProvider : MainAPI() {
             
             potentialEpisodes.forEach { epLink ->
                 val href = epLink.attr("href")
-                val decodedHref = try { java.net.URLDecoder.decode(href, "UTF-8") } catch(e:Exception) { href }
-                val text = epLink.text()
-                
-                // Still do basic sanity checks, but rely mostly on the container
-                if (href.isNotBlank()) {
+                if (href.isNotBlank() && !href.contains("/series/")) {
                      val epUrl = fixUrl(href)
                      val epTitle = epLink.text().trim()
                      
@@ -303,7 +299,11 @@ class CimaClubProvider : MainAPI() {
 
         // 2. Identify the Watch Page URL
         var watchPageUrl = data
-        val watchButton = doc.selectFirst("a.watch, a:contains(مشاهدة وتحميل), .watch-btn")
+        val watchButton = doc.select("a[href*='/watch'], a.watch, a.watch-btn, a:contains(مشاهدة وتحميل)")
+            .firstOrNull { 
+                val h = it.attr("href")
+                h.isNotBlank() && !h.startsWith("javascript") && !h.contains("/views") && !h.contains("/series/") && h != "$mainUrl/"
+            }
         
         if (watchButton != null) {
              val href = watchButton.attr("href")
@@ -311,8 +311,6 @@ class CimaClubProvider : MainAPI() {
                  watchPageUrl = fixUrl(href)
              }
         } else if (!data.endsWith("/watch") && !data.endsWith("/watch/")) {
-             // Fallback: try appending /watch if not found, but only if we suspect it's needed
-             // Be careful not to break direct server links if they ever exist
              val testUrl = if (data.endsWith("/")) "${data}watch" else "$data/watch"
              watchPageUrl = testUrl
         }

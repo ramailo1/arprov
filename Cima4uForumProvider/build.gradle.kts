@@ -3,11 +3,11 @@ version = 10
 
 cloudstream {
     language = "ar"
-    status = 1
+    status = 0
     tvTypes = listOf("TvSeries", "Movie", "Anime")
     iconUrl = "https://www.google.com/s2/favicons?domain=cima4u.actor&sz=%size%"
     authors = listOf("ramailo1")
-    description = "Cima4u.forum Provider - (Working)"
+    description = "Cima4u.forum Provider - (Discontinued / Site Offline)"
 }
 android {
     namespace = "com.lagradost.cloudstream3.cima4uforum"

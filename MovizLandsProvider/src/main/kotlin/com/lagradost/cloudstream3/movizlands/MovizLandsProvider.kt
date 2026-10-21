@@ -134,7 +134,8 @@ private fun getSeasonFromString(sName: String): Int {
         }
 
         // Title
-        var title = doc.select("h1.PostTitle, h1.video-title, h1").text().cleanTitle()
+        val rawTitle = doc.select("h1.PostTitle, h1.video-title, h1").text()
+        var title = rawTitle.cleanTitle()
         
         // Year
         val year = doc.select(".RightTaxContent li:has(.fa-calendar) a, .video-meta").text()?.getIntFromText()
@@ -152,7 +153,8 @@ private fun getSeasonFromString(sName: String): Int {
             it.toSearchResponse()
         }
 
-        val isMovie = title.contains("عرض|فيلم".toRegex()) || !title.contains("مسلسل")
+        val isMovie = url.contains("/movies/") || url.contains("/film/") ||
+                (!url.contains("/series/") && (rawTitle.contains("فيلم|عرض".toRegex()) || !rawTitle.contains("مسلسل")))
 
         return if (isMovie) {
             val watchHref = doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href")
@@ -166,10 +168,11 @@ private fun getSeasonFromString(sName: String): Int {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElements = doc.select(".allepcont a, .episodes-list a, .EpisodesList .EpisodeItem, a:has(.epnum), a[href*='/series/'], a[href*='episode'], a[href*='ep-']").filter { el ->
+            val episodeElements = doc.select("a.episode-card, .allepcont a, .episodes-list a, .EpisodesList .EpisodeItem, a:has(.epnum), a[href*='/series/'], a[href*='-episode-'], a[href*='ep-']").filter { el ->
                 val text = el.text()
                 val href = el.attr("href")
-                (text.contains("الحلقة") || href.contains("episode") || href.contains("ep-")) && !text.contains("Full")
+                val aria = el.attr("aria-label")
+                (aria.contains("الحلقة") || text.contains("الحلقة") || href.contains("episode") || href.contains("ep-")) && !text.contains("Full")
             }
             
             if (episodeElements.isNotEmpty()) {
@@ -178,11 +181,16 @@ private fun getSeasonFromString(sName: String): Int {
                     val rawEpUrl = aTag?.attr("abs:href") ?: ""
                     val epUrl = rawEpUrl.replace("//watch/", "/watch/")
                     if (epUrl.isNotEmpty()) {
+                        val epNum = element.attr("aria-label").getIntFromText()
+                            ?: element.select(".episode-number, .epnum, em").text().getIntFromText()
+                            ?: Regex("""(\d+)""").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
+                        val epName = element.select("div.ep-info h2, .episode-title").text().ifEmpty {
+                            if (epNum != null) "الحلقة $epNum" else element.text().trim()
+                        }
                         episodes.add(
                             newEpisode(epUrl) {
-                                this.episode = element.select(".epnum, em").text().getIntFromText()
-                                    ?: Regex("""(\d+)""").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
-                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text().trim() }
+                                this.episode = epNum
+                                this.name = epName
                                 this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
                             }
                         )
@@ -190,7 +198,7 @@ private fun getSeasonFromString(sName: String): Int {
                 }
             }
 
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.tags = tags
@@ -243,11 +251,22 @@ private fun getSeasonFromString(sName: String): Int {
                                 "360" -> Qualities.P360.value
                                 else -> Qualities.P720.value
                             }
+                            var finalSrc = src
+                            if (src.contains("?h=")) {
+                                val h = src.substringAfter("?h=").substringBefore("&")
+                                try {
+                                    val host = String(android.util.Base64.decode(h, android.util.Base64.DEFAULT)).trim()
+                                    val path = src.substringAfter("upbom.cam").substringBefore("?h=")
+                                    if (host.isNotEmpty() && path.isNotEmpty()) {
+                                        finalSrc = "http://$host$path"
+                                    }
+                                } catch (_: Exception) {}
+                            }
                             callback(
                                 newExtractorLink(
                                     "Upbom",
                                     "Upbom ${size}p",
-                                    src,
+                                    finalSrc,
                                     type = ExtractorLinkType.VIDEO
                                 ) {
                                     this.referer = "https://upbom.cam/"
