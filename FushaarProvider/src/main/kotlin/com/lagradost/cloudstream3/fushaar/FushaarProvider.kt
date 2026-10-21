@@ -156,11 +156,24 @@ class FushaarProvider : MainAPI() {
                 if (loadExtractorDirect(playerUrl, data, subtitleCallback, callback)) anySuccess = true
             }
 
-        // Method 4: Check iframes on page
+        // Method 4: Check iframes on page (including internal /embed/ pages)
         doc.select("iframe[src]").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
             if (src.startsWith("http")) {
+                if (src.contains("fushar") && src.contains("/embed/")) {
+                    try {
+                        val embedDoc = app.get(src, referer = data).document
+                        embedDoc.select("iframe[src]").forEach { innerIframe ->
+                            var innerSrc = innerIframe.attr("src")
+                            if (innerSrc.startsWith("//")) innerSrc = "https:$innerSrc"
+                            if (innerSrc.startsWith("http")) {
+                                if (loadExtractorDirect(innerSrc, src, subtitleCallback, callback)) anySuccess = true
+                            }
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
                 if (loadExtractorDirect(src, data, subtitleCallback, callback)) anySuccess = true
             }
         }

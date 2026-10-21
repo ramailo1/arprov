@@ -133,13 +133,13 @@ class MyCimaProvider : MainAPI() {
         val body = doc.body().text().lowercase()
         val actualUrl = doc.location()
         
+        val hasCfChallenge = doc.select("#challenge-running, #challenge-form, #cf-wrapper, div.cf-turnstile, #turnstile-wrapper").isNotEmpty()
         val blocked = title.contains("just a moment") || 
                title.contains("security verification") || 
                title.contains("access denied") ||
-               title.contains("cloudflare") ||
                title.contains("verify you are human") ||
                title.contains("performing security verification") ||
-               body.contains("cloudflare") ||
+               hasCfChallenge ||
                body.contains("verifying you are not a bot") ||
                body.contains("performing security verification") ||
                body.contains("checking your browser")

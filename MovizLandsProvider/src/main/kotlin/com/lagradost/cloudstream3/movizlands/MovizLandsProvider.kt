@@ -155,7 +155,9 @@ private fun getSeasonFromString(sName: String): Int {
         val isMovie = title.contains("عرض|فيلم".toRegex()) || !title.contains("مسلسل")
 
         return if (isMovie) {
-            newMovieLoadResponse(title, url, TvType.Movie, doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href")) {
+            val watchHref = doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href")
+            val watchData = if (watchHref.isNotEmpty()) watchHref.replace("//watch/", "/watch/") else "${url.trimEnd('/')}/watch/"
+            newMovieLoadResponse(title, url, TvType.Movie, watchData) {
                 this.posterUrl = posterUrl
                 this.year = year
                 this.tags = tags
@@ -164,17 +166,23 @@ private fun getSeasonFromString(sName: String): Int {
             }
         } else {
             val episodes = ArrayList<Episode>()
-            val episodeElements = doc.select(".allepcont a, .episodes-list a, .EpisodesList .EpisodeItem")
+            val episodeElements = doc.select(".allepcont a, .episodes-list a, .EpisodesList .EpisodeItem, a:has(.epnum), a[href*='/series/'], a[href*='episode'], a[href*='ep-']").filter { el ->
+                val text = el.text()
+                val href = el.attr("href")
+                (text.contains("الحلقة") || href.contains("episode") || href.contains("ep-")) && !text.contains("Full")
+            }
             
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { element ->
                     val aTag = if (element.tagName() == "a") element else element.selectFirst("a")
-                    val epUrl = aTag?.attr("abs:href") ?: ""
-                    if (epUrl.isNotEmpty() && !element.text().contains("Full")) {
+                    val rawEpUrl = aTag?.attr("abs:href") ?: ""
+                    val epUrl = rawEpUrl.replace("//watch/", "/watch/")
+                    if (epUrl.isNotEmpty()) {
                         episodes.add(
                             newEpisode(epUrl) {
                                 this.episode = element.select(".epnum, em").text().getIntFromText()
-                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text() }
+                                    ?: Regex("""(\d+)""").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
+                                this.name = element.select("div.ep-info h2").text().ifEmpty { element.text().trim() }
                                 this.posterUrl = element.select("img").attr("data-src").ifEmpty { element.select("img").attr("src") }
                             }
                         )
@@ -199,34 +207,75 @@ private fun getSeasonFromString(sName: String): Int {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        val cleanData = data.replace("//watch/", "/watch/")
+        val doc = app.get(cleanData).document
         
         val watchUrl = if (doc.select("ul#watch li, .server-card").isNotEmpty()) {
-            data
+            cleanData
         } else {
-            doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
-                ?: doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href").takeIf { it.isNotEmpty() }
-                ?: if (data.endsWith("/watch/")) data else "${data.trimEnd('/')}/watch/"
+            val btnHref = doc.select(".BTNSDownWatch a.watch, a.watch-btn, a[href*='/watch/']").attr("abs:href")
+                .ifEmpty { doc.select(".WatchBar a, .WatchBar button, a[href*='/watch/']").attr("abs:href") }
+            if (btnHref.isNotEmpty()) {
+                btnHref.replace("//watch/", "/watch/")
+            } else if (cleanData.endsWith("/watch/")) {
+                cleanData
+            } else {
+                "${cleanData.trimEnd('/')}/watch/"
+            }
         }
 
-        val watchDoc = if (watchUrl == data) doc else app.get(watchUrl).document
-        
-        watchDoc.select("ul#watch li, .server-card, a[data-src], div[data-src], button[data-src]").forEach { el ->
-            val serverUrl = el.attr("data-src").ifEmpty { el.attr("data-watch") }
-            if (serverUrl.startsWith("http")) {
-                loadExtractor(serverUrl, data, subtitleCallback) { link ->
+        val watchDoc = if (watchUrl == cleanData) doc else app.get(watchUrl).document
+
+        val handleUrl: suspend (String) -> Unit = { rawUrl ->
+            var url = rawUrl
+            if (url.startsWith("//")) url = "https:$url"
+            if (url.startsWith("http")) {
+                if (url.contains("upbom")) {
+                    try {
+                        val upbomDoc = app.get(url, referer = mainUrl).document
+                        upbomDoc.select("source[src]").forEach { source ->
+                            val src = source.attr("src")
+                            val size = source.attr("size").ifEmpty { "720" }
+                            val quality = when (size) {
+                                "1080" -> Qualities.P1080.value
+                                "720" -> Qualities.P720.value
+                                "480" -> Qualities.P480.value
+                                "360" -> Qualities.P360.value
+                                else -> Qualities.P720.value
+                            }
+                            callback(
+                                newExtractorLink(
+                                    "Upbom",
+                                    "Upbom ${size}p",
+                                    src,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://upbom.cam/"
+                                    this.quality = quality
+                                }
+                            )
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                loadExtractor(url, data, subtitleCallback) { link ->
                     callback(link)
                 }
             }
         }
+        
+        watchDoc.select("ul#watch li, .server-card, a[data-src], div[data-src], button[data-src]").forEach { el ->
+            val serverUrl = el.attr("data-src").ifEmpty { el.attr("data-watch") }
+            if (serverUrl.isNotEmpty()) {
+                handleUrl(serverUrl)
+            }
+        }
 
         watchDoc.select("iframe[src]").forEach { iframe ->
-            var src = iframe.attr("src")
-            if (src.startsWith("//")) src = "https:$src"
-            if (src.startsWith("http")) {
-                loadExtractor(src, data, subtitleCallback) { link ->
-                    callback(link)
-                }
+            val src = iframe.attr("src")
+            if (src.isNotEmpty()) {
+                handleUrl(src)
             }
         }
         return true

@@ -160,7 +160,7 @@ class EgyBestProvider : MainAPI() {
     // ======= MAIN PAGE =======
     override val mainPage = mainPageOf(
         "$mainUrl/" to "أحدث الاضافات",
-        "$mainUrl/category/movies/" to "أفلام",
+        "$mainUrl/movies/" to "أفلام",
         "$mainUrl/series/" to "مسلسلات",
         "$mainUrl/category/anime/" to "انمي",
     )

@@ -53,7 +53,7 @@ class QisatTvProvider : MainAPI() {
         val doc = app.get(fixUrl(request.data)).document
         val items = mutableListOf<SearchResponse>()
 
-        val selector = "a[href*=\"-episode-\"], div.post-card a, div.block-post, a[href*=/series/], a[href*=/movie/]"
+        val selector = "a[href*=\"-episode-\"], div.post-card a, div.block-post, a[href*=\"/series/\"], a[href*=\"/movie/\"], a[href*=\"/yeni-show/\"]"
         
         doc.select(selector).forEach { element ->
             val a = if (element.tagName() == "a") element else element.selectFirst("a") ?: return@forEach
@@ -136,7 +136,8 @@ class QisatTvProvider : MainAPI() {
         // Check if page has episodes list (new structure check)
         val isSeries = doc.select("article.postEp, div.postEp, a.ep-item").isNotEmpty() ||
                        doc.select("body").hasClass("single-series") || 
-                       finalUrl.contains("/series/")
+                       finalUrl.contains("/series/") ||
+                       finalUrl.contains("/yeni-show/")
 
         val episodes = mutableListOf<Episode>()
 

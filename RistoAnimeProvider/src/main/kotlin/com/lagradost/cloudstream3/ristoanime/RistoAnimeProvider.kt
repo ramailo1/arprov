@@ -109,8 +109,10 @@ class RistoAnimeProvider : MainAPI() {
         val doc = app.get(cleanUrl, headers = headers()).document
         politeDelay()
 
-        val title = doc.selectFirst("h1.PostTitle, .PostTitle, h1")?.text()?.trim()
-            ?: return null
+        val title = doc.selectFirst("h1.PostTitle, .PostTitle")?.text()?.trim()
+            ?: doc.select("h1").firstOrNull { !it.text().equals("RISTO", ignoreCase = true) }?.text()?.trim()
+            ?: doc.title().replace("RISTO", "", ignoreCase = true).replace("|", "").trim()
+            .ifEmpty { return null }
 
         val poster = fixUrlNull(doc.extractPoster())
         val description = doc.selectFirst(".StoryArea p, .StoryArea, .description, .plot, .summary")?.text()?.trim()
@@ -223,10 +225,34 @@ class RistoAnimeProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val postUrl = data.replaceDomain().removeSuffix("/watch").removeSuffix("/download")
-        val postDoc = app.get(postUrl, headers = headers()).document
-        politeDelay(300)
 
-        // Extract the post_id from inline JS (used in Rate.php, Trailer.php etc.)
+        // 1. Check direct /watch page first
+        try {
+            val watchDoc = app.get("$postUrl/watch", headers = headers()).document
+            watchDoc.select("ul#watch li[data-watch], [data-watch]").forEach { li ->
+                val embedUrl = li.attr("data-watch").trim()
+                if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {
+                    try {
+                        loadExtractor(embedUrl, postUrl, subtitleCallback, callback)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            watchDoc.select("iframe[src]").forEach { iframe ->
+                var src = iframe.attr("src").trim()
+                if (src.startsWith("//")) src = "https:$src"
+                if (src.isNotBlank() && src.startsWith("http")) {
+                    try {
+                        loadExtractor(src, postUrl, subtitleCallback, callback)
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2. Also check post page and AJAX Watch.php
+        val postDoc = app.get(postUrl, headers = headers()).document
+        politeDelay(200)
+
         val pageHtml = postDoc.html()
         val postId = Regex("""'id'\s*,\s*'(\d+)'""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""id:\s*'(\d+)'""").find(pageHtml)?.groupValues?.get(1)
@@ -235,13 +261,11 @@ class RistoAnimeProvider : MainAPI() {
             ?: Regex("""AjaxtURL\+'Rate\.php'.*?id=(\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""'id=\d+&id=(\d+)'""").find(pageHtml)?.groupValues?.get(1)
 
-        // Extract the AjaxtURL from inline JS
         val ajaxUrl = Regex("""var AjaxtURL\s*=\s*"(.*?)"""").find(pageHtml)?.groupValues?.get(1)?.replaceDomain()
             ?: "$mainUrl/wp-content/themes/TopAnime/Ajaxt/"
 
         if (postId != null) {
             try {
-                // Call the Watch.php AJAX endpoint to get server list
                 val watchResponse = app.post(
                     "${ajaxUrl}Single/Watch.php",
                     data = mapOf("id" to postId),
@@ -254,8 +278,7 @@ class RistoAnimeProvider : MainAPI() {
 
                 val watchDoc = Jsoup.parse(watchResponse)
 
-                // Each <li data-watch="EMBED_URL"> contains an embed link
-                watchDoc.select("ul#watch li[data-watch]").forEach { li ->
+                watchDoc.select("ul#watch li[data-watch], [data-watch]").forEach { li ->
                     val embedUrl = li.attr("data-watch").trim()
                     if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {
                         try {
@@ -264,7 +287,6 @@ class RistoAnimeProvider : MainAPI() {
                     }
                 }
 
-                // Download section: <div class="ServersList Download"> <ul> <li> <a href="...">
                 watchDoc.select(".ServersList.Download ul li a[href]").forEach { a ->
                     val link = fixUrlNull(a.attr("href")) ?: return@forEach
                     if (link.startsWith("http") && !link.contains(mainUrl)) {
@@ -273,7 +295,6 @@ class RistoAnimeProvider : MainAPI() {
                         } catch (_: Exception) {}
                     }
                 }
-
             } catch (_: Exception) {}
         }
 

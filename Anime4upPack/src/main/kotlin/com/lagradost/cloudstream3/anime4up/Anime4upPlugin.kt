@@ -8,5 +8,6 @@ import android.content.Context
 class Anime4upPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(Anime4upProvider())
+        registerMainAPI(WitAnime())
     }
 }

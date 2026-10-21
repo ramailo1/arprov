@@ -1,4 +1,4 @@
-version = 5
+version = 6
 
 cloudstream {
     authors = listOf( "Blatzar" )
@@ -10,7 +10,7 @@ cloudstream {
 
     tvTypes = listOf( "TvSeries" , "Movie" , "Anime" , "Cartoon" )
 
-    iconUrl = "https://akwam.ss/favicon.ico"
+    iconUrl = "https://akwams.org/favicon.ico"
 }
 
 android {

@@ -56,10 +56,11 @@ class ArabSeedProvider : MainAPI() {
 
     private fun Element.toSearchResponse(): SearchResponse? {
         val a = if (tagName() == "a") this else selectFirst("a") ?: return null
-        val title = a.attr("title").ifBlank { selectFirst("h3, h2, .title")?.text() ?: "" }.trim()
+        val title = selectFirst(".post__info h3, h3, h2, .title")?.text()?.trim()
+            ?: a.attr("title").ifBlank { a.text() }.trim()
         if (title.isEmpty()) return null
 
-        val posterUrl = selectFirst("img.images__loader, img")?.let {
+        val posterUrl = selectFirst(".post__image img, img.images__loader, img")?.let {
             it.attr("data-src").ifEmpty {
                 it.attr("src")
             }
@@ -67,7 +68,7 @@ class ArabSeedProvider : MainAPI() {
 
         val href = fixUrl(a.attr("href"))
         val tvType = when {
-            href.contains("/series/") || href.contains("مسلسل") -> TvType.TvSeries
+            href.contains("/series/") || href.contains("مسلسل") || a.hasClass("is__episode") -> TvType.TvSeries
             else -> TvType.Movie
         }
 
@@ -99,16 +100,16 @@ class ArabSeedProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data.removeSuffix("/")}/page/$page/"
         val document = safeGet(url)
 
-        val home = document.select("a.movie__block, .Movie--Block, .Block--Item").mapNotNull {
+        val home = document.select(".item__contents, a.movie__block, .Movie--Block, .Block--Item").mapNotNull {
             it.toSearchResponse()
         }.distinctBy { it.url }
-        return newHomePageResponse(request.name, home)
+        return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val document = safeGet("$mainUrl/?s=$encoded")
-        return document.select("a.movie__block, .Movie--Block, .Block--Item").mapNotNull {
+        return document.select(".item__contents, a.movie__block, .Movie--Block, .Block--Item").mapNotNull {
             it.toSearchResponse()
         }.distinctBy { it.url }
     }
@@ -265,42 +266,26 @@ class ArabSeedProvider : MainAPI() {
     ): Boolean {
         val doc = safeGet(data)
         val watchUrl = doc.select(".watch__btn, a.watch__btn, a[href*='/watch']").attr("href")
-        if (watchUrl.isEmpty()) return false
+        val fullWatchUrl = if (watchUrl.isNotEmpty()) fixUrl(watchUrl) else (if (data.endsWith("/watch/")) data else "${data.removeSuffix("/")}/watch/")
 
-        val fullWatchUrl = fixUrl(watchUrl)
         val watchDoc = safeGet(fullWatchUrl, data)
-        val watchHtml = watchDoc.toString()
 
-        val postId = extractPostId(watchHtml)
-        val csrfToken = extractToken(watchHtml)
-
-        val qualities = listOf("480", "720", "1080")
-
-        for (quality in qualities) {
-            val serversHtml = if (quality == "480") {
-                watchDoc.selectFirst(".servers__list ul, .servers-list ul")?.html()
-                    ?: (if (postId != null && csrfToken != null) fetchQualityServers(postId, quality, csrfToken, fullWatchUrl) else "")
-            } else if (postId != null && csrfToken != null) {
-                fetchQualityServers(postId, quality, csrfToken, fullWatchUrl)
-            } else {
-                ""
-            }
-
-            if (serversHtml.isNotEmpty()) {
-                val serverDoc = Jsoup.parse(serversHtml)
-                for (li in serverDoc.select("li[data-src], li[data-url]")) {
-                    val src = li.attr("data-src").ifBlank { li.attr("data-url") }
-                    processServerLink(src, fullWatchUrl, subtitleCallback, callback)
-                }
+        // 1. Process real servers from watch list
+        val serverItems = watchDoc.select("ul#watch li, .watch--servers--list li, .servers__list li, li[data-link], li[data-src], li[data-url]")
+        for (li in serverItems) {
+            val link = li.attr("data-link").ifBlank { li.attr("data-src") }.ifBlank { li.attr("data-url") }.trim()
+            if (link.isNotBlank() && !isAdUrl(link)) {
+                processServerLink(link, fullWatchUrl, subtitleCallback, callback)
             }
         }
 
-        // Direct iframes in watch page
-        for (iframe in watchDoc.select("iframe")) {
-            val src = iframe.attr("src")
-            processServerLink(src, fullWatchUrl, subtitleCallback, callback)
+        // 2. Main video player iframe (ignore ad iframes)
+        val mainPlayerIframe = watchDoc.selectFirst("iframe#videoIframe, div.player--iframe iframe, .WatchIframe iframe")?.attr("src")?.trim() ?: ""
+        if (mainPlayerIframe.isNotEmpty() && !isAdUrl(mainPlayerIframe)) {
+            processServerLink(mainPlayerIframe, fullWatchUrl, subtitleCallback, callback)
         }
 
+        // 3. Downloads section
         val downloadUrl = doc.select(".download__btn, a.download__btn, a[href*='/download']").attr("href")
         if (downloadUrl.isNotEmpty()) {
             try {
@@ -326,32 +311,6 @@ class ArabSeedProvider : MainAPI() {
         return true
     }
 
-    private suspend fun fetchQualityServers(
-        postId: String,
-        quality: String,
-        csrfToken: String,
-        referer: String
-    ): String {
-        return try {
-            val resp = app.post(
-                "$mainUrl/get__quality__servers/",
-                data = mapOf(
-                    "post_id" to postId,
-                    "quality" to quality,
-                    "csrf_token" to csrfToken
-                ),
-                headers = mapOf(
-                    "Referer" to referer,
-                    "User-Agent" to USER_AGENT,
-                    "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
-                )
-            )
-            JSONObject(resp.text).optString("html", "")
-        } catch (e: Exception) {
-            ""
-        }
-    }
-
     private suspend fun processServerLink(
         src: String,
         referer: String,
@@ -375,7 +334,7 @@ class ArabSeedProvider : MainAPI() {
 
         // Direct stream extraction for GoVid / Mohix servers
         if (finalUrl.contains("govid") || finalUrl.contains("vidsharing") || finalUrl.contains("fsdcmo") || finalUrl.contains("fdewsdc")) {
-            if (extractGovidStream(finalUrl, referer, callback)) {
+            if (extractGovidStream(finalUrl, referer, subtitleCallback, callback)) {
                 return
             }
         }
@@ -386,6 +345,7 @@ class ArabSeedProvider : MainAPI() {
     private suspend fun extractGovidStream(
         url: String,
         referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return runCatching {
@@ -395,37 +355,43 @@ class ArabSeedProvider : MainAPI() {
             } else if (url.contains("/d/")) {
                 embedUrl = url.replace("/d/", "/e/")
             } else if (url.contains("/play/")) {
-                val playDoc = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to referer)).document
-                val iframeSrc = playDoc.selectFirst("iframe")?.attr("src")
-                if (!iframeSrc.isNullOrBlank()) {
-                    embedUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
+                val playText = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to referer)).text
+                val sss = Regex("""<!--\s*sss(https?://[^\s]+)\s*-->""").find(playText)?.groupValues?.get(1)
+                if (!sss.isNullOrBlank()) {
+                    embedUrl = sss
                 } else {
-                    val found = Regex("""https?://[^"'\s]+/e/\d+[^"'\s]*""").find(playDoc.html())?.value
-                    if (found != null) {
-                        embedUrl = found
+                    val playDoc = Jsoup.parse(playText)
+                    val iframeSrc = playDoc.selectFirst("iframe[referrerpolicy], iframe[src*='/e/'], iframe[src*='voe'], iframe[src*='uqload'], iframe[src*='vidara']")?.attr("src")
+                    if (!iframeSrc.isNullOrBlank()) {
+                        embedUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
                     }
                 }
             }
 
             if (embedUrl != null) {
-                val embedPage = app.get(embedUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://govid.live/")).text
-                val hex = Regex("""(?:const|var)\s+Mohix\s*=\s*["']([0-9a-fA-F]+)["']""").find(embedPage)?.groupValues?.get(1)
-                if (hex != null) {
-                    val decoded = decodeHex(hex)
-                    if (decoded.contains(".m3u8") || decoded.contains(".mp4")) {
-                        callback(
-                            newExtractorLink(
-                                "ArabSeed GoVid",
-                                "ArabSeed GoVid",
-                                decoded,
-                                if (decoded.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://govid.live/"
-                                this.quality = Qualities.P1080.value
-                            }
-                        )
-                        return@runCatching true
+                if (embedUrl.contains("/e/") && embedUrl.contains("govid")) {
+                    val embedPage = app.get(embedUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://govid.live/")).text
+                    val hex = Regex("""(?:const|var)\s+Mohix\s*=\s*["']([0-9a-fA-F]+)["']""").find(embedPage)?.groupValues?.get(1)
+                    if (hex != null) {
+                        val decoded = decodeHex(hex)
+                        if (decoded.contains(".m3u8") || decoded.contains(".mp4")) {
+                            callback(
+                                newExtractorLink(
+                                    "ArabSeed GoVid",
+                                    "ArabSeed GoVid",
+                                    decoded,
+                                    if (decoded.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://govid.live/"
+                                    this.quality = Qualities.P1080.value
+                                }
+                            )
+                            return@runCatching true
+                        }
                     }
+                } else {
+                    loadExtractor(embedUrl, "https://govid.live/", subtitleCallback, callback)
+                    return@runCatching true
                 }
             }
             false

@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 
 class Shahid4uProvider : MainAPI() {
     override var lang = "ar"
-    override var mainUrl = "https://shahhiiid4u.yachts"
+    override var mainUrl = "https://shahhiiid4u.online"
     override var name = "Shahid4u"
     override val usesWebView = false
     override val hasMainPage = true
@@ -44,10 +44,10 @@ class Shahid4uProvider : MainAPI() {
     }
 
     private fun Element.toSearchResponse(): SearchResponse? {
-        val urlElement = selectFirst("a.fullClick, a.ellipsis, .caption h3 a") ?: return null
+        val urlElement = selectFirst("a[href*='watch.php'], h3 a, a.fullClick, a.ellipsis, .caption h3 a") ?: return null
         val posterUrl = extractPoster()
         val quality = select("span.quality").text().replace("1080p |-".toRegex(), "")
-        val type = if (select(".category").text().contains("افلام")) TvType.Movie else TvType.TvSeries
+        val type = if (select(".category").text().contains("افلام") || urlElement.attr("title").contains("فيلم")) TvType.Movie else TvType.TvSeries
         
         return newMovieSearchResponse(
             urlElement.attr("title").ifEmpty { urlElement.text() }
@@ -67,16 +67,17 @@ class Shahid4uProvider : MainAPI() {
         )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val response = app.get(request.data + page)
+        val pageUrl = if (request.data.endsWith("page=")) request.data + page else request.data
+        val response = app.get(pageUrl)
         updateMainUrl(response.url)
         var doc = response.document
 		if(doc.select("title").text() == "Just a moment...") {
-            doc = app.get(request.data + page, interceptor = cfKiller, timeout = 120).document
+            doc = app.get(pageUrl, interceptor = cfKiller, timeout = 120).document
         }
-        val list = doc.select("li.col-xs-6, div.content-box")
+        val list = doc.select("li.col-xs-6, div.content-box, li.col-md-3, .pm-video-thumb")
             .mapNotNull { element ->
                 element.toSearchResponse()
-            }
+            }.distinctBy { it.url }
         return newHomePageResponse(request.name, list)
     }
 
@@ -219,6 +220,9 @@ class Shahid4uProvider : MainAPI() {
 
         // 2. Discover sub-pages
         val subPages = mutableListOf<String>()
+        if (data.contains("watch.php")) {
+            subPages.add(data.replace("watch.php", "play.php"))
+        }
         doc.select("a[href*='play.php']").attr("href").takeIf { it.isNotBlank() }?.let { subPages.add(fixUrl(it)) }
         doc.select("a.btnDowns[href*='downloads.php']").attr("href").takeIf { it.isNotBlank() }?.let { subPages.add(fixUrl(it)) }
         doc.select("a.xtgo, a:contains(سيرفرات المشاهدة), a:contains(مشاهدة)").attr("href").takeIf { it.isNotBlank() && !it.contains("topvideos.php") }?.let { 

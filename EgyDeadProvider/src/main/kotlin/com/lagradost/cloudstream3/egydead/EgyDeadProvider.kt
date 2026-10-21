@@ -145,8 +145,12 @@ class EgyDeadProvider : MainAPI() {
         
         val rawHref = link.attr("abs:href").ifEmpty { link.attr("href") }
         val href = rawHref.takeIf { it.isNotEmpty() && (it.contains("egydead") || it.startsWith("http")) } ?: return null
+        if (href.contains("/category/") || href.contains("/type/") || href.contains("/page/") ||
+            href.contains("/tag/") || href.contains("/series-category/") || href.endsWith("/h3/") ||
+            href.endsWith("/h3") || href.endsWith("/assembly/") || href.contains("/dmca") ||
+            href == mainUrl || href == "$mainUrl/") return null
         val rawTitle = (link.selectFirst("h1, h2, h3, .BottomTitle")?.text() ?: link.attr("title")).trim()
-        if (rawTitle.isEmpty()) return null
+        if (rawTitle.isEmpty() || rawTitle.length < 2) return null
 
         val isDub = rawTitle.contains("مدبلج", ignoreCase = true) || href.contains("-ar") || href.contains("-eg") || href.contains("مدبلج")
         val isSub = rawTitle.contains("مترجم", ignoreCase = true) || (!isDub && !href.contains("-jp") && !rawTitle.contains("الياباني"))

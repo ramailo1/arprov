@@ -208,7 +208,7 @@ class ShoffreeProvider : MainAPI() {
         println("ShoffreeProvider: Parsing video grid HTML")
         val items = mutableListOf<SearchResponse>()
         
-        val cards = doc.select(".video-card, .shoffree-row, article[aria-label='post'], .video-result")
+        val cards = doc.select(".shoffree-item, .card-item, .video-card, .shoffree-row, article[aria-label='post'], .video-result")
         println("ShoffreeProvider: Found ${cards.size} cards via primary selectors")
         
         if (cards.isEmpty()) {
@@ -670,62 +670,66 @@ class ShoffreeProvider : MainAPI() {
         
         val streamUrl = when {
             data.contains("/watch/") -> data
-            data.contains("/movie/") -> {
-                val id = extractId(data)
-                val slug = extractSlug(data)
-                if (id.isNotBlank() && slug.isNotBlank()) "$mainUrl/watch/movie/$id/$slug" else data
-            }
+            data.contains("/movie/") -> data.replace("/movie/", "/watch/")
             data.contains("/serie/") -> data
             else -> data
         }
         
         println("ShoffreeProvider: Resolved stream URL: $streamUrl")
         
-        if (streamUrl.contains("/watch/")) {
-            val (contentType, contentId, episodeId) = parseWatchUrl(streamUrl)
-            println("ShoffreeProvider: Parsed watch URL - type=$contentType, id=$contentId, episode=$episodeId")
+        try {
+            val watchRes = app.get(streamUrl, headers = mapOf("Referer" to mainUrl))
+            val watchHtml = watchRes.text
+            val watchDoc = watchRes.document
 
-            if (contentType != null && contentId != null) {
-                // POST key_token to establish session for streem endpoint
-                println("ShoffreeProvider: POST key_token=$contentId to establish session")
+            // 1. Look for button or input with key_token
+            val keyToken = watchDoc.selectFirst("button[name='key_token'], input[name='key_token']")?.attr("value")
+                ?: Regex("""name=["']key_token["']\s+value=["']([^"']+)["']""").find(watchHtml)?.groupValues?.get(1)
+                ?: Regex("""value=["']([^"']+)["']\s+name=["']key_token["']""").find(watchHtml)?.groupValues?.get(1)
+                ?: extractId(streamUrl).ifBlank { null }
+
+            var streemUrl: String? = null
+            if (keyToken != null) {
+                println("ShoffreeProvider: Found keyToken=$keyToken, submitting POST")
                 try {
                     val postResp = app.post(
                         streamUrl,
-                        data = mapOf("key_token" to contentId),
-                        headers = mapOf("Referer" to mainUrl, "X-Requested-With" to "XMLHttpRequest")
+                        data = mapOf("key_token" to keyToken),
+                        headers = mapOf(
+                            "Referer" to streamUrl,
+                            "X-Requested-With" to "XMLHttpRequest"
+                        )
                     )
-                    println("ShoffreeProvider: POST status=${postResp.code}, session established")
-                } catch (e: Exception) {
-                    println("ShoffreeProvider: POST session failed (non-fatal): ${e.message}")
-                }
-
-                val streemUrl = when (contentType) {
-                    "movie" -> "$mainUrl/streem/watch/movie/$contentId"
-                    "serie" -> {
-                        if (episodeId != null) "$mainUrl/streem/watch/serie/$contentId/$episodeId" else null
+                    val postText = postResp.text
+                    val iframeMatch = Regex("""(?:src=[\"']|src=\\?[\"'])(https?://[^\"'\\\\]*streem/watch/[^\"'\\\\]*)""").find(postText)
+                    if (iframeMatch != null) {
+                        streemUrl = iframeMatch.groupValues[1].replace("\\/", "/")
+                        println("ShoffreeProvider: Extracted streemUrl from POST: $streemUrl")
                     }
+                } catch (e: Exception) {
+                    println("ShoffreeProvider: POST key_token failed: ${e.message}")
+                }
+            }
+
+            if (streemUrl == null) {
+                val (contentType, contentId, episodeId) = parseWatchUrl(streamUrl)
+                streemUrl = when (contentType) {
+                    "movie" -> "$mainUrl/streem/watch/movie/$contentId"
+                    "serie" -> if (episodeId != null) "$mainUrl/streem/watch/serie/$contentId/$episodeId" else null
                     "wrestling" -> "$mainUrl/streem/watch/wrestling/$contentId"
                     else -> null
                 }
+            }
 
-                if (streemUrl != null) {
-                    val success = tryDirectDecryption(streemUrl, streamUrl, subtitleCallback, callback)
-                    if (success) {
-                        println("ShoffreeProvider: Direct decryption succeeded for $streemUrl")
-                        return true
-                    }
-                    println("ShoffreeProvider: Direct decryption failed for $streemUrl")
-                    
-                    val wvSuccess = extractM3u8ViaWebView(streemUrl, streamUrl, callback)
-                    if (wvSuccess) {
-                        println("ShoffreeProvider: extractM3u8ViaWebView succeeded for $streemUrl")
-                        return true
-                    }
-                    println("ShoffreeProvider: extractM3u8ViaWebView failed for $streemUrl")
-                } else {
-                    println("ShoffreeProvider: No streem URL for type=$contentType id=$contentId")
+            if (streemUrl != null) {
+                val success = tryDirectDecryption(streemUrl, streamUrl, subtitleCallback, callback)
+                if (success) {
+                    println("ShoffreeProvider: Direct decryption succeeded for $streemUrl")
+                    return true
                 }
             }
+        } catch (e: Exception) {
+            println("ShoffreeProvider: Error in primary streem flow: ${e.message}")
         }
         
         println("ShoffreeProvider: Loading watch page for iframe extraction")
@@ -798,7 +802,7 @@ class ShoffreeProvider : MainAPI() {
             }
             
             println("ShoffreeProvider: Direct extraction failed, trying AJAX API via /sources/ endpoint")
-            val apiSuccess = fetchSourcesViaApi(decodedHtml, watchUrl, subtitleCallback, callback)
+            val apiSuccess = fetchSourcesViaApi(decodedHtml, streemUrl, subtitleCallback, callback)
             if (apiSuccess) {
                 println("ShoffreeProvider: AJAX API succeeded for $streemUrl")
                 return true
@@ -813,38 +817,14 @@ class ShoffreeProvider : MainAPI() {
         }
     }
 
-    private suspend fun decryptResponse(response: String): String? {
-        // Log what the response actually looks like for debugging
-        val hasDecryptFunction = Regex("""\(function \(_key, _payload\) \{""").containsMatchIn(response)
-        val hasAltDecrypt = Regex("""_decrypt\(_payload,\s*_key\)""").containsMatchIn(response)
-        val hasShfEmb = response.contains("Shf_v2_embd")
-        val hasScriptTags = response.contains("<script")
-        val hasIframe = response.contains("<iframe")
-        val hasKeyToken = response.contains("key_token")
-        val hasVarKey = Regex("""var\s+_payload\s*=""").containsMatchIn(response)
-        val hasVarKey2 = Regex("""var\s+_key\s*=""").containsMatchIn(response)
-        println("ShoffreeProvider: decryptResponse patterns: hasDecryptFn=$hasDecryptFunction altDecrypt=$hasAltDecrypt ShfEmb=$hasShfEmb scripts=$hasScriptTags iframes=$hasIframe keyToken=$hasKeyToken varPayload=$hasVarKey varKey=$hasVarKey2")
-
-        val scriptMatch = Regex("""\(function \(_key, _payload\) \{""").find(response)
-        if (scriptMatch == null) {
-            println("ShoffreeProvider: No primary decryption function found")
-            if (hasAltDecrypt) println("ShoffreeProvider: But alt decrypt pattern found — trying alt path")
-            else {
-                println("ShoffreeProvider: No known encryption pattern detected in response")
-                println("ShoffreeProvider: Available patterns: ShfEmb=$hasShfEmb scripts=$hasScriptTags iframes=$hasIframe")
-                return null
-            }
-        }
-
-        val payloadMatch = Regex("""\("([^"]+)",\s*"([^"]+)"\)""").find(response)
+    private fun decryptResponse(response: String): String? {
+        val payloadMatch = Regex("""\("([^"]+)",\s*"([0-9a-fA-F]+)"\)""").find(response)
         if (payloadMatch != null) {
             val key = payloadMatch.groupValues[1]
             val payload = payloadMatch.groupValues[2]
             println("ShoffreeProvider: Primary pattern — key=$key payload_len=${payload.length}")
             val decryptedHex = decryptShoffreePlayer(payload, key)
-            println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
             val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
-            println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
             return String(decodedBytes, Charsets.UTF_8)
         }
 
@@ -853,17 +833,12 @@ class ShoffreeProvider : MainAPI() {
             val payloadMatch2 = Regex("""_payload\s*=\s*"([^"]+)""").find(response)
             if (payloadMatch2 != null) {
                 val payload = payloadMatch2.groupValues[1]
-                println("ShoffreeProvider: Alt pattern — payload_len=${payload.length} key=$STREEM_DECRYPT_KEY")
                 val decryptedHex = decryptShoffreePlayer(payload, STREEM_DECRYPT_KEY)
-                println("ShoffreeProvider: XOR-decrypted hex length=${decryptedHex.length}")
                 val decodedBytes = Base64.decode(decryptedHex, Base64.DEFAULT)
-                println("ShoffreeProvider: Base64 decoded bytes=${decodedBytes.size}")
                 return String(decodedBytes, Charsets.UTF_8)
             }
-            println("ShoffreeProvider: Alt pattern found but no _payload variable detected")
         }
 
-        println("ShoffreeProvider: All decryption patterns exhausted, returning null")
         return null
     }
 
@@ -871,17 +846,15 @@ class ShoffreeProvider : MainAPI() {
         val directSources = extractVideoSourcesFromPlayer(html)
         if (directSources.isNotEmpty()) {
             directSources.forEach { callback(it) }
-            println("ShoffreeProvider: Found ${directSources.size} sources from decrypted HTML")
             return true
         }
-        
-        println("ShoffreeProvider: No direct sources in decrypted HTML, following iframes")
         return followEmbedIframes(html, referer, subtitleCallback, callback)
     }
 
-    private suspend fun fetchSourcesViaApi(decodedHtml: String, watchUrl: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun fetchSourcesViaApi(decodedHtml: String, streemUrl: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         try {
             val keyMatch = Regex("""\bKEY\s*=\s*'([^']+)'""").find(decodedHtml)
+                ?: Regex("""\bKEY\s*=\s*"([^"]+)"""").find(decodedHtml)
             if (keyMatch == null) {
                 println("ShoffreeProvider: No KEY found in decrypted HTML for AJAX API")
                 return false
@@ -889,94 +862,79 @@ class ShoffreeProvider : MainAPI() {
             val key = keyMatch.groupValues[1]
             println("ShoffreeProvider: Extracted KEY=$key for AJAX API")
 
-            val apiUrl = watchUrl.replace("/watch/", "/sources/")
+            val apiUrl = streemUrl.replace("/watch/", "/sources/")
             println("ShoffreeProvider: POST to sources API: $apiUrl")
-
-            val response = app.post(
-                apiUrl,
-                data = mapOf("key" to key, "server" to "1"),
-                headers = mapOf(
-                    "Referer" to mainUrl,
-                    "X-Requested-With" to "XMLHttpRequest",
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                )
-            )
-            println("ShoffreeProvider: Sources API status=${response.code}")
-
-            if (!response.isSuccessful) {
-                println("ShoffreeProvider: Sources API returned ${response.code}")
-                return false
-            }
-
-            val jsonText = response.text
-            if (jsonText.isBlank()) {
-                println("ShoffreeProvider: Empty sources API response")
-                return false
-            }
-            println("ShoffreeProvider: Sources API response length=${jsonText.length}")
-            println("ShoffreeProvider: Sources API response preview: ${jsonText.take(500)}")
-
-            val json = JSONObject(jsonText)
-
             var found = false
 
-            val sources = json.optJSONArray("sources")
-            if (sources != null && sources.length() > 0) {
-                println("ShoffreeProvider: Found ${sources.length()} primary sources in API response")
-                for (i in 0 until sources.length()) {
-                    val source = sources.getJSONObject(i)
-                    val file = source.optString("file", "")
-                    if (file.isBlank()) continue
+            for (serverNum in 1..3) {
+                try {
+                    val response = app.post(
+                        apiUrl,
+                        data = mapOf("key" to key, "server" to serverNum.toString()),
+                        headers = mapOf(
+                            "Referer" to streemUrl,
+                            "X-Requested-With" to "XMLHttpRequest",
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        )
+                    )
+                    println("ShoffreeProvider: Sources API server $serverNum status=${response.code}")
 
-                    val label = source.optString("label", "")
-                    val quality = when {
-                        label.contains("1080") || label.contains("FHD") -> 1080
-                        label.contains("720") || label.contains("HD") -> 720
-                        label.contains("480") || label.contains("SD") -> 480
-                        label.contains("360") -> 360
-                        label.contains("240") || label.contains("Mobile") -> 240
-                        label.contains("144") -> 144
-                        else -> extractQualityFromUrl(file) ?: Qualities.Unknown.value
+                    if (!response.isSuccessful) continue
+                    val jsonText = response.text
+                    if (jsonText.isBlank()) continue
+
+                    val json = JSONObject(jsonText)
+                    val sources = json.optJSONArray("sources")
+                    if (sources != null && sources.length() > 0) {
+                        println("ShoffreeProvider: Server $serverNum found ${sources.length()} sources")
+                        for (i in 0 until sources.length()) {
+                            val source = sources.getJSONObject(i)
+                            val file = source.optString("file", "")
+                            if (file.isBlank()) continue
+
+                            val label = source.optString("label", "")
+                            val quality = when {
+                                label.contains("1080") || label.contains("FHD") -> 1080
+                                label.contains("720") || label.contains("HD") -> 720
+                                label.contains("480") || label.contains("SD") -> 480
+                                label.contains("360") -> 360
+                                label.contains("240") || label.contains("Mobile") -> 240
+                                label.contains("144") -> 144
+                                else -> extractQualityFromUrl(file) ?: Qualities.Unknown.value
+                            }
+
+                            val link = newExtractorLink(
+                                name, 
+                                if (label.isNotBlank()) "Shoffree $label" else "Shoffree Server $serverNum", 
+                                file, 
+                                if (file.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = quality
+                                this.referer = mainUrl
+                            }
+                            callback(link)
+                            found = true
+                        }
                     }
 
-                    val link = newExtractorLink(
-                        name, 
-                        label.ifBlank { "Shoffree" }, 
-                        file, 
-                        if (file.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = quality
-                        this.referer = mainUrl
+                    val moreServer = json.optJSONArray("more_server")
+                    if (moreServer != null && moreServer.length() > 0) {
+                        for (i in 0 until moreServer.length()) {
+                            val server = moreServer.getJSONObject(i)
+                            val url = server.optString("url", "")
+                            if (url.isNotBlank()) {
+                                val success = handleEmbedUrl(url, streemUrl, subtitleCallback, callback)
+                                if (success) found = true
+                            }
+                        }
                     }
-                    println("ShoffreeProvider: Source #$i: file=${file.take(80)} label=$label quality=$quality")
-                    callback(link)
-                    found = true
+                } catch (e: Exception) {
+                    println("ShoffreeProvider: Error fetching server $serverNum: ${e.message}")
                 }
-            } else {
-                println("ShoffreeProvider: No sources array in API response or it is empty")
             }
-
-            val moreServer = json.optJSONArray("more_server")
-            if (moreServer != null && moreServer.length() > 0) {
-                println("ShoffreeProvider: Got ${moreServer.length()} alternative iframe servers")
-                for (i in 0 until moreServer.length()) {
-                    val server = moreServer.getJSONObject(i)
-                    val url = server.optString("url", "")
-                    if (url.isNotBlank()) {
-                        println("ShoffreeProvider: Following alternative server $i: $url")
-                        val success = handleEmbedUrl(url, watchUrl, subtitleCallback, callback)
-                        if (success) found = true
-                    }
-                }
-            }
-
-            if (!found && json.optString("server_status") != "online") {
-                println("ShoffreeProvider: Server status=${json.optString("server_status")}, no sources found")
-            }
-
             return found
         } catch (e: Exception) {
-            println("ShoffreeProvider: AJAX API failed: ${e.message}")
+            println("ShoffreeProvider: fetchSourcesViaApi failed: ${e.message}")
             return false
         }
     }

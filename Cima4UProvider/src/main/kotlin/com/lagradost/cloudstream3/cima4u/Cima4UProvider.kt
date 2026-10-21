@@ -458,12 +458,12 @@ class Cima4UProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Construct watch URL - append /watch/ if not present
-        val watchUrl = when {
-            data.endsWith("/watch/") -> data
-            data.endsWith("/watch") -> "$data/"
-            data.endsWith("/") -> "${data}watch/"
-            else -> "$data/watch/"
+        // Construct watch URL - ensure clean single slash before watch/
+        val cleanData = data.replace(Regex("/+"), "/").replace("https:/", "https://").replace("http:/", "http://")
+        val watchUrl = if (cleanData.contains("/watch")) {
+            if (cleanData.endsWith("/")) cleanData else "$cleanData/"
+        } else {
+            "${cleanData.trimEnd('/')}/watch/"
         }
 
         val doc = try {
